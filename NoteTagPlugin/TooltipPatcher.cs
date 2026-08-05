@@ -18,6 +18,22 @@ public static class TooltipPatcher
 
     private static bool _explored;
 
+    // ---- P0-1 热路径缓存：当前 tooltip 目标（目标指针 → 物品 → 备注）----
+    // tooltip 面板激活期间 Update 每帧触发；目标不变时复用缓存，避免
+    // 每帧遍历 ActiveObjects + GetProperty native 调用。
+    private static long _cachedTargetPtr;
+    private static ItemData _cachedItem;
+    private static string _cachedNote;
+    private static bool _cacheReady;
+
+    /// <summary>备注保存/外部变更后调用，使缓存失效以便重新读取。</summary>
+    public static void InvalidateCache()
+    {
+        _cacheReady = false;
+        _cachedItem = null;
+        _cachedNote = null;
+    }
+
     public static void Apply(Harmony harmony)
     {
         var t = typeof(DescriptionTipPanel);
@@ -107,16 +123,17 @@ public static class TooltipPatcher
 
     private static void TryInsertNote(DescriptionTipPanel panel, RectTransform target, string information)
     {
-        var item = FindItemByRect(target);
+        // 已插入则提前返回（省去目标查找与备注查询）
+        if (information.Contains(NoteMarker))
+            return;
+
+        var item = GetCachedItem(target);
         if (item == null)
             return;
 
-        string note = NoteTagStore.Get(item);
+        string note = GetCachedNote(item);
         if (string.IsNullOrEmpty(note))
             return;
-
-        if (information.Contains(NoteMarker))
-            return; // 已插入
 
         string newText = InsertNote(information, note);
         if (newText != information)
@@ -124,6 +141,34 @@ public static class TooltipPatcher
             panel.informationText.text = newText;
             Plugin.L.LogInfo($"[NoteTag] tooltip 已插入备注: {note}");
         }
+    }
+
+    /// <summary>按目标 RectTransform 取物品，带单条目缓存（目标不变时零遍历）。</summary>
+    private static ItemData GetCachedItem(RectTransform target)
+    {
+        long ptr = target.Pointer.ToInt64();
+        if (_cacheReady && ptr == _cachedTargetPtr && _cachedItem != null)
+            return _cachedItem;
+
+        // 缓存未命中：遍历查找并更新缓存（目标与备注缓存必须原子更新，防止错绑）
+        var item = FindItemByRect(target);
+        _cachedTargetPtr = ptr;
+        _cachedItem = item;
+        _cachedNote = null; // 关键：目标变化时清除备注缓存
+        _cacheReady = true;
+        return item;
+    }
+
+    /// <summary>读取物品备注，带单条目缓存（含空备注缓存，避免重复 native 调用）。</summary>
+    private static string GetCachedNote(ItemData item)
+    {
+        if (_cacheReady && item == _cachedItem && _cachedNote != null)
+            return _cachedNote;
+
+        var note = NoteTagStore.Get(item);
+        if (_cacheReady && item == _cachedItem)
+            _cachedNote = note; // 空备注也缓存，防止每帧 GetProperty
+        return note;
     }
 
     /// <summary>通过目标 RectTransform 反查对应的物品实例。</summary>

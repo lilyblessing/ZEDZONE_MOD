@@ -171,6 +171,7 @@ public class NoteTagUI : MonoBehaviour
         if (save && _targetItem != null)
         {
             NoteTagStore.Set(_targetItem, _editText);
+            TooltipPatcher.InvalidateCache(); // 备注变更后使 tooltip 缓存失效
             Plugin.L.LogInfo($"[NoteTag] 已保存备注 ({_editText.Length} 字符): {GetItemName(_targetItem)}");
             // 拖放流程：保存成功后消耗 1 个命名牌
             if (_sourceUI != null)
