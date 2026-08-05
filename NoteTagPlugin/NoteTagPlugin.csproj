@@ -13,9 +13,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- 游戏目录：默认本地路径，CI 通过 GAME_DIR 环境变量覆盖 -->
-    <GameDir Condition="'$(GAME_DIR)' != ''">$(GAME_DIR)</GameDir>
-    <GameDir Condition="'$(GAME_DIR)' == ''">D:\SteamLibrary\steamapps\common\ZED ZONE</GameDir>
+    <GameDir>D:\SteamLibrary\steamapps\common\ZED ZONE</GameDir>
     <InteropDir>$(GameDir)\BepInEx\interop</InteropDir>
     <CoreDir>$(GameDir)\BepInEx\core</CoreDir>
     <UnityLibsDir>$(GameDir)\BepInEx\unity-libs\2023.1.18</UnityLibsDir>

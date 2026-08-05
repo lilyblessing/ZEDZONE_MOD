@@ -27,25 +27,13 @@
 环境：.NET SDK（net6.0 目标，SDK 8+ 可用）、游戏本体（需要其 BepInEx interop 程序集）。
 
 ```powershell
-# csproj 默认使用本地游戏目录；可用 GAME_DIR 环境变量覆盖
+# csproj 中 GameDir 指向游戏目录
 cd NoteTagPlugin
 dotnet build -c Release
 # 输出: NoteTagPlugin/bin/Release/net6.0/NoteTagPlugin.dll
 ```
 
 `tools/ildump` 为开发期辅助工具（MetadataLoadContext 读取游戏 interop 程序集，用于逆向分析，非插件运行时所需）。
-
-## 自动构建发布（GitHub Actions）
-
-`push` 形如 `v*` 的 tag 时自动编译并发布 release（`.github/workflows/release.yml`）。
-
-由于编译依赖游戏 interop 程序集（无法从公开渠道获取），首次需要一次性的 seed 上传：
-
-1. 本地运行 `tools/pack-build-deps.ps1`（打包 `BepInEx\core|interop|unity-libs` 为 `build-deps.zip`）
-2. 在 GitHub 创建 tag `build-deps` + release，上传 `build-deps.zip`
-3. 之后每次 `git tag vX.Y.Z && git push origin vX.Y.Z` 即自动构建并发布
-
-release 产物：`NoteTagPlugin.zip`（dll + 贴图 + README）、单独的 `NoteTagPlugin.dll` 与 `Name_Tag.png`。
 
 ## 技术要点
 
