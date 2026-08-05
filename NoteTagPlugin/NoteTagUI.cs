@@ -51,6 +51,7 @@ public class NoteTagUI : MonoBehaviour
 
     private Font _font;
     private bool _fontReady;
+    private bool _stylesReady;
     private GUIStyle _textAreaStyle;
     private GUIStyle _buttonStyle;
     private GUIStyle _windowStyle;
@@ -64,13 +65,12 @@ public class NoteTagUI : MonoBehaviour
             SelfCheck();
         }
 
-        // 延迟探查物品系统 + 注册命名牌（等 ItemManager 初始化，最多重试 6 次）
+        // 延迟注册命名牌（等 ItemManager 初始化，最多重试 6 次）
         if (!_probeDone)
         {
             _probeTimer -= Time.deltaTime;
             if (_probeTimer <= 0f)
             {
-                ItemSystemProbe.RunOnce();
                 if (NameTagItem.Register())
                 {
                     _probeDone = true;
@@ -252,6 +252,10 @@ public class NoteTagUI : MonoBehaviour
 
     private void EnsureStyles()
     {
+        // P1-3: 样式与字体只初始化一次（OnGUI 每帧触发 Layout/Repaint 多个事件，
+        // 避免每帧重复 GUI.skin 访问与 font 赋值）
+        if (_stylesReady) return;
+
         // 中文字体：IL2CPP 下 CreateDynamicFontFromOSFont 不可用（运行时无该 API），
         // 改用游戏自带的 UI 字体（游戏为中文 UI，字体必然支持中文）。
         if (_font == null && !_fontReady)
@@ -274,6 +278,7 @@ public class NoteTagUI : MonoBehaviour
             _windowStyle.font = _font;
             _labelStyle.font = _font;
         }
+        _stylesReady = true;
     }
 
     /// <summary>获取游戏 UI 字体：优先 DescriptionTipPanel 的 Text 字体，其次遍历已加载 Font 资源。</summary>
