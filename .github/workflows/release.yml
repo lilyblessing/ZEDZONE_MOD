@@ -1,0 +1,73 @@
+# 自动编译并发布 NoteTag MOD
+#
+# 触发方式：
+#   1. 推送 v* tag（如 v0.5.1）→ 自动编译并创建/更新对应 release
+#   2. 手动触发（workflow_dispatch）→ 编译，需手动创建 release（见步骤）
+#
+# 构建依赖：编译需要游戏 interop 程序集（BepInEx\interop、core、unity-libs），
+# 由 tools/pack-build-deps.ps1 打包为 build-deps.zip 并上传到 tag "build-deps" 的 release。
+# 首次运行 workflow 前请先完成该 seed 上传。
+
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Download build dependencies (game interop)
+        id: get-deps
+        run: |
+          $headers = @{ Authorization = "Bearer $env:GITHUB_TOKEN" }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/build-deps" -Headers $headers
+          $asset = $release.assets | Where-Object { $_.name -eq "build-deps.zip" }
+          if (-not $asset) {
+            Write-Error "build-deps.zip 不存在于 build-deps release。请先运行 tools/pack-build-deps.ps1 并上传。"
+          }
+          Write-Host "下载依赖: $($asset.size) bytes"
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile "$env:RUNNER_TEMP\build-deps.zip" -Headers $headers
+          New-Item -ItemType Directory -Force -Path "$env:RUNNER_TEMP\gamedir\BepInEx" | Out-Null
+          Expand-Archive "$env:RUNNER_TEMP\build-deps.zip" -DestinationPath "$env:RUNNER_TEMP\gamedir\BepInEx" -Force
+          Write-Host "依赖解压完成"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: dotnet build NoteTagPlugin/NoteTagPlugin.csproj -c Release
+        env:
+          GAME_DIR: ${{ runner.temp }}\gamedir
+
+      - name: Package artifacts
+        run: |
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item NoteTagPlugin\bin\Release\net6.0\NoteTagPlugin.dll release\
+          Copy-Item NoteTagPlugin\Name_Tag.png release\
+          Copy-Item README.md release\
+          Compress-Archive -Path release\* -DestinationPath release\NoteTagPlugin.zip -Force
+          Get-ChildItem release | Select-Object Name, Length
+
+      - name: Publish release (tag push only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/NoteTagPlugin.zip
+            release/NoteTagPlugin.dll
+            release/Name_Tag.png
+          generate_release_notes: true
