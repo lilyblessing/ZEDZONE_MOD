@@ -17,10 +17,6 @@ public class NoteTagUI : MonoBehaviour
     /// <summary>场景中的 NoteTagUI 实例（拖放交互通过静态入口打开输入框）。</summary>
     public static NoteTagUI Instance;
 
-    private static readonly PropertyInfo IsHoverProp =
-        typeof(BasicItemUI).GetProperty("isHover",
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-
     private bool _windowOpen;
     private Rect _windowRect = new Rect(400f, 180f, 440f, 260f);
     private string _editText = "";
@@ -87,17 +83,7 @@ public class NoteTagUI : MonoBehaviour
             }
         }
 
-        if (!_windowOpen && Input.GetKeyDown(KeyCode.KeypadPlus))
-        {
-            var item = FindHoveredItemUI();
-            if (item == null)
-            {
-                Plugin.L.LogWarning("[NoteTag] 未检测到鼠标悬停的物品（请先打开背包并把鼠标移到物品上）");
-                return;
-            }
-            OpenEditor(item);
-        }
-
+        // 输入框打开时支持 Escape 关闭（不保存）
         if (_windowOpen && Input.GetKeyDown(KeyCode.Escape))
         {
             CloseEditor(false);
@@ -110,43 +96,12 @@ public class NoteTagUI : MonoBehaviour
         {
             var list = BasicItemUI.ActiveObjects;
             int count = list != null ? list.Count : -1;
-            Plugin.L.LogInfo($"[NoteTag] 自检: ActiveObjects={count}, 已存备注={NoteTagStore.Count}, isHover反射={(IsHoverProp != null ? "OK" : "FAIL")}");
+            Plugin.L.LogInfo($"[NoteTag] 自检: ActiveObjects={count}");
         }
         catch (Exception e)
         {
             Plugin.L.LogError($"[NoteTag] 自检失败: {e}");
         }
-    }
-
-    private BasicItemUI FindHoveredItemUI()
-    {
-        var list = BasicItemUI.ActiveObjects;
-        if (list == null || IsHoverProp == null) return null;
-        try
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                var ui = list[i];
-                if (ui == null) continue;
-                try
-                {
-                    if ((bool)IsHoverProp.GetValue(ui))
-                        return ui;
-                }
-                catch { /* 单个格子异常忽略 */ }
-            }
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 遍历 ActiveObjects 失败: {e}");
-        }
-        return null;
-    }
-
-    private void OpenEditor(BasicItemUI itemUI)
-    {
-        if (itemUI == null) return;
-        OpenEditorFor(itemUI.itemdata, null);
     }
 
     /// <summary>统一打开备注编辑器：target 为目标物品，sourceUI 为拖放来源（命名牌格子，可为 null）。</summary>
