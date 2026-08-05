@@ -13,3 +13,5 @@ obj/
 *.suo
 Thumbs.db
 .DS_Store
+
+dist/
