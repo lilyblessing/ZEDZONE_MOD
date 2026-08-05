@@ -1,0 +1,93 @@
+using System;
+using System.Reflection;
+using HarmonyLib;
+using UnityEngine.EventSystems;
+
+namespace NoteTagPlugin;
+
+/// <summary>
+/// 命名牌拖放交互（v2，规避 virtual 方法 patch 崩溃）：
+/// HarmonyX 在 IL2CPP 下 patch virtual/final 方法（OnDrop/OnBeginDrag）会崩溃，
+/// 因此改为 patch 非 virtual 的 DropOn(PointerEventData)（OnDrop 内部调用的放置方法）。
+/// 拖拽源通过 PointerEventData.pointerDrag 获取（EventSystem 记录拖拽起始对象）。
+/// </summary>
+public static class DropPatch
+{
+    private const BindingFlags InstFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+    private const BindingFlags StaticFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
+
+    public static void Apply(Harmony harmony)
+    {
+        var t = typeof(BasicItemUI);
+
+        var dropOn = t.GetMethod("DropOn", InstFlags);
+        if (dropOn != null)
+        {
+            harmony.Patch(dropOn, prefix: new HarmonyMethod(typeof(DropPatch).GetMethod(nameof(Prefix_DropOn), StaticFlags)));
+            Plugin.L.LogInfo("[NoteTag] 已挂钩 BasicItemUI.DropOn (非virtual, 安全)");
+        }
+        else
+        {
+            Plugin.L.LogError("[NoteTag] DropOn 反射失败，拖放功能不可用");
+        }
+    }
+
+    private static bool Prefix_DropOn(BasicItemUI __instance, object[] __args)
+    {
+        try
+        {
+            if (__args == null || __args.Length < 1) return true;
+            var eventData = __args[0] as PointerEventData;
+            if (eventData == null) return true;
+
+            // 拖拽源：EventSystem 记录的拖拽起始对象（DropOn 的 this 就是源格子）
+            var srcGo = eventData.pointerDrag;
+            if (srcGo == null) return true;
+            var src = srcGo.GetComponent<BasicItemUI>();
+            if (src == null || src.itemdata == null || src.itemdata.itemId != NameTagItem.ItemId)
+                return true; // 非命名牌拖放，走游戏正常流程
+
+            // 目标格子：从指针悬停对象中找（排除源自身）
+            var targetUI = FindTargetItemUI(eventData, src);
+            if (targetUI == null)
+                return true; // 拖到格子外/自身：交给游戏
+            var target = targetUI.itemdata;
+            if (target == null)
+                return true; // 空格子：交给游戏正常放置
+
+            string targetName = "?";
+            try { targetName = target.GetItemName(); } catch { }
+            Plugin.L.LogInfo($"[NoteTag] 命名牌拖放到物品上: {targetName}");
+            NoteTagUI.OpenForItem(target, src);
+            return false; // 拦截游戏默认放置/交换
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogError($"[NoteTag] DropOn Prefix 异常: {e}");
+            return true;
+        }
+    }
+
+    /// <summary>从 PointerEventData.hovered 中找到目标物品格子（排除拖拽源自身）。</summary>
+    private static BasicItemUI FindTargetItemUI(PointerEventData eventData, BasicItemUI exclude)
+    {
+        var hovered = eventData.hovered;
+        if (hovered == null) return null;
+        try
+        {
+            for (int i = 0; i < hovered.Count; i++)
+            {
+                var go = hovered[i];
+                if (go == null) continue;
+                var ui = go.GetComponent<BasicItemUI>();
+                if (ui != null && ui != exclude)
+                    return ui;
+            }
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogError($"[NoteTag] 遍历 hovered 失败: {e}");
+        }
+        return null;
+    }
+}
