@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>FridgeModPlugin</AssemblyName>
+    <RootNamespace>FridgeModPlugin</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <NoWarn>CS0436;CS0618</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 游戏目录：默认本地路径，CI/本地可 GAME_DIR 覆盖 -->
+    <GameDir Condition="'$(GAME_DIR)' != ''">$(GAME_DIR)</GameDir>
+    <GameDir Condition="'$(GAME_DIR)' == ''">D:\SteamLibrary\steamapps\common\ZED ZONE</GameDir>
+    <InteropDir>$(GameDir)\BepInEx\interop</InteropDir>
+    <CoreDir>$(GameDir)\BepInEx\core</CoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BepInEx 6 核心 -->
+    <Reference Include="$(CoreDir)\BepInEx.Core.dll" />
+    <Reference Include="$(CoreDir)\BepInEx.Unity.Common.dll" />
+    <Reference Include="$(CoreDir)\BepInEx.Unity.IL2CPP.dll" />
+    <Reference Include="$(CoreDir)\Il2CppInterop.Runtime.dll" />
+    <Reference Include="$(CoreDir)\0Harmony.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 游戏 interop 程序集 -->
+    <Reference Include="$(InteropDir)\Assembly-CSharp.dll" />
+    <Reference Include="$(InteropDir)\Il2Cppmscorlib.dll" />
+    <Reference Include="$(InteropDir)\Il2CppSystem.dll" />
+    <Reference Include="$(InteropDir)\Il2CppSystem.Core.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.CoreModule.dll" />
+  </ItemGroup>
+
+</Project>

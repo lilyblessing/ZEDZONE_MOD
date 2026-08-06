@@ -13,6 +13,7 @@ class Program
         string assembly = "Assembly-CSharp.dll";
         string search = null;
         string typeName = null;
+        string memberName = null;
         bool members = false;
 
         for (int i = 0; i < args.Length; i++)
@@ -21,6 +22,7 @@ class Program
             {
                 case "--search": search = args[++i]; break;
                 case "--type": typeName = args[++i]; break;
+                case "--member": memberName = args[++i]; break;
                 case "--members": members = true; break;
                 case "--asm": assembly = args[++i]; break;
             }
@@ -55,6 +57,25 @@ class Program
                 return 1;
             }
             DumpType(t, members);
+            return 0;
+        }
+
+        if (memberName != null)
+        {
+            Console.WriteLine($"=== 查找成员 '{memberName}' 的宿主类型 ===");
+            var hits = new List<string>();
+            foreach (var t in asm.GetTypes())
+            {
+                try
+                {
+                    var all = t.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly);
+                    if (all.Any(m => m.Name.Contains(memberName, StringComparison.OrdinalIgnoreCase)))
+                        hits.Add(t.FullName);
+                }
+                catch { }
+            }
+            Console.WriteLine($"命中 {hits.Count} 个类型:");
+            foreach (var h in hits) Console.WriteLine("  " + h);
             return 0;
         }
 

@@ -53,8 +53,10 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 | `BasicItemUI` | 背包格子 UI | `itemdata`、`isHover`、静态 `ActiveObjects`、`itemdataTemp`、`RefreshItemUI()`、`RefreshItemNumber()`、**`DropOn(PointerEventData)`（非 virtual，可安全 patch）**、`OnDrop/OnBeginDrag`（virtual final，**不可 patch**） |
 | `DescriptionTipPanel` | 物品信息框（tooltip）单例 | **`ShowDescription(RectTransform targetRect, string information, Vector2 dir)`**、`informationText`（Text）、`targetRect`、`ClosePanel()`、`Update()` |
 | `ItemData` | 物品实例数据 | `itemId`、`itemNumberFloat`、**`GetProperty/SetProperty(string,string)`**（随存档持久化！）、`Pointer`（IL2CPP 实例指针）、`inventoryData`、`GetItemName()` |
-| `InventoryData` | 背包数据 | **`RemoveItem(ItemData, bool)`**、`RemoveItems` |
+| `InventoryData` | 背包数据 | **`RemoveItem(ItemData, bool)`**、`RemoveItems`、**`inventorySize`（Vector2Int，非 virtual getter）** |
 | `ModSpriteRegistry` | mod 贴图注册（静态） | **`Register(int itemId, string slot, Sprite)`**（slot="Main"）、`GetMain(int)`、`IsModItem(int)` |
+| `TerrainObject_Production_Fridge` | 冰箱（生产型建筑） | `inventorySize`（Vector2Int，非 virtual getter；**UI 不读它**）、制冷逻辑 `UpdateRefrigeration`/`ApplyColdCredit` |
+| `TerrainObjectData` | 建筑数据（`TerrainObject.objectData`） | **`inventoryData`/`inventoryData2`/`inventoryData3`**（建筑库存都在这！） |
 
 ### 3.2 关键枚举值
 - `ItemType.Material = 0`（材料类）
@@ -87,6 +89,7 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 10. **单条目缓存必须原子更新键和值**：P0-1 优化曾因"目标指针变了但备注值没清"导致备注错绑到所有物品——目标变化时须同时重置值缓存。
 11. **`ItemData.Pointer`（IL2CPP 对象指针）在重载存档后变化**：不能用它做持久化 key → 备注写入 `ItemData.SetProperty("notetag_v1", text)`（物品属性**随游戏存档序列化**，重载自动恢复，且按物品实例独立绑定）。
 12. **mod 物品注册注入 `itemAttrDic`/`itemList`/`materialList`/`allRecipeList`** 用反射调用 `Add`/`ContainsKey`；贴图经 `ModSpriteRegistry.Register(id, "Main", sprite)`；`Texture2D.LoadImage(byte[])` + `Sprite.Create(tex, rect, pivot)`。
+13. **建筑容器（冰箱等）的库存存在 `TerrainObjectData.inventoryData/2/3`**，UI 打开面板读的是 **InventoryData 的尺寸**而不是建筑自身的 `inventorySize` getter——改容器容量要 patch `InventoryData.get_inventorySize`（非 virtual）或直接改 InventoryData 属性；旧存档容器读档后尺寸恢复原值，需轮询收集 + patch 双保险。
 
 ## 5. NoteTag 插件现状（v0.5.1，可作新 mod 模板）
 
