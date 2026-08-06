@@ -125,7 +125,9 @@ public static class NameTagItem
         Reflect.Set(recipe, "toolType", ToolType.None);
         Reflect.Set(recipe, "iqReqiared", 0f);
         Reflect.Set(recipe, "craftReqiared", 0f);
-        Reflect.Set(recipe, "craftTime", 1f);
+        // craftTime 单位 = 游戏天（1f = 24 小时；曾误设为 1f 显示一整天）
+        // 3 游戏分钟 = 3 / 1440 天
+        Reflect.Set(recipe, "craftTime", 3f / 1440f);
         Reflect.Set(recipe, "fatigueCost", 0f);
         Reflect.Set(recipe, "craftAudioClipType", 0);
         return recipe;

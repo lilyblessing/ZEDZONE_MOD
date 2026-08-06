@@ -61,6 +61,8 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 - `ToolType.None = 0`（徒手）
 - `CraftPlatform.byhand = 0`（徒手制造）
 
+> ⚠️ **`RecipeData.craftTime` 单位 = 游戏天**（`1f = 24 小时 = 1440 游戏分钟`）！3 游戏分钟 = `3f/1440f`。曾误设 1f 导致配方显示制作一整天。
+
 ### 3.3 物品 ID 规则（官方 mod 文档）
 - 原版物品 ID：**0–99999**；MOD 物品 ID：**100000–999999**（modGuid 哈希，冲突 +1）
 - **木头 = 0，炭 = 6**；命名牌占用 900000（冲突自动 +1）

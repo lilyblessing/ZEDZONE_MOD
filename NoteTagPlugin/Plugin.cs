@@ -6,7 +6,7 @@ using HarmonyLib;
 
 namespace NoteTagPlugin;
 
-[BepInPlugin("com.zedzone.notetag", "NoteTag", "0.5.1")]
+[BepInPlugin("com.zedzone.notetag", "NoteTag", "0.5.2")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
