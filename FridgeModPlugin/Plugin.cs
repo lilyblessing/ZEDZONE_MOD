@@ -20,7 +20,7 @@ namespace FridgeModPlugin;
 /// 3. 字段兜底：集合内 InventoryData.inventorySize 直接写入 22x34
 /// 另保留 patch `TerrainObject_Production_Fridge.get_inventorySize`（新冰箱源头）。
 /// </summary>
-[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "1.2.1")]
+[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "1.2.2")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -88,9 +88,9 @@ public class Plugin : BasePlugin
 
 /// <summary>
 /// 轮询收集冰箱库存（读档后冰箱才实例化；游戏读档会重置容器尺寸，故每次启动
-/// 都必须重新收集）。收集完成后常驻停止；晚进存档也能覆盖（低频持续轮询）。
-/// 优化：频率自适应（前 8 轮 5 秒，之后 20 秒）；停止条件 = 库存>0 且连续
-/// 3 轮冰箱数与库存数完全稳定；已处理的冰箱/库存去重写入；日志仅变化时输出。
+/// 都必须重新收集）。收集完成后降频为 60 秒低频守护（覆盖游戏内切换存档、
+/// 新放置冰箱等后续出现 8x16 容器的场景）。频率自适应：前 8 轮 5 秒，
+/// 之后 20 秒；库存>0 且连续 3 轮完全稳定才进入守护；日志仅变化时输出。
 /// </summary>
 public class FieldFixer : MonoBehaviour
 {
@@ -99,17 +99,16 @@ public class FieldFixer : MonoBehaviour
     private int _lastFridgeCount = -1;
     private int _lastInvCount = -1;
     private int _stableRounds;
-    private bool _done;
+    private bool _idle; // 低频守护模式（收集完成后）
     private readonly HashSet<long> _seenFridgePtrs = new();
     private readonly HashSet<long> _seenInvPtrs = new();
 
     private void Update()
     {
-        if (_done) return;
         _timer -= Time.deltaTime;
         if (_timer > 0f) return;
-        // 频率：前 8 轮 5 秒（快速覆盖读档），之后 20 秒（常驻低频，覆盖晚进存档）
-        _timer = _round < 8 ? 5f : 20f;
+        // 频率：守护模式 60 秒；否则前 8 轮 5 秒（快速覆盖读档），之后 20 秒
+        _timer = _idle ? 60f : (_round < 8 ? 5f : 20f);
         _round++;
 
         try
@@ -154,18 +153,21 @@ public class FieldFixer : MonoBehaviour
             else
                 _stableRounds = 0;
 
-            // 停止：库存已收集且连续 3 轮完全稳定
-            if (invCount > 0 && _stableRounds >= 3)
+            // 收集完成 → 进入低频守护（不彻底停止，覆盖游戏内换档/新冰箱）
+            if (!_idle && invCount > 0 && _stableRounds >= 3)
             {
-                _done = true;
-                Plugin.L.LogInfo($"[BigFridge] 收集完成(第{_round}轮): 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}");
+                _idle = true;
+                _lastFridgeCount = fridgeCount;
+                _lastInvCount = invCount;
+                Plugin.L.LogInfo($"[BigFridge] 收集完成(第{_round}轮): 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}，进入低频守护(60s)");
                 return;
             }
 
             // 日志降噪：仅数量变化时输出
             if (changed)
             {
-                Plugin.L.LogInfo($"[BigFridge] 第{_round}轮: 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}");
+                string tag = _idle ? "[BigFridge·守护]" : $"[BigFridge] 第{_round}轮";
+                Plugin.L.LogInfo($"{tag}: 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}");
             }
             _lastFridgeCount = fridgeCount;
             _lastInvCount = invCount;

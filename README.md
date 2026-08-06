@@ -1,26 +1,53 @@
-# ZED ZONE 命名牌 MOD (NoteTag)
+# ZED ZONE MOD 合集
+
+基于 BepInEx 6 (IL2CPP) 的代码注入实现，完全绕过官方 `.zedmod` mod 系统的权限限制。
+开发文档见 [DEVELOPMENT.md](DEVELOPMENT.md)。
+
+---
+
+# MOD 1：命名牌 (NoteTag) v0.5.2
 
 为 ZED ZONE 游戏添加「命名牌」工具：将命名牌拖放到任意物品上即可为该物品添加**持久化备注**（跟随存档保存），悬停物品时备注以亮黄色显示在物品描述与其他信息之间。
-
-> 基于 BepInEx 6 (IL2CPP) 的代码注入实现，完全绕过官方 `.zedmod` mod 系统的权限限制。
 
 ## 功能
 
 - **命名牌物品**（itemId 900000，冲突时自动 +1）
   - 物品名：命名牌 / 描述：为任意物品添加备注
   - 堆叠 32 / 重量 0.01 / 价格 1 / 材料类（Material）
-- **制造配方**：木头×1 + 炭×1 = 命名牌×2，徒手制作（`CraftPlatform.byhand`），0 级
+- **制造配方**：木头×1 + 炭×1 = 命名牌×2，徒手制作（`CraftPlatform.byhand`），0 级，制作时间 3 游戏分钟
 - **拖放交互**：背包中拖命名牌到任意有物品的格子 → 弹出可调整大小的输入框 → 确定后保存备注并消耗 1 个命名牌
 - **备注持久化**：写入 `ItemData` 属性表，随游戏存档自动保存/恢复，按物品实例独立绑定
 - **tooltip 展示**：备注以亮黄色插在物品名/描述之后、其他物品信息之前
 - **自定义贴图**：经 `ModSpriteRegistry` 注册
 
-## 安装（用户侧）
+### 安装（用户侧）
 
 1. 安装 BepInEx 6（IL2CPP x64）到游戏根目录 `D:\SteamLibrary\steamapps\common\ZED ZONE`
 2. 将编译产物 `NoteTagPlugin.dll` 放入 `BepInEx\plugins\NoteTagPlugin\`
 3. 将 `Name_Tag.png` 放在同目录（贴图资源）
 4. 启动游戏：控制台 `` ` `` 输入 `additem 900000` 获取命名牌测试
+
+---
+
+# MOD 2：大容量冰箱 (BigFridge) v1.2.2
+
+将冰箱（`TerrainObject_Production_Fridge`）内部存储从原版 **(8x16) 格**扩容为 **(22x34) 格**（与皮制背包相同尺寸）。
+
+## 功能
+
+- 新放置的冰箱直接以 22x34 初始化
+- **旧存档冰箱自动迁移**：加载存档后插件自动检测并扩容已有冰箱（尺寸随存档保存，保存一次后永久生效）
+- **全场景覆盖**：远离冰箱不加载时数据无损；游戏内切换存档、新放置冰箱由低频守护轮询（60s）兜底
+
+### 安装（用户侧）
+
+1. 安装 BepInEx 6（IL2CPP x64）到游戏根目录 `D:\SteamLibrary\steamapps\common\ZED ZONE`
+2. 将 `FridgeModPlugin.dll` 放入 `BepInEx\plugins\BigFridge\`
+3. 启动游戏即可，无需其他操作（日志出现 `收集完成` 即迁移成功）
+
+### 卸载
+
+删除 `FridgeModPlugin.dll` 即可还原 8x16（已保存为大容量的存档仍保持 22x34，格子超出部分物品仍在，仅不再扩容新容器）。
 
 ## 构建（开发者）
 
@@ -44,4 +71,5 @@ dotnet build -c Release
 
 ## 版本
 
-- v0.4.3 —— 功能完整：注册/配方/贴图/拖放/快捷键/持久化/tooltip 展示
+- NoteTag v0.5.2 —— 命名牌：注册/配方/贴图/拖放/持久化/tooltip 展示/性能优化（含修复制作时间 3 分钟）
+- BigFridge v1.2.2 —— 大容量冰箱：22x34 扩容/旧存档迁移/低频守护轮询
