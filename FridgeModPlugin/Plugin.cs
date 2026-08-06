@@ -20,7 +20,7 @@ namespace FridgeModPlugin;
 /// 3. 字段兜底：集合内 InventoryData.inventorySize 直接写入 22x34
 /// 另保留 patch `TerrainObject_Production_Fridge.get_inventorySize`（新冰箱源头）。
 /// </summary>
-[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "1.2.0")]
+[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "1.2.1")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -87,48 +87,35 @@ public class Plugin : BasePlugin
 }
 
 /// <summary>
-/// 轮询收集冰箱库存（读档后冰箱才实例化），并直接写入字段兜底。
-/// 优化：冰箱数量连续 2 轮稳定即提前停止；已处理的冰箱/库存去重写入；
-/// 日志仅在集合变化或停止时输出。
+/// 轮询收集冰箱库存（读档后冰箱才实例化；游戏读档会重置容器尺寸，故每次启动
+/// 都必须重新收集）。收集完成后常驻停止；晚进存档也能覆盖（低频持续轮询）。
+/// 优化：频率自适应（前 8 轮 5 秒，之后 20 秒）；停止条件 = 库存>0 且连续
+/// 3 轮冰箱数与库存数完全稳定；已处理的冰箱/库存去重写入；日志仅变化时输出。
 /// </summary>
 public class FieldFixer : MonoBehaviour
 {
-    private float _timer = 6f;
+    private float _timer = 5f;
     private int _round;
     private int _lastFridgeCount = -1;
-    private int _stableRounds;
     private int _lastInvCount = -1;
+    private int _stableRounds;
+    private bool _done;
     private readonly HashSet<long> _seenFridgePtrs = new();
     private readonly HashSet<long> _seenInvPtrs = new();
 
     private void Update()
     {
-        // 停止条件：轮数上限（保险）或冰箱数量连续 2 轮稳定
-        if (_round >= 12 || _stableRounds >= 2) return;
+        if (_done) return;
         _timer -= Time.deltaTime;
         if (_timer > 0f) return;
-        _timer = 5f;
+        // 频率：前 8 轮 5 秒（快速覆盖读档），之后 20 秒（常驻低频，覆盖晚进存档）
+        _timer = _round < 8 ? 5f : 20f;
         _round++;
 
         try
         {
             var all = Resources.FindObjectsOfTypeAll<TerrainObject_Production_Fridge>();
             int fridgeCount = all != null ? all.Length : 0;
-
-            // 稳定性检测（冰箱数=0 时不累计，避免主菜单阶段误停）
-            if (fridgeCount == 0)
-            {
-                _stableRounds = 0;
-            }
-            else if (fridgeCount == _lastFridgeCount)
-            {
-                _stableRounds++;
-            }
-            else
-            {
-                _stableRounds = 0;
-            }
-            _lastFridgeCount = fridgeCount;
 
             // 集合每轮重建（读档后对象引用需刷新）
             Plugin.FridgeInventories.Clear();
@@ -160,13 +147,28 @@ public class FieldFixer : MonoBehaviour
                 }
             }
 
-            // 日志降噪：仅在数量变化或停止时输出
-            if (invCount != _lastInvCount || _stableRounds >= 2 || _round >= 12)
+            // 稳定性：冰箱数与库存数都稳定才累计（先判断变化再更新基准）
+            bool changed = fridgeCount != _lastFridgeCount || invCount != _lastInvCount;
+            if (!changed)
+                _stableRounds++;
+            else
+                _stableRounds = 0;
+
+            // 停止：库存已收集且连续 3 轮完全稳定
+            if (invCount > 0 && _stableRounds >= 3)
             {
-                string stop = (_stableRounds >= 2 || _round >= 12) ? " (停止)" : "";
-                Plugin.L.LogInfo($"[BigFridge] 第{_round}轮: 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}{stop}");
-                _lastInvCount = invCount;
+                _done = true;
+                Plugin.L.LogInfo($"[BigFridge] 收集完成(第{_round}轮): 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}");
+                return;
             }
+
+            // 日志降噪：仅数量变化时输出
+            if (changed)
+            {
+                Plugin.L.LogInfo($"[BigFridge] 第{_round}轮: 冰箱={fridgeCount} 库存={invCount} 集合={Plugin.FridgeInventories.Count}");
+            }
+            _lastFridgeCount = fridgeCount;
+            _lastInvCount = invCount;
         }
         catch (Exception e)
         {
