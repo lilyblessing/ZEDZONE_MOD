@@ -5,6 +5,29 @@
 
 ---
 
+## 前置：安装 BepInEx 6（一次性）
+
+所有 MOD 都运行在 **BepInEx 6（IL2CPP x64）** 之上，首次使用需先安装：
+
+1. **下载 BepInEx 6**：前往 [BepInEx 官方构建站](https://builds.bepinex.dev/) → 项目 `BepInEx Bleeding Edge` → 下载
+   `BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.XXX.zip`（选最新的版本号）
+2. **解压到游戏根目录**：把压缩包内容解压到
+   `D:\SteamLibrary\steamapps\common\ZED ZONE\`（与 `ZEDZONE.exe` 同级）
+   - 解压后应看到：`BepInEx\` 文件夹、`winhttp.dll`、`doorstop_config.ini`、`dotnet\` 等
+3. **启动一次游戏**：首次运行 BepInEx 会分析游戏代码生成 interop 程序集（约 30 秒~1 分钟，弹控制台窗口属正常）
+4. **验证安装**：游戏目录出现 `BepInEx\LogOutput.log` 且内容含 `BepInEx 6.0.0-be.XXX - ZEDZONE` 即成功
+
+> 游戏更新后无需重装 BepInEx（自动重新生成 interop）。
+
+### 安装 MOD（各 MOD 的 zip 解压后的 dll）
+
+| MOD | 放置路径 |
+|---|---|
+| NoteTag（命名牌） | `BepInEx\plugins\NoteTagPlugin\`（含 `Name_Tag.png`） |
+| BigFridge（大容量冰箱） | `BepInEx\plugins\BigFridge\` |
+
+---
+
 # MOD 1：命名牌 (NoteTag) v0.5.2
 
 为 ZED ZONE 游戏添加「命名牌」工具：将命名牌拖放到任意物品上即可为该物品添加**持久化备注**（跟随存档保存），悬停物品时备注以亮黄色显示在物品描述与其他信息之间。
