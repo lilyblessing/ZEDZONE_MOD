@@ -1,15 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net6.0</TargetFramework>
-    <AssemblyName>ModRepairInjector</AssemblyName>
+    <AssemblyName>PortableFridgeProbe</AssemblyName>
     <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
-    <RootNamespace>ModRepairInjector</RootNamespace>
+    <RootNamespace>PortableFridgeProbe</RootNamespace>
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- 游戏根目录（可用 -p:GAME_DIR=... 覆盖） -->
     <GameDir Condition="'$(GAME_DIR)' != ''">$(GAME_DIR)</GameDir>
     <GameDir Condition="'$(GAME_DIR)' == ''">D:\SteamLibrary\steamapps\common\ZED ZONE</GameDir>
   </PropertyGroup>
@@ -31,7 +30,6 @@
       <HintPath>$(GameDir)\BepInEx\core\0Harmony.dll</HintPath>
     </Reference>
 
-    <!-- 游戏 interop 程序集（通配） -->
     <Reference Include="$(GameDir)\BepInEx\interop\*.dll" />
   </ItemGroup>
 </Project>

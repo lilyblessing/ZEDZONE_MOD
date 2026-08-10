@@ -29,7 +29,7 @@ public class Plugin : BasePlugin
 public class Exporter : MonoBehaviour
 {
     // 要导出的物品 ID 列表（肉 204、5.56 弹链 741）
-    private static readonly int[] ExportIds = { 204, 741 };
+    private static readonly int[] ExportIds = { 532 };
     private float _timer = 15f;
     private bool _done;
 
@@ -108,3 +108,4 @@ public class Exporter : MonoBehaviour
         Plugin.L.LogInfo($"{tag}: {path} ({arr.Length / 1024} KB)");
     }
 }
+
