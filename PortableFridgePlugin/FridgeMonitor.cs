@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace PortableFridgePlugin;
@@ -30,6 +31,9 @@ public class FridgeMonitor : MonoBehaviour
 
     // 保鲜写入开关
     private const bool ApplyPreservation = true;
+
+    // isFood 判定缓存（物品类型定义加载后不变，按 itemId 缓存）
+    private static readonly Dictionary<int, bool> IsFoodCache = new Dictionary<int, bool>();
 
     private void Update()
     {
@@ -163,10 +167,15 @@ public class FridgeMonitor : MonoBehaviour
 
     private static bool IsFood(ItemData item)
     {
+        if (item == null) return false;
+        int id = item.itemId;
+        if (IsFoodCache.TryGetValue(id, out bool cached)) return cached;
         try
         {
-            var attr = ItemManager.instance.GetItemAttrById(item.itemId);
-            return attr != null && attr.itemType == ItemType.Food;
+            var attr = ItemManager.instance.GetItemAttrById(id);
+            bool isFood = attr != null && attr.itemType == ItemType.Food;
+            IsFoodCache[id] = isFood;
+            return isFood;
         }
         catch { return false; }
     }
