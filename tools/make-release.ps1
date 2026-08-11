@@ -2,15 +2,16 @@
 # 本地编译并打包发布产物（手动发布到 GitHub Release 使用）。
 #
 # 用法：
-#   .\tools\make-release.ps1                  # 打包全部 mod
+#   .\tools\make-release.ps1                  # 打包全部 mod（notetag + bigfridge + portablefridge）
 #   .\tools\make-release.ps1 -Mod notetag     # 只打包 NoteTag
 #   .\tools\make-release.ps1 -Mod bigfridge   # 只打包 BigFridge
+#   .\tools\make-release.ps1 -Mod portablefridge  # 只打包 PortableFridge
 #   .\tools\make-release.ps1 -GameDir "X:\..."  # 指定游戏目录（编译依赖 interop）
 #
 # 产物：dist\<DllName>-<版本>.zip（dll + 资源 + README），版本自动从各 Plugin.cs 读取
 
 param(
-    [ValidateSet("notetag", "bigfridge", "all")]
+    [ValidateSet("notetag", "bigfridge", "portablefridge", "all")]
     [string]$Mod = "all",
     [string]$GameDir = "D:\SteamLibrary\steamapps\common\ZED ZONE"
 )
@@ -60,6 +61,9 @@ if ($Mod -in @("notetag", "all")) {
 }
 if ($Mod -in @("bigfridge", "all")) {
     Build-Mod -ProjDir "FridgeModPlugin" -DllName "FridgeModPlugin" -Resources @()
+}
+if ($Mod -in @("portablefridge", "all")) {
+    Build-Mod -ProjDir "PortableFridgePlugin" -DllName "PortableFridgePlugin" -Resources @("new_随身小冰箱.png")
 }
 Write-Host ""
 Write-Host "=== 全部完成 ==="
