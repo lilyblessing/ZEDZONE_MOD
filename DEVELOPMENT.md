@@ -107,6 +107,52 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 
 性能优化已做：tooltip 目标单条目缓存（`targetRect.Pointer → item → note`，目标不变零遍历零 native）、`EnsureStyles` 一次性初始化、已移除开发期探查与快捷键功能。
 
+## 5.5 版本号策略
+
+所有 MOD 统一使用 **0.x**（早期阶段），不提前上 1.x。各 MOD 现状：
+- NoteTag v0.5.2（命名牌）
+- BigFridge v0.2.2（大容量冰箱；曾用 1.2.2，2026-08 统一回退为 0.2.2，**仅版本号，代码不变**）
+- PortableFridge v0.3.1（便携小冰箱）
+
+## 5.6 大容量冰箱 BigFridge（v0.2.2）
+
+将冰箱（`TerrainObject_Production_Fridge`）内部存储从 (8x16) 扩为 **(22x34)**。三层方案：
+1. patch `TerrainObject_Production_Fridge.get_inventorySize`（非 virtual）→ 新冰箱源头
+2. patch `InventoryData.get_inventorySize`（非 virtual）→ 旧冰箱/读档恢复路径（UI 读 InventoryData 尺寸而非建筑 getter）
+3. `FieldFixer` 轮询：收集冰箱库存（`TerrainObjectData.inventoryData/2/3`）+ 字段兜底；库存数>0 且连续 3 轮稳定 → 完成，转 60s 低频守护（覆盖游戏内换档/新冰箱）
+
+关键机制：**游戏读档会重置容器尺寸**（存档不持久化），故每次启动需重新收集；尺寸随存档保存一次后永久生效（保存后重载立即 22x34，已实测）。
+
+## 5.7 便携小冰箱 PortableFridge（v0.3.1）
+
+内置容器（Backpack 10×8，同弹药箱）+ 电瓶供电 + 保鲜。完整机制：
+
+**物品注册**（`PortableFridgeItem.cs`）：
+- `new ItemAttr_Backpack()`（⚠️ Backpack 必须用子类实例，基类会被游戏强转 `ItemAttr_Backpack` 抛 InvalidCastException 导致物品无法生成）
+- `inventorySize = (10,8)`；工作台配方（铁块8×6+铁管10×4+铜丝13×4，craftPlatform=workbench）；修复配方（维修包56×1）
+- 电池槽：`BatteryBox`（batteryModel=5 接受电瓶85, batteryNumber=1）+ `BatteryConsuming`（wattage=10）特性（itemFeatures + itemFeatureDataDic + itemFeatureConfigDatas 三者都配）
+
+**电池槽机制**（实测解密）：
+- 电池槽存在 `ItemData.itemPropertyPairs`：key `BatterySlot0` → value `"电池itemId|电量WH"`（如 `85|1072`）；key `IsSwitchOn` → `"true"/"false"`
+- "安装/取出电池"菜单由 **BatteryConsuming 特性**提供（只留 BatteryBox 菜单会消失）
+- 游戏只驱动**装备位**设备的自动扣电（手电筒装身上才耗电）；背包内物品不自动扣 → 扣电由插件手动写 `BatterySlot0`
+
+**保鲜机制**（实测解密）：
+- 食物过期判定：`当前游戏时间 − ItemData.properties[0] ≥ ItemAttr_Food.perishTime`；`properties[0]` 是**采集时间戳**（游戏天单位，静态不随腐烂变化）
+- 保鲜 = 有电时把容器内食物 `properties[0]` 前移（等效暂停腐烂）
+
+**扣电速率标定**（手电筒对照法，已实测）：
+- 装备手电筒（wattage=0.75, IsSwitchOn=true）开 0.5 游戏天 → 9V 电池耗 8.99 WH → **1 wattage = 23.97 WH/游戏天**
+- 目标 1200WH 电瓶用 5 天 = 240 WH/天 → wattage = 10（插件手动扣 `239.7 WH/天`）
+
+**时间钩子**：`TimeController.AddTime(float)`（增量）+ `ChangeTimeTo(float)`（绝对跳变，睡觉走它）——两者参数单位 = **游戏天**（1f=1天，0.0006≈1游戏分钟；睡觉 12 小时 = +0.5）。`ChangeTimeTo` 需与 `AddTime` 协同维护 `_lastKnownTime` 计算差值。
+
+**性能优化**（两轮）：
+- 第一轮：时间推进合并——Postfix 只累计 `_pendingTime`，≥0.1 游戏天批量处理一次（睡眠每秒数十次调用 → 每 0.1 天一次，native 交互降 2-3 个数量级）；移除开发标定日志
+- 第二轮：isFood 判定缓存（`Dictionary<int,bool>`，物品定义不变缓存安全）；跳过小冰箱实例缓存（合并后处理频率已极低）
+
+**工具插件**：`tools/PortableFridgeProbe`（探查：F9 食物/电瓶/电池槽/装备栏快照 + BatteryConsuming 物品扫描）。部署目录中的探查插件发布前需停用（.disabled）。
+
 ## 6. 官方 mod 修复配方（已解决）
 
 **需求背景**：7.62 弹链 mod（runtimeId=871704）自定义修复配方（弹簧×10）。

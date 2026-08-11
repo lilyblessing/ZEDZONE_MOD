@@ -52,7 +52,7 @@
 
 ---
 
-# MOD 2：大容量冰箱 (BigFridge) v1.2.2
+# MOD 2：大容量冰箱 (BigFridge) v0.2.2
 
 将冰箱（`TerrainObject_Production_Fridge`）内部存储从原版 **(8x16) 格**扩容为 **(22x34) 格**（与皮制背包相同尺寸）。
 
@@ -95,4 +95,5 @@ dotnet build -c Release
 ## 版本
 
 - NoteTag v0.5.2 —— 命名牌：注册/配方/贴图/拖放/持久化/tooltip 展示/性能优化（含修复制作时间 3 分钟）
-- BigFridge v1.2.2 —— 大容量冰箱：22x34 扩容/旧存档迁移/低频守护轮询
+- BigFridge v0.2.2 —— 大容量冰箱：22x34 扩容/旧存档迁移/低频守护轮询
+
