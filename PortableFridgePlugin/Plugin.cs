@@ -13,7 +13,7 @@ namespace PortableFridgePlugin;
 /// 有电时持续把容器内食物 properties[0] 前移（等效暂停腐烂）。
 /// 供电：容器内电瓶按 1200WH / 5天 = 240WH/天 消耗。
 /// </summary>
-[BepInPlugin("com.zedzone.portablefridge", "PortableFridge", "0.1.0")]
+[BepInPlugin("com.zedzone.portablefridge", "PortableFridge", "0.3.0")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -45,7 +45,7 @@ public class Plugin : BasePlugin
             Log.LogError($"[PFridge] Harmony 初始化失败: {e}");
         }
 
-        Log.LogInfo("[PFridge] 便携小冰箱插件已加载 (v0.1.0)");
+        Log.LogInfo("[PFridge] 便携小冰箱插件已加载 (v0.3.0-优化)");
     }
 
     private void PatchTime(Harmony harmony)
@@ -79,3 +79,4 @@ public class Plugin : BasePlugin
         Log.LogInfo("[PFridge] 已挂钩 TimeController.ChangeTimeTo");
     }
 }
+

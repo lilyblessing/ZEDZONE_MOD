@@ -1,17 +1,15 @@
 using System;
-using System.Collections.Generic;
-using System.Reflection;
-using BepInEx.Logging;
 using UnityEngine;
 
 namespace PortableFridgePlugin;
 
 /// <summary>
-/// 供电 + 保鲜核心：
+/// 供电 + 保鲜核心（v0.3.0 性能优化版）：
 /// - 延迟注册物品（等 ItemManager 就绪，带重试）
-/// - Harmony Postfix 挂 TimeController.AddTime：游戏时间每推进 delta 即处理小冰箱
-/// - 处理：找玩家主背包中的小冰箱 → 其容器(inventoryData)内找电瓶(85)
-///   有电 → 扣电 + 容器内食物 properties[0] 前移（暂停腐烂）
+/// - Harmony Postfix 挂 TimeController.AddTime / ChangeTimeTo：游戏时间推进 → 只累计
+/// - 累计达阈值（0.1 游戏天 ≈ 2.4 游戏小时）才批量处理一次小冰箱：
+///   读电池槽电量 → 有电则容器内食物 properties[0] 前移（暂停腐烂）+ 扣电
+/// 优化：时间推进合并（睡眠时每秒数十次调用 → 每 0.1 天处理一次），native 交互降 2-3 个数量级。
 /// </summary>
 public class FridgeMonitor : MonoBehaviour
 {
@@ -19,83 +17,72 @@ public class FridgeMonitor : MonoBehaviour
     private bool _registered;
     private int _registerTries;
 
-    // 时间累计（用于标定 AddTime/ChangeTimeTo 单位：睡一天后看候选天数）
-    private static float _totalTimeAdvanced;
-    private static long _tickCount;
+    // 时间推进累计（游戏天）；ChangeTimeTo 差值计算
+    private static float _pendingTime;
     private static float _lastKnownTime = float.NaN;
-    private static float _accDays;   // 冰箱运转日志节流累计
-    private static float _noPowerAcc; // 无电日志节流累计
 
-    // 单位已确认：AddTime/ChangeTimeTo 参数单位 = 游戏天（1f = 1 游戏天；0.0006 ≈ 1 游戏分钟）
-    // 保鲜写入开启；扣电待电池槽方案（见 BatteryConsuming 探查）
+    // 处理阈值：0.1 游戏天（约 2.4 游戏小时）批量处理一次
+    private const float ProcessThreshold = 0.1f;
+
+    // 日志节流累计
+    private static float _accDays;
+    private static float _noPowerAcc;
+
+    // 保鲜写入开关
     private const bool ApplyPreservation = true;
-    // 日志节流
-    private static float _lastLogTime;
 
     private void Update()
     {
-        if (!_registered)
+        if (_registered) return;
+        _registerTimer -= Time.deltaTime;
+        if (_registerTimer > 0f) return;
+        if (PortableFridgeItem.Register())
         {
-            _registerTimer -= Time.deltaTime;
-            if (_registerTimer > 0f) return;
-            if (PortableFridgeItem.Register())
-            {
-                _registered = true;
-            }
-            else if (++_registerTries >= 10)
-            {
-                _registered = true; // 放弃重试，避免每帧日志
-            }
-            else
-            {
-                _registerTimer = 5f;
-            }
+            _registered = true;
         }
-
-        // 每 10 秒打印一次标定日志（AddTime 累计值）
-        if (Time.time - _lastLogTime > 10f)
+        else if (++_registerTries >= 10)
         {
-            _lastLogTime = Time.time;
-            Plugin.L.LogInfo($"[PFridge] 标定: AddTime累计={_totalTimeAdvanced:F1} (调用{_tickCount}次) 注册={PortableFridgeItem.Registered}(id={PortableFridgeItem.ItemId})");
+            _registered = true; // 放弃重试，避免每帧日志
+        }
+        else
+        {
+            _registerTimer = 5f;
         }
     }
 
-    // ---------- Harmony Postfix：游戏时间推进 ----------
+    // ---------- Harmony Postfix：游戏时间推进（只累计，不处理）----------
 
     internal static void Postfix_AddTime(float __0)
     {
-        _totalTimeAdvanced += __0;
-        _tickCount++;
-        if (float.IsNaN(_lastKnownTime)) _lastKnownTime = __0;
-        else _lastKnownTime += __0;
-        try { OnTimeAdvanced(__0); }
-        catch (Exception e) { Plugin.L.LogError($"[PFridge] OnTimeAdvanced 异常: {e}"); }
+        _pendingTime += __0;
+        TryFlush();
     }
 
     internal static void Postfix_ChangeTimeTo(float __0)
     {
         float t = __0;
-        _tickCount++;
         if (!float.IsNaN(_lastKnownTime) && t > _lastKnownTime)
         {
-            float delta = t - _lastKnownTime;
-            try { OnTimeAdvanced(delta); }
-            catch (Exception e) { Plugin.L.LogError($"[PFridge] OnTimeAdvanced(ChangeTimeTo) 异常: {e}"); }
+            _pendingTime += t - _lastKnownTime;
+            TryFlush();
         }
         _lastKnownTime = t;
     }
 
-    private static void OnTimeAdvanced(float delta)
+    /// <summary>累计达阈值时批量处理一次；未注册/无累计则跳过。</summary>
+    private static void TryFlush()
     {
         if (!PortableFridgeItem.Registered || PortableFridgeItem.ItemId < 0) return;
+        if (_pendingTime < ProcessThreshold) return;
 
-        // 标定日志（每 60 次打印一次，避免刷屏）
-        if (_tickCount % 60 == 0)
-        {
-            Plugin.L.LogInfo($"[PFridge] 标定: delta={delta:F4} 累计={_totalTimeAdvanced:F1} " +
-                             $"候选天数(1440制)={delta / 1440f:F6} (86400制)={delta / 86400f:F6}");
-        }
+        float batch = _pendingTime;
+        _pendingTime = 0f;
+        try { ProcessAllFridges(batch); }
+        catch (Exception e) { Plugin.L.LogError($"[PFridge] 批量处理异常: {e}"); }
+    }
 
+    private static void ProcessAllFridges(float days)
+    {
         var gc = GameController.instance;
         var cd = gc?.playerCharacter?.characterData;
         var inv = cd?.inventoryData;
@@ -108,11 +95,11 @@ public class FridgeMonitor : MonoBehaviour
         {
             var fridgeItem = list[i];
             if (fridgeItem == null || fridgeItem.itemId != PortableFridgeItem.ItemId) continue;
-            ProcessFridge(fridgeItem, delta);
+            ProcessFridge(fridgeItem, days);
         }
     }
 
-    private static void ProcessFridge(ItemData fridgeItem, float delta)
+    private static void ProcessFridge(ItemData fridgeItem, float days)
     {
         var container = fridgeItem.inventoryData;   // 小冰箱的内部库存
         if (container == null) return;
@@ -134,8 +121,6 @@ public class FridgeMonitor : MonoBehaviour
             }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PFridge] 读取电池槽失败: {e.Message}"); }
-
-        float days = delta;   // delta 单位 = 游戏天
 
         if (batteryId <= 0 || remaining <= 0f)
         {
@@ -160,7 +145,7 @@ public class FridgeMonitor : MonoBehaviour
             }
         }
 
-        // 扣电：240 WH/游戏天（wattage=10 换算，1200WH 电瓶 5 天耗尽）
+        // 扣电：≈240 WH/游戏天（wattage=10 标定换算，1200WH 电瓶 5 天耗尽）
         float cost = PortableFridgeItem.WattagePerDayFromWattage * days;
         remaining -= cost;
         if (remaining < 0f) remaining = 0f;
@@ -172,7 +157,7 @@ public class FridgeMonitor : MonoBehaviour
         if (_accDays >= 0.25f)
         {
             _accDays = 0f;
-            Plugin.L.LogInfo($"[PFridge] 冰箱运转: +{days:F4}天 保鲜{foodCount}份食物 电瓶剩{remaining:F0}WH");
+            Plugin.L.LogInfo($"[PFridge] 冰箱运转: +{days:F3}天 保鲜{foodCount}份食物 电瓶剩{remaining:F0}WH");
         }
     }
 
