@@ -1,0 +1,50 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>PortableFridgePlugin</AssemblyName>
+    <RootNamespace>PortableFridgePlugin</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <NoWarn>CS0436;CS0618</NoWarn>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir>D:\SteamLibrary\steamapps\common\ZED ZONE</GameDir>
+    <InteropDir>$(GameDir)\BepInEx\interop</InteropDir>
+    <CoreDir>$(GameDir)\BepInEx\core</CoreDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- BepInEx 6 核心 -->
+    <Reference Include="$(CoreDir)\BepInEx.Core.dll" />
+    <Reference Include="$(CoreDir)\BepInEx.Unity.Common.dll" />
+    <Reference Include="$(CoreDir)\BepInEx.Unity.IL2CPP.dll" />
+    <Reference Include="$(CoreDir)\Il2CppInterop.Runtime.dll" />
+    <Reference Include="$(CoreDir)\0Harmony.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 游戏 interop 程序集（全部引用，编译器按需解析） -->
+    <Reference Include="$(InteropDir)\Assembly-CSharp.dll" />
+    <Reference Include="$(InteropDir)\Il2Cppmscorlib.dll" />
+    <Reference Include="$(InteropDir)\Il2CppSystem.dll" />
+    <Reference Include="$(InteropDir)\Il2CppSystem.Core.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.CoreModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.IMGUIModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.InputLegacyModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.InputModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.TextRenderingModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.UI.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.ImageConversionModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.UIModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.AnimationModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.PhysicsModule.dll" />
+    <Reference Include="$(InteropDir)\UnityEngine.Physics2DModule.dll" />
+  </ItemGroup>
+
+</Project>
