@@ -95,7 +95,7 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 15. **拦截游戏拖拽（DropOn）必须恢复拖拽状态，否则物品被游戏清理**：`BasicItemUI.OnBeginDrag` 会把物品暂存进 `itemdataTemp`（拖拽中）。若 Harmony Prefix 拦截 `DropOn`（return false 跳过放置）而不做处理，`itemdataTemp` 残留 → **关闭背包时游戏清理"未放置的拖拽物品"，整组物品消失**。修复：拦截后调用 `RestoreDraggedItemToSource()`（private，反射）恢复拖拽状态。⚠️ 该调用会**重建格子 UI**（`BasicItemUI` 引用 Pointer 归零 → `!= null` 判 false），后续操作不能用格子引用，要用 ItemData 引用。
 16. **拖放期间 `ItemData.inventoryData` 被游戏置 null（归属临时清空）**：`RestoreDraggedItemToSource` 只恢复格子显示、不恢复 inventoryData。此时 `InventoryData.RemoveItem(item, bool)` 因无 inventory 而失败。**正确归属获取**：`格子(BasicItemUI) → inventoryPanel → inventoryData`（物品在面板格子中显示，必然在其 inventory 内）。移除前先定位格子与面板（移除后 itemdata 被清空无法再定位）。
 
-## 5. NoteTag 插件现状（v0.5.2 封版，可作新 mod 模板）
+## 5. NoteTag 插件现状（v0.5.3 封版，可作新 mod 模板）
 
 ```
 Plugin.cs           BepInPlugin 入口：AddComponent<NoteTagUI> + Harmony patch
@@ -112,7 +112,7 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 ## 5.5 版本号策略
 
 所有 MOD 统一使用 **0.x**（早期阶段），不提前上 1.x。各 MOD 现状：
-- NoteTag v0.5.2（命名牌）
+- NoteTag v0.5.3（命名牌；v0.5.3 修复拖放后消失/单张不消耗 + P1 性能优化）
 - BigFridge v0.2.2（大容量冰箱；曾用 1.2.2，2026-08 统一回退为 0.2.2，**仅版本号，代码不变**）
 - PortableFridge v0.3.1（便携小冰箱）
 

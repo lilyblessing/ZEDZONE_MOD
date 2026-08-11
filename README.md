@@ -25,10 +25,11 @@
 |---|---|
 | NoteTag（命名牌） | `BepInEx\plugins\NoteTagPlugin\`（含 `Name_Tag.png`） |
 | BigFridge（大容量冰箱） | `BepInEx\plugins\BigFridge\` |
+| PortableFridge（便携小冰箱） | `BepInEx\plugins\PortableFridgePlugin\`（含 `new_随身小冰箱.png`） |
 
 ---
 
-# MOD 1：命名牌 (NoteTag) v0.5.2
+# MOD 1：命名牌 (NoteTag) v0.5.3
 
 为 ZED ZONE 游戏添加「命名牌」工具：将命名牌拖放到任意物品上即可为该物品添加**持久化备注**（跟随存档保存），悬停物品时备注以亮黄色显示在物品描述与其他信息之间。
 
@@ -72,6 +73,33 @@
 
 删除 `FridgeModPlugin.dll` 即可还原 8x16（已保存为大容量的存档仍保持 22x34，格子超出部分物品仍在，仅不再扩容新容器）。
 
+---
+
+# MOD 3：便携小冰箱 (PortableFridge) v0.3.1
+
+可携带的小冰箱：内置容器（10×8 格，同弹药箱）+ 电瓶供电 + 保鲜，出门在外也能储存并保鲜食物。
+
+## 功能
+
+- **内置容器**：Backpack 10×8 格，右键打开使用
+- **电瓶供电**：电池槽接受电瓶（itemId 85），满电约 5 天（1200WH / 240WH 每天）
+- **食物保鲜**：有电时自动暂停容器内食物的腐烂计时（无电时正常腐烂）
+- **制造配方**：工作台制造——铁块×6 + 铁管×4 + 铜丝×4
+- **修复配方**：维修包×1
+
+### 安装（用户侧）
+
+1. 安装 BepInEx 6（IL2CPP x64）到游戏根目录 `D:\SteamLibrary\steamapps\common\ZED ZONE`
+2. 将 `PortableFridgePlugin.dll` 放入 `BepInEx\plugins\PortableFridgePlugin\`
+3. 将 `new_随身小冰箱.png` 放在同目录（贴图资源）
+4. 启动游戏，工作台制造便携小冰箱即可使用
+
+### 卸载
+
+删除 `PortableFridgePlugin.dll` 与 `new_随身小冰箱.png` 即可（已放入容器中的物品会保留在存档里）。
+
+---
+
 ## 构建（开发者）
 
 环境：.NET SDK（net6.0 目标，SDK 8+ 可用）、游戏本体（需要其 BepInEx interop 程序集）。
@@ -94,6 +122,7 @@ dotnet build -c Release
 
 ## 版本
 
-- NoteTag v0.5.2 —— 命名牌：注册/配方/贴图/拖放/持久化/tooltip 展示/性能优化（含修复制作时间 3 分钟）
+- NoteTag v0.5.3 —— 命名牌：注册/配方/贴图/拖放/持久化/tooltip 展示/性能优化（v0.5.3 修复拖放后命名牌消失/单张不消耗，P1 性能优化）
 - BigFridge v0.2.2 —— 大容量冰箱：22x34 扩容/旧存档迁移/低频守护轮询
+- PortableFridge v0.3.1 —— 便携小冰箱：内置容器/电瓶供电/食物保鲜/性能优化
 
