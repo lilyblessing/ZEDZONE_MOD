@@ -99,13 +99,12 @@ public static class DropPatch
     {
         try
         {
-            var m = typeof(BasicItemUI).GetMethod("RestoreDraggedItemToSource", InstFlags);
-            if (m == null)
+            if (RestoreDragMethod == null)
             {
                 Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 反射失败");
                 return;
             }
-            bool ok = (bool)m.Invoke(src, null);
+            bool ok = (bool)RestoreDragMethod.Invoke(src, null);
             if (!ok) Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 返回 false");
             Plugin.L.LogInfo($"[NoteTag] 拖拽状态恢复: {ok}");
         }
@@ -114,4 +113,7 @@ public static class DropPatch
             Plugin.L.LogError($"[NoteTag] 恢复拖拽状态失败: {e.Message}");
         }
     }
+
+    private static readonly MethodInfo RestoreDragMethod =
+        typeof(BasicItemUI).GetMethod("RestoreDraggedItemToSource", InstFlags);
 }

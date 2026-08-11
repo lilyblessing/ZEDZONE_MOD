@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 
@@ -16,6 +17,13 @@ public class NoteTagUI : MonoBehaviour
 
     /// <summary>场景中的 NoteTagUI 实例（拖放交互通过静态入口打开输入框）。</summary>
     public static NoteTagUI Instance;
+
+    // P1-2: 反射缓存（一次性查找，避免每次消耗/刷新重复 GetMethod）
+    private static readonly MethodInfo RemoveItemMethod =
+        typeof(InventoryData).GetMethod("RemoveItem",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
+            null, new[] { typeof(ItemData), typeof(bool) }, null);
+    private static readonly Dictionary<Type, MethodInfo> PanelRefreshCache = new Dictionary<Type, MethodInfo>();
 
     private bool _windowOpen;
     private Rect _windowRect = new Rect(400f, 180f, 440f, 260f);
@@ -157,37 +165,34 @@ public class NoteTagUI : MonoBehaviour
 
             if (item.itemNumberFloat > 1f)
             {
-                // 数量 >1：减 1 并刷新数量显示
+                // 数量 >1：减 1 并刷新数量显示（FindSlotOf 已定位格子，直接刷新）
                 item.itemNumberFloat -= 1f;
-                RefreshSlot(item);
+                if (slotUI != null) { try { slotUI.RefreshItemNumber(); } catch { } }
             }
             else
             {
                 // 只剩 1 个：整体移除（数据 + UI 刷新）
                 // 拖放后 item.inventoryData 为 null（游戏拖拽期间清空归属）：
-                // 改为从 格子 → 所属面板 → 面板的 inventoryData 拿正确归属
-                var slotUI2 = FindSlotOf(item);
+                // 从 格子 → 所属面板 → 面板的 inventoryData 拿正确归属
                 object panelInv = null;
-                if (slotUI2 != null)
+                if (slotUI != null)
                 {
-                    var panel2 = Reflect.Get(slotUI2, "inventoryPanel");
+                    var panel2 = Reflect.Get(slotUI, "inventoryPanel");
                     if (panel2 != null) panelInv = Reflect.Get(panel2, "inventoryData");
                 }
                 var effectiveInv = panelInv ?? item.inventoryData ?? inv;
-                Plugin.L.LogInfo($"[NoteTag] 移除诊断: 面板inv={(panelInv != null ? "OK" : "NULL")} 当前inv={(item.inventoryData != null ? "OK" : "NULL")} 记录inv={(inv != null ? "OK" : "NULL")}");
 
                 bool removed = false;
-                if (effectiveInv != null)
+                if (effectiveInv != null && RemoveItemMethod != null)
                 {
-                    try { removed = (bool)effectiveInv.GetType().GetMethod("RemoveItem").Invoke(effectiveInv, new object[] { item, true }); }
+                    try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, true }); }
                     catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(true) 异常: {e.Message}"); }
                     if (!removed)
                     {
-                        try { removed = (bool)effectiveInv.GetType().GetMethod("RemoveItem").Invoke(effectiveInv, new object[] { item, false }); }
+                        try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, false }); }
                         catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(false) 异常: {e.Message}"); }
                     }
                 }
-                Plugin.L.LogInfo($"[NoteTag] 命名牌移除结果: removed={removed}");
 
                 // 无论移除结果，刷新所属面板清除残留图标
                 RefreshPanel(panel);
@@ -218,43 +223,29 @@ public class NoteTagUI : MonoBehaviour
         return null;
     }
 
-    /// <summary>刷新背包面板（反射调 Refresh）。</summary>
+    /// <summary>刷新背包面板（反射调 Refresh，按类型缓存 MethodInfo）。</summary>
     private static void RefreshPanel(object panel)
     {
         if (panel == null) return;
         try
         {
-            var m = panel.GetType().GetMethod("Refresh",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            m?.Invoke(panel, null);
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
-        }
-    }
-
-    /// <summary>遍历激活格子，刷新持有该 ItemData 的格子数量显示。</summary>
-    private static void RefreshSlot(ItemData item)
-    {
-        try
-        {
-            var list = BasicItemUI.ActiveObjects;
-            if (list == null) return;
-            for (int i = 0; i < list.Count; i++)
+            var t = panel.GetType();
+            if (PanelRefreshCache.TryGetValue(t, out var m) && m != null)
             {
-                var ui = list[i];
-                if (ui == null || ui.itemdata == null) continue;
-                if (ui.itemdata == item)
-                {
-                    try { ui.RefreshItemNumber(); } catch { }
-                    return;
-                }
+                m.Invoke(panel, null);
+                return;
+            }
+            var m2 = t.GetMethod("Refresh",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            if (m2 != null)
+            {
+                PanelRefreshCache[t] = m2;
+                m2.Invoke(panel, null);
             }
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] RefreshSlot 失败: {e.Message}");
+            Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
         }
     }
 
