@@ -59,6 +59,9 @@ public static class DropPatch
             try { targetName = target.GetItemName(); } catch { }
             Plugin.L.LogInfo($"[NoteTag] 命名牌拖放到物品上: {targetName}");
             NoteTagUI.OpenForItem(target, src);
+            // 拦截 DropOn 后必须恢复游戏拖拽状态：OnBeginDrag 把命名牌暂存进 itemdataTemp，
+            // 若不清空，关闭背包时游戏会清理"未放置的拖拽物品"→ 命名牌整组消失。
+            RestoreDrag(src);
             return false; // 拦截游戏默认放置/交换
         }
         catch (Exception e)
@@ -89,5 +92,26 @@ public static class DropPatch
             Plugin.L.LogError($"[NoteTag] 遍历 hovered 失败: {e}");
         }
         return null;
+    }
+
+    /// <summary>恢复游戏拖拽状态：调用 RestoreDraggedItemToSource 把 itemdataTemp 放回源格子。</summary>
+    private static void RestoreDrag(BasicItemUI src)
+    {
+        try
+        {
+            var m = typeof(BasicItemUI).GetMethod("RestoreDraggedItemToSource", InstFlags);
+            if (m == null)
+            {
+                Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 反射失败");
+                return;
+            }
+            bool ok = (bool)m.Invoke(src, null);
+            if (!ok) Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 返回 false");
+            Plugin.L.LogInfo($"[NoteTag] 拖拽状态恢复: {ok}");
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogError($"[NoteTag] 恢复拖拽状态失败: {e.Message}");
+        }
     }
 }

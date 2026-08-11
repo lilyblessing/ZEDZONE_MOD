@@ -92,6 +92,8 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 12. **mod 物品注册注入 `itemAttrDic`/`itemList`/`materialList`/`allRecipeList`** 用反射调用 `Add`/`ContainsKey`；贴图经 `ModSpriteRegistry.Register(id, "Main", sprite)`；`Texture2D.LoadImage(byte[])` + `Sprite.Create(tex, rect, pivot)`。
 13. **建筑容器（冰箱等）的库存存在 `TerrainObjectData.inventoryData/2/3`**，UI 打开面板读的是 **InventoryData 的尺寸**而不是建筑自身的 `inventorySize` getter——改容器容量要 patch `InventoryData.get_inventorySize`（非 virtual）或直接改 InventoryData 属性；旧存档容器读档后尺寸恢复原值，需轮询收集 + patch 双保险。
 14. **官方 mod.json 的 `repairData` 字段（已过时——2026-08 官方更新已支持）**：曾实测 `BaseModData` 及全部 8 个 ModData 子类无该字段，mod.json 写 `repairData` 被静默忽略、始终注入默认配方（56×1 工具），官方 `13_Authoring_Extras.md` 的 "set repairData by hand" 一度是错误/超前描述。**2026-08 游戏更新后 Mod Editor 已支持写入修复配方**，此问题已解决，当时的 BepInEx 运行时注入方案（tools/ModRepairInjector）已回撤。历史记录见本文件 git 历史，勿再使用该方案。
+15. **拦截游戏拖拽（DropOn）必须恢复拖拽状态，否则物品被游戏清理**：`BasicItemUI.OnBeginDrag` 会把物品暂存进 `itemdataTemp`（拖拽中）。若 Harmony Prefix 拦截 `DropOn`（return false 跳过放置）而不做处理，`itemdataTemp` 残留 → **关闭背包时游戏清理"未放置的拖拽物品"，整组物品消失**。修复：拦截后调用 `RestoreDraggedItemToSource()`（private，反射）恢复拖拽状态。⚠️ 该调用会**重建格子 UI**（`BasicItemUI` 引用 Pointer 归零 → `!= null` 判 false），后续操作不能用格子引用，要用 ItemData 引用。
+16. **拖放期间 `ItemData.inventoryData` 被游戏置 null（归属临时清空）**：`RestoreDraggedItemToSource` 只恢复格子显示、不恢复 inventoryData。此时 `InventoryData.RemoveItem(item, bool)` 因无 inventory 而失败。**正确归属获取**：`格子(BasicItemUI) → inventoryPanel → inventoryData`（物品在面板格子中显示，必然在其 inventory 内）。移除前先定位格子与面板（移除后 itemdata 被清空无法再定位）。
 
 ## 5. NoteTag 插件现状（v0.5.2 封版，可作新 mod 模板）
 

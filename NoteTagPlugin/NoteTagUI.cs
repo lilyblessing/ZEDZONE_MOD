@@ -21,7 +21,8 @@ public class NoteTagUI : MonoBehaviour
     private Rect _windowRect = new Rect(400f, 180f, 440f, 260f);
     private string _editText = "";
     private ItemData _targetItem;
-    private BasicItemUI _sourceUI; // 拖放来源（命名牌所在格子），快捷键流程为 null
+    private ItemData _sourceItem; // 拖放来源命名牌（ItemData 引用，比格子 BasicItemUI 稳定）
+    private object _sourceInv;   // 拖放前源物品所属 InventoryData（RestoreDrag 后可能丢失）
     private bool _resizing;
     private bool _dragging;
     private bool _selfChecked;
@@ -113,7 +114,8 @@ public class NoteTagUI : MonoBehaviour
             return;
         }
         _targetItem = target;
-        _sourceUI = sourceUI;
+        _sourceItem = sourceUI?.itemdata;   // 记录 ItemData 引用（格子 RestoreDrag 后可能重建失效）
+        _sourceInv = sourceUI?.itemdata?.inventoryData; // RestoreDrag 前物品还在背包，inventoryData 有效
         _editText = NoteTagStore.Get(_targetItem);
         _windowOpen = true;
         try { Input.imeCompositionMode = IMECompositionMode.On; } catch { }
@@ -128,74 +130,131 @@ public class NoteTagUI : MonoBehaviour
             NoteTagStore.Set(_targetItem, _editText);
             TooltipPatcher.InvalidateCache(); // 备注变更后使 tooltip 缓存失效
             Plugin.L.LogInfo($"[NoteTag] 已保存备注 ({_editText.Length} 字符): {GetItemName(_targetItem)}");
-            // 拖放流程：保存成功后消耗 1 个命名牌
-            if (_sourceUI != null)
-                ConsumeNameTag(_sourceUI);
+            // 拖放流程：保存成功后消耗 1 个命名牌（按 ItemData 引用，格子可能已重建）
+            if (_sourceItem != null)
+                ConsumeNameTag(_sourceItem, _sourceInv);
         }
         _windowOpen = false;
         _targetItem = null;
-        _sourceUI = null;
+        _sourceItem = null;
+        _sourceInv = null;
     }
 
     /// <summary>消耗 1 个命名牌；数量耗尽时用游戏原生移除逻辑清空格子。</summary>
-    private static void ConsumeNameTag(BasicItemUI source)
+    private static void ConsumeNameTag(ItemData item, object inv)
     {
         try
         {
-            if (source == null) return;
-            var item = source.itemdata;
             if (item == null)
             {
-                Plugin.L.LogWarning("[NoteTag] 消耗失败: 源格子物品为空");
+                Plugin.L.LogWarning("[NoteTag] 消耗失败: 源物品为空");
                 return;
             }
+
+            // 移除/刷新前先定位持有该物品的格子与所属面板（移除后 itemdata 被清空无法再定位）
+            var slotUI = FindSlotOf(item);
+            object panel = slotUI != null ? Reflect.Get(slotUI, "inventoryPanel") : null;
 
             if (item.itemNumberFloat > 1f)
             {
                 // 数量 >1：减 1 并刷新数量显示
                 item.itemNumberFloat -= 1f;
-                source.RefreshItemNumber();
+                RefreshSlot(item);
             }
             else
             {
                 // 只剩 1 个：整体移除（数据 + UI 刷新）
-                var inv = item.inventoryData;
-                bool removed = false;
-                if (inv != null)
+                // 拖放后 item.inventoryData 为 null（游戏拖拽期间清空归属）：
+                // 改为从 格子 → 所属面板 → 面板的 inventoryData 拿正确归属
+                var slotUI2 = FindSlotOf(item);
+                object panelInv = null;
+                if (slotUI2 != null)
                 {
-                    try { removed = inv.RemoveItem(item, true); } catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(true) 异常: {e.Message}"); }
+                    var panel2 = Reflect.Get(slotUI2, "inventoryPanel");
+                    if (panel2 != null) panelInv = Reflect.Get(panel2, "inventoryData");
+                }
+                var effectiveInv = panelInv ?? item.inventoryData ?? inv;
+                Plugin.L.LogInfo($"[NoteTag] 移除诊断: 面板inv={(panelInv != null ? "OK" : "NULL")} 当前inv={(item.inventoryData != null ? "OK" : "NULL")} 记录inv={(inv != null ? "OK" : "NULL")}");
+
+                bool removed = false;
+                if (effectiveInv != null)
+                {
+                    try { removed = (bool)effectiveInv.GetType().GetMethod("RemoveItem").Invoke(effectiveInv, new object[] { item, true }); }
+                    catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(true) 异常: {e.Message}"); }
                     if (!removed)
                     {
-                        try { removed = inv.RemoveItem(item, false); } catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(false) 异常: {e.Message}"); }
+                        try { removed = (bool)effectiveInv.GetType().GetMethod("RemoveItem").Invoke(effectiveInv, new object[] { item, false }); }
+                        catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(false) 异常: {e.Message}"); }
                     }
                 }
-                if (!removed)
-                {
-                    source.itemdata = null;
-                    source.itemdataTemp = null;
-                }
+                Plugin.L.LogInfo($"[NoteTag] 命名牌移除结果: removed={removed}");
 
-                // 主动刷新所属背包面板，清除可能的残留图标
-                try
-                {
-                    var panel = Reflect.Get(source, "inventoryPanel");
-                    if (panel != null)
-                    {
-                        var m = panel.GetType().GetMethod("Refresh",
-                            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-                        m?.Invoke(panel, null);
-                    }
-                }
-                catch (Exception e)
-                {
-                    Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
-                }
+                // 无论移除结果，刷新所属面板清除残留图标
+                RefreshPanel(panel);
             }
             Plugin.L.LogInfo("[NoteTag] 已消耗 1 个命名牌");
         }
         catch (Exception e)
         {
             Plugin.L.LogError($"[NoteTag] 消耗命名牌失败: {e}");
+        }
+    }
+
+    /// <summary>遍历激活格子，找到持有该 ItemData 的格子。</summary>
+    private static BasicItemUI FindSlotOf(ItemData item)
+    {
+        try
+        {
+            var list = BasicItemUI.ActiveObjects;
+            if (list == null) return null;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var ui = list[i];
+                if (ui == null || ui.itemdata == null) continue;
+                if (ui.itemdata == item) return ui;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    /// <summary>刷新背包面板（反射调 Refresh）。</summary>
+    private static void RefreshPanel(object panel)
+    {
+        if (panel == null) return;
+        try
+        {
+            var m = panel.GetType().GetMethod("Refresh",
+                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+            m?.Invoke(panel, null);
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
+        }
+    }
+
+    /// <summary>遍历激活格子，刷新持有该 ItemData 的格子数量显示。</summary>
+    private static void RefreshSlot(ItemData item)
+    {
+        try
+        {
+            var list = BasicItemUI.ActiveObjects;
+            if (list == null) return;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var ui = list[i];
+                if (ui == null || ui.itemdata == null) continue;
+                if (ui.itemdata == item)
+                {
+                    try { ui.RefreshItemNumber(); } catch { }
+                    return;
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogError($"[NoteTag] RefreshSlot 失败: {e.Message}");
         }
     }
 
