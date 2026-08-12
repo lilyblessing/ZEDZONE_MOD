@@ -9,7 +9,7 @@
 
 所有 MOD 都运行在 **BepInEx 6（IL2CPP x64）** 之上，首次使用需先安装：
 
-1. **下载 BepInEx 6**：前往 [BepInEx 官方构建站](https://builds.bepinex.dev/) → 项目 `BepInEx Bleeding Edge` → 下载
+1. **下载 BepInEx 6**：前往 [BepInEx GitHub发布](https://github.com/BepInEx/BepInEx/releases) → 找到 `BepInEx 6` → 下载
    `BepInEx-Unity.IL2CPP-win-x64-6.0.0-be.XXX.zip`（选最新的版本号）
 2. **解压到游戏根目录**：把压缩包内容解压到
    `D:\SteamLibrary\steamapps\common\ZED ZONE\`（与 `ZEDZONE.exe` 同级）
