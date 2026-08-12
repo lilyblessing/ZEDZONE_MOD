@@ -8,7 +8,7 @@
 #   .\tools\make-release.ps1 -Mod portablefridge  # 只打包 PortableFridge
 #   .\tools\make-release.ps1 -GameDir "X:\..."  # 指定游戏目录（编译依赖 interop）
 #
-# 产物：dist\<DllName>-<版本>.zip（dll + 资源 + README），版本自动从各 Plugin.cs 读取
+# 产物：dist\<DllName>-<版本>.zip（dll + 资源文件，不含 README），版本自动从各 Plugin.cs 读取
 
 param(
     [ValidateSet("notetag", "bigfridge", "portablefridge", "all")]
@@ -46,7 +46,6 @@ function Build-Mod {
     foreach ($r in $Resources) {
         Copy-Item (Join-Path $root "$ProjDir\$r") $stage -Force
     }
-    Copy-Item (Join-Path $root "README.md") $stage -Force
 
     $zip = Join-Path $distDir "$DllName-$ver.zip"
     Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zip -Force
