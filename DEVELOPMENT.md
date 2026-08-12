@@ -95,7 +95,7 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 15. **拦截游戏拖拽（DropOn）必须恢复拖拽状态，否则物品被游戏清理**：`BasicItemUI.OnBeginDrag` 会把物品暂存进 `itemdataTemp`（拖拽中）。若 Harmony Prefix 拦截 `DropOn`（return false 跳过放置）而不做处理，`itemdataTemp` 残留 → **关闭背包时游戏清理"未放置的拖拽物品"，整组物品消失**。修复：拦截后调用 `RestoreDraggedItemToSource()`（private，反射）恢复拖拽状态。⚠️ 该调用会**重建格子 UI**（`BasicItemUI` 引用 Pointer 归零 → `!= null` 判 false），后续操作不能用格子引用，要用 ItemData 引用。
 16. **拖放期间 `ItemData.inventoryData` 被游戏置 null（归属临时清空）**：`RestoreDraggedItemToSource` 只恢复格子显示、不恢复 inventoryData。此时 `InventoryData.RemoveItem(item, bool)` 因无 inventory 而失败。**正确归属获取**：`格子(BasicItemUI) → inventoryPanel → inventoryData`（物品在面板格子中显示，必然在其 inventory 内）。移除前先定位格子与面板（移除后 itemdata 被清空无法再定位）。
 
-## 5. NoteTag 插件现状（v0.5.3 封版，可作新 mod 模板）
+## 5. NoteTag 插件现状（v0.5.4 封版，可作新 mod 模板）
 
 ```
 Plugin.cs           BepInPlugin 入口：AddComponent<NoteTagUI> + Harmony patch
@@ -112,9 +112,9 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 ## 5.5 版本号策略
 
 所有 MOD 统一使用 **0.x**（早期阶段），不提前上 1.x。各 MOD 现状：
-- NoteTag v0.5.3（命名牌；v0.5.3 修复拖放后消失/单张不消耗 + P1 性能优化）
+- NoteTag v0.5.4（命名牌；v0.5.4 中英双语 + 语言状态缓存优化）
 - BigFridge v0.2.2（大容量冰箱；曾用 1.2.2，2026-08 统一回退为 0.2.2，**仅版本号，代码不变**）
-- PortableFridge v0.3.1（便携小冰箱）
+- PortableFridge v0.3.2（便携小冰箱；v0.3.2 中英双语 + 贴图改名 + 语言状态缓存优化）
 
 **英文适配**（2026-08，进行中）：游戏本地化机制见第 9 节；NoteTag/PortableFridge 已加 `Locale` 类（`LanguageRegistry.IsCurrentChinese()` 检测，实时不缓存），物品名/描述按语言填 `itemName_Runtime`/`itemDescription_WithLanguage`，UI/tooltip 文本经 `Locale.T(zh,en)` 取；语言切换由 MonoBehaviour 轮询（2s）检测后调 `ReapplyLanguage()` 重设物品文本（游戏不覆盖 mod 物品，须自管）。BigFridge 无展示文本，仅日志。PortableFridge 贴图已改名 `Portable_Fridge.png`。
 
@@ -127,7 +127,7 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 
 关键机制：**游戏读档会重置容器尺寸**（存档不持久化），故每次启动需重新收集；尺寸随存档保存一次后永久生效（保存后重载立即 22x34，已实测）。
 
-## 5.7 便携小冰箱 PortableFridge（v0.3.1）
+## 5.7 便携小冰箱 PortableFridge（v0.3.2）
 
 内置容器（Backpack 10×8，同弹药箱）+ 电瓶供电 + 保鲜。完整机制：
 

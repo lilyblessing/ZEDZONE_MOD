@@ -20,8 +20,7 @@ public static class PortableFridgeItem
     public const string ItemDescription = "便携式保鲜冰箱。放入电瓶(1200WH)供电后，" +
                                            "可让箱内食物保持新鲜，满电可运转 5 天。";
     public const string ItemName_EN = "Portable Mini Fridge";
-    public const string ItemDescription_EN = "A portable refrigeration box. Powered by a vehicle battery " +
-                                             "(1200WH), it keeps food inside fresh for up to 5 days on a full charge.";
+    public const string ItemDescription_EN = "Portable fridge. Keeps food fresh up to 5 days. Uses a vehicle battery (1200WH).";
 
     // 配方材料
     public const int MatIronBlock = 8;      // 铁块
