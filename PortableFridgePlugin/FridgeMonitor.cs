@@ -35,8 +35,25 @@ public class FridgeMonitor : MonoBehaviour
     // isFood 判定缓存（物品类型定义加载后不变，按 itemId 缓存）
     private static readonly Dictionary<int, bool> IsFoodCache = new Dictionary<int, bool>();
 
+    // 语言切换轮询（游戏切语言后 mod 物品名/描述需重设）
+    private float _langCheckTimer = 2f;
+    private bool _lastLangEnglish = Locale.IsEnglish();
+
     private void Update()
     {
+        // 语言切换检测：游戏内切语言后重设小冰箱物品文本
+        _langCheckTimer -= Time.deltaTime;
+        if (_langCheckTimer <= 0f)
+        {
+            _langCheckTimer = 2f;
+            bool nowEnglish = Locale.IsEnglish();
+            if (nowEnglish != _lastLangEnglish)
+            {
+                _lastLangEnglish = nowEnglish;
+                PortableFridgeItem.ReapplyLanguage();
+            }
+        }
+
         if (_registered) return;
         _registerTimer -= Time.deltaTime;
         if (_registerTimer > 0f) return;

@@ -19,10 +19,15 @@ public static class NameTagItem
     public const string MainSlot = "Main";
     public const string ItemName = "命名牌";
     public const string ItemDescription = "为任意物品添加备注";
+    public const string ItemName_EN = "Name Tag";
+    public const string ItemDescription_EN = "Attach a note to any item";
 
     /// <summary>实际注册到的物品 ID。</summary>
     public static int ItemId = -1;
     public static bool Registered;
+
+    /// <summary>已注册的物品定义（语言切换时重设文本用）。</summary>
+    private static ItemAttr _attr;
 
     private static string _pluginDir;
 
@@ -86,11 +91,12 @@ public static class NameTagItem
     private static ItemAttr CreateItemAttr(int id)
     {
         var attr = new ItemAttr();
+        _attr = attr;
         Reflect.Set(attr, "itemId", id);
         Reflect.Set(attr, "itemName", ItemName);
-        Reflect.Set(attr, "itemName_Runtime", ItemName);
+        Reflect.Set(attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
         Reflect.Set(attr, "itemDescription", ItemDescription);
-        Reflect.Set(attr, "itemDescription_WithLanguage", ItemDescription);
+        Reflect.Set(attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemSize", new Vector2Int(1, 1));
         Reflect.Set(attr, "stackNumber", 32);
         Reflect.Set(attr, "weight", 0.01f);
@@ -100,6 +106,19 @@ public static class NameTagItem
         Reflect.Set(attr, "unlockByDefault", true);
         Reflect.Set(attr, "hiddenItem", false);
         return attr;
+    }
+
+    /// <summary>游戏语言切换后重设命名牌物品名/描述（游戏不覆盖 mod 物品，须自管）。</summary>
+    public static void ReapplyLanguage()
+    {
+        if (!Registered || _attr == null) return;
+        try
+        {
+            Reflect.Set(_attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
+            Plugin.L.LogInfo($"[NoteTag] 语言切换重设物品文本: {Locale.T(ItemName, ItemName_EN)}");
+        }
+        catch (Exception e) { Plugin.L.LogError($"[NoteTag] 重设语言文本失败: {e.Message}"); }
     }
 
     // ---------- 配方 ----------

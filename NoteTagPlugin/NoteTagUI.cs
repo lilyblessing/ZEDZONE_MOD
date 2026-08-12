@@ -38,6 +38,10 @@ public class NoteTagUI : MonoBehaviour
     private bool _probeDone;
     private int _registerTries;
 
+    // 语言切换轮询（游戏切语言后 mod 物品名/描述需重设）
+    private float _langCheckTimer = 2f;
+    private bool _lastLangEnglish = Locale.IsEnglish();
+
     private void Awake()
     {
         Instance = this;
@@ -68,6 +72,19 @@ public class NoteTagUI : MonoBehaviour
         {
             _selfChecked = true;
             SelfCheck();
+        }
+
+        // 语言切换检测：游戏内切语言后重设命名牌物品文本
+        _langCheckTimer -= Time.deltaTime;
+        if (_langCheckTimer <= 0f)
+        {
+            _langCheckTimer = 2f;
+            bool nowEnglish = Locale.IsEnglish();
+            if (nowEnglish != _lastLangEnglish)
+            {
+                _lastLangEnglish = nowEnglish;
+                NameTagItem.ReapplyLanguage();
+            }
         }
 
         // 延迟注册命名牌（等 ItemManager 初始化，最多重试 6 次）
@@ -368,19 +385,19 @@ public class NoteTagUI : MonoBehaviour
         // ---- 窗口内容（组内局部坐标） ----
         GUI.BeginGroup(_windowRect);
         GUI.Box(new Rect(0f, 0f, _windowRect.width, _windowRect.height), GUIContent.none, _windowStyle);
-        GUI.Label(new Rect(8f, 4f, _windowRect.width - 16f, 20f), "为物品添加备注", _labelStyle);
-        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), "物品：" + GetItemName(_targetItem), _labelStyle);
+        GUI.Label(new Rect(8f, 4f, _windowRect.width - 16f, 20f), Locale.T("为物品添加备注", "Add Note to Item"), _labelStyle);
+        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), Locale.T("物品：", "Item: ") + GetItemName(_targetItem), _labelStyle);
 
         float areaHeight = Mathf.Max(40f, _windowRect.height - 122f);
         _editText = GUI.TextArea(new Rect(8f, 50f, _windowRect.width - 16f, areaHeight), _editText, _textAreaStyle);
 
-        if (GUI.Button(new Rect(_windowRect.width - 108f, _windowRect.height - 34f, 48f, 26f), "取消", _buttonStyle))
+        if (GUI.Button(new Rect(_windowRect.width - 108f, _windowRect.height - 34f, 48f, 26f), Locale.T("取消", "Cancel"), _buttonStyle))
         {
             CloseEditor(false);
             GUI.EndGroup();
             return;
         }
-        if (GUI.Button(new Rect(_windowRect.width - 54f, _windowRect.height - 34f, 46f, 26f), "确定", _buttonStyle))
+        if (GUI.Button(new Rect(_windowRect.width - 54f, _windowRect.height - 34f, 46f, 26f), Locale.T("确定", "OK"), _buttonStyle))
         {
             CloseEditor(true);
             GUI.EndGroup();

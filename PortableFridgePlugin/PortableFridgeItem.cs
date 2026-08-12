@@ -10,7 +10,7 @@ namespace PortableFridgePlugin;
 /// - 物品：ItemType.Backpack（内置容器），占用 (5,4)，堆叠 1，重量 2.8
 /// - 制作配方：工作台(workbench=2)：铁块(8)×6 + 铁管(10)×4 + 铜丝(13)×4 → 1
 /// - 修复配方：物品维修工具包(56)×1
-/// - 贴图：new_随身小冰箱.png（插件目录）
+/// - 贴图：Portable_Fridge.png（插件目录）
 /// </summary>
 public static class PortableFridgeItem
 {
@@ -19,6 +19,9 @@ public static class PortableFridgeItem
     public const string ItemName = "便携小冰箱";
     public const string ItemDescription = "便携式保鲜冰箱。放入电瓶(1200WH)供电后，" +
                                            "可让箱内食物保持新鲜，满电可运转 5 天。";
+    public const string ItemName_EN = "Portable Mini Fridge";
+    public const string ItemDescription_EN = "A portable refrigeration box. Powered by a vehicle battery " +
+                                             "(1200WH), it keeps food inside fresh for up to 5 days on a full charge.";
 
     // 配方材料
     public const int MatIronBlock = 8;      // 铁块
@@ -42,6 +45,9 @@ public static class PortableFridgeItem
     /// <summary>实际注册到的物品 ID。</summary>
     public static int ItemId = -1;
     public static bool Registered;
+
+    /// <summary>已注册的物品定义（语言切换时重设文本用）。</summary>
+    private static ItemAttr _attr;
 
     private static string _pluginDir;
 
@@ -107,11 +113,12 @@ public static class PortableFridgeItem
         // Backpack 类型必须用 ItemAttr_Backpack 实例（游戏生成时会强转，
         // 用 ItemAttr 基类会 InvalidCastException 导致物品无法生成）
         var attr = new ItemAttr_Backpack();
+        _attr = attr;
         Reflect.Set(attr, "itemId", id);
         Reflect.Set(attr, "itemName", ItemName);
-        Reflect.Set(attr, "itemName_Runtime", ItemName);
+        Reflect.Set(attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
         Reflect.Set(attr, "itemDescription", ItemDescription);
-        Reflect.Set(attr, "itemDescription_WithLanguage", ItemDescription);
+        Reflect.Set(attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemSize", new Vector2Int(5, 4));
         Reflect.Set(attr, "stackNumber", 1);
         Reflect.Set(attr, "weight", 2.8f);
@@ -127,6 +134,19 @@ public static class PortableFridgeItem
         RegisterBatteryFeatures(attr);
 
         return attr;
+    }
+
+    /// <summary>游戏语言切换后重设小冰箱物品名/描述（游戏不覆盖 mod 物品，须自管）。</summary>
+    public static void ReapplyLanguage()
+    {
+        if (!Registered || _attr == null) return;
+        try
+        {
+            Reflect.Set(_attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
+            Plugin.L.LogInfo($"[PFridge] 语言切换重设物品文本: {Locale.T(ItemName, ItemName_EN)}");
+        }
+        catch (Exception e) { Plugin.L.LogError($"[PFridge] 重设语言文本失败: {e.Message}"); }
     }
 
     // ---------- 电池槽特性注册（参照手电筒91：BatteryBox + BatteryConsuming）----------
@@ -244,7 +264,7 @@ public static class PortableFridgeItem
 
     private static void RegisterSprite(int id)
     {
-        string path = Path.Combine(_pluginDir, "new_随身小冰箱.png");
+        string path = Path.Combine(_pluginDir, "Portable_Fridge.png");
         if (!File.Exists(path))
         {
             Plugin.L.LogWarning($"[PFridge] 贴图不存在: {path}");

@@ -13,8 +13,8 @@ namespace NoteTagPlugin;
 /// </summary>
 public static class TooltipPatcher
 {
-    /// <summary>插入备注行的标记前缀，用于幂等判断（避免重复插入）。</summary>
-    private const string NoteMarker = "<color=#FFFF00>备注：";
+    /// <summary>备注行标记前缀（按当前语言），用于幂等判断（避免重复插入）。</summary>
+    private static string Marker() => "<color=#FFFF00>" + Locale.T("备注：", "Note: ");
 
     private static bool _explored;
 
@@ -106,7 +106,7 @@ public static class TooltipPatcher
                 return;
 
             var text = __instance.informationText.text;
-            if (string.IsNullOrEmpty(text) || text.Contains(NoteMarker))
+            if (string.IsNullOrEmpty(text) || text.Contains(Marker()))
                 return; // 无内容或已插入
 
             var target = __instance.targetRect;
@@ -124,7 +124,7 @@ public static class TooltipPatcher
     private static void TryInsertNote(DescriptionTipPanel panel, RectTransform target, string information)
     {
         // 已插入则提前返回（省去目标查找与备注查询）
-        if (information.Contains(NoteMarker))
+        if (information.Contains(Marker()))
             return;
 
         var item = GetCachedItem(target);
@@ -213,7 +213,7 @@ public static class TooltipPatcher
         if (insertAt < 0)
             insertAt = Math.Min(2, lines.Count);
 
-        lines.Insert(insertAt + 1, $"{NoteMarker}{note}</color>");
+        lines.Insert(insertAt + 1, $"{Marker()}{note}</color>");
         return string.Join("\n", lines);
     }
 }

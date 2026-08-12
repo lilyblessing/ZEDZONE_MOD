@@ -116,6 +116,8 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 - BigFridge v0.2.2（大容量冰箱；曾用 1.2.2，2026-08 统一回退为 0.2.2，**仅版本号，代码不变**）
 - PortableFridge v0.3.1（便携小冰箱）
 
+**英文适配**（2026-08，进行中）：游戏本地化机制见第 9 节；NoteTag/PortableFridge 已加 `Locale` 类（`LanguageRegistry.IsCurrentChinese()` 检测，实时不缓存），物品名/描述按语言填 `itemName_Runtime`/`itemDescription_WithLanguage`，UI/tooltip 文本经 `Locale.T(zh,en)` 取；语言切换由 MonoBehaviour 轮询（2s）检测后调 `ReapplyLanguage()` 重设物品文本（游戏不覆盖 mod 物品，须自管）。BigFridge 无展示文本，仅日志。PortableFridge 贴图已改名 `Portable_Fridge.png`。
+
 ## 5.6 大容量冰箱 BigFridge（v0.2.2）
 
 将冰箱（`TerrainObject_Production_Fridge`）内部存储从 (8x16) 扩为 **(22x34)**。三层方案：
@@ -178,3 +180,26 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 
 - 其他 MOD 归入本仓库：每个 mod 一个子目录（如 `NoteTagPlugin\` 同级），独立 csproj + 独立 BepInEx plugins 目录
 - 参考本手册第 3 节逆向知识与第 4 节踩坑记录，可大幅缩短开发周期
+
+## 9. 游戏多语言机制（2026-08 逆向，英文适配依据）
+
+游戏自带完整本地化系统（源语言英文，中文内置编译；`ZEDZONE_Data\StreamingAssets\Localization\Localization_en_to_XX.csv` 提供 de/es/fr/ja/ko/pl/pt/ru 翻译）。关键 API（interop 已验证）：
+
+| 用途 | API |
+|---|---|
+| 语言枚举 | `GameLanguage`：仅 `SimplifiedChinese` / `English` 两个值 |
+| 检测当前语言 | `LanguageRegistry.IsCurrentChinese()`（静态 bool）；`GameSettingsDataManager.instance.LoadGameSettingsData().gameLanguage`（枚举）/ `.languageCode`（字符串，中文下空、英文下 "en"） |
+| 语言代码 | `LanguageRegistry.CnCode = "zh-CN"` / `EnCode = "en"`；`ModLocaleManager.ResolveCurrentLangCode(settings)` → "zh_CN"/"en_US" |
+| 按语言取文本 | `TextManager.GetText(key, index, GameLanguage)` |
+| 官方 mod 多语言 | `ModLocaleManager`：`ApplyLocaleToAttr(modGuid,itemId)` / `ReapplyAllLocales()` / `GameLanguageToLangCode()`；mod 包 `locale/<code>.json` + `mod.json` 的 `primaryLangCode` 兜底 |
+
+**物品名字段语义**（运行时探查实测）：
+- `itemName`（基础字段）**恒定中文**（原版物品在英文模式下仍是中文）；`itemName_Runtime`（运行时名）随语言变（中文"木材" / 英文 "wood"）
+- `itemDescription`（基础）恒定中文；`itemDescription_WithLanguage` 随语言变（"小块木材" / "small piece of wood"）
+- `ItemName`/`ItemDescription` getter 返回当前语言文本；`ItemName_EN`/`ItemDescription_EN` getter 对原版返回英文，**对 mod 物品只 fallback 到 itemName_Runtime**（mod 物品不在本地化表，查不到）
+
+**关键结论（mod 英文适配必须知道）**：
+1. 游戏语言切换会重新填充**原版物品**的 `itemName_Runtime`/`itemDescription_WithLanguage`，但**不覆盖 mod 注入物品**（不在官方 mod 系统的 locale 缓存内）——mod 物品文本必须自管
+2. 修改 `GameSettingsData.gameLanguage` 对象**不改变**运行时语言（`IsCurrentChinese()` 不变），语言状态由 `LanguageRegistry` 内部管理
+3. mod 适配做法：注册时按 `IsCurrentChinese()` 填 `itemName_Runtime`/`itemDescription_WithLanguage`；语言切换由 MonoBehaviour 轮询（2s）检测变化后调 `ReapplyLanguage()` 重设。UI/tooltip 文本用 `Locale.T(zh, en)` 实时取（天然支持切换）
+4. `ItemAttr` 所有语言相关字段均为可写属性（interop 里字段=属性，`Reflect.Set` 三级反射可写）

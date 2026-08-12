@@ -63,7 +63,7 @@ if ($Mod -in @("bigfridge", "all")) {
     Build-Mod -ProjDir "FridgeModPlugin" -DllName "FridgeModPlugin" -Resources @()
 }
 if ($Mod -in @("portablefridge", "all")) {
-    Build-Mod -ProjDir "PortableFridgePlugin" -DllName "PortableFridgePlugin" -Resources @("new_随身小冰箱.png")
+    Build-Mod -ProjDir "PortableFridgePlugin" -DllName "PortableFridgePlugin" -Resources @("Portable_Fridge.png")
 }
 Write-Host ""
 Write-Host "=== 全部完成 ==="

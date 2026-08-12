@@ -25,7 +25,7 @@
 |---|---|
 | NoteTag（命名牌） | `BepInEx\plugins\NoteTagPlugin\`（含 `Name_Tag.png`） |
 | BigFridge（大容量冰箱） | `BepInEx\plugins\BigFridge\` |
-| PortableFridge（便携小冰箱） | `BepInEx\plugins\PortableFridgePlugin\`（含 `new_随身小冰箱.png`） |
+| PortableFridge（便携小冰箱） | `BepInEx\plugins\PortableFridgePlugin\`（含 `Portable_Fridge.png`） |
 
 ---
 
@@ -43,6 +43,7 @@
 - **备注持久化**：写入 `ItemData` 属性表，随游戏存档自动保存/恢复，按物品实例独立绑定
 - **tooltip 展示**：备注以亮黄色插在物品名/描述之后、其他物品信息之前
 - **自定义贴图**：经 `ModSpriteRegistry` 注册
+- **中英双语**：物品名/描述/tooltip/输入框 UI 跟随游戏语言（简体中文/English）自动切换
 
 ### 安装（用户侧）
 
@@ -86,17 +87,18 @@
 - **食物保鲜**：有电时自动暂停容器内食物的腐烂计时（无电时正常腐烂）
 - **制造配方**：工作台制造——铁块×6 + 铁管×4 + 铜丝×4
 - **修复配方**：维修包×1
+- **中英双语**：物品名/描述跟随游戏语言（简体中文/English）自动切换
 
 ### 安装（用户侧）
 
 1. 安装 BepInEx 6（IL2CPP x64）到游戏根目录 `D:\SteamLibrary\steamapps\common\ZED ZONE`
 2. 将 `PortableFridgePlugin.dll` 放入 `BepInEx\plugins\PortableFridgePlugin\`
-3. 将 `new_随身小冰箱.png` 放在同目录（贴图资源）
+3. 将 `Portable_Fridge.png` 放在同目录（贴图资源）
 4. 启动游戏，工作台制造便携小冰箱即可使用
 
 ### 卸载
 
-删除 `PortableFridgePlugin.dll` 与 `new_随身小冰箱.png` 即可（已放入容器中的物品会保留在存档里）。
+删除 `PortableFridgePlugin.dll` 与 `Portable_Fridge.png` 即可（已放入容器中的物品会保留在存档里）。
 
 ---
 
