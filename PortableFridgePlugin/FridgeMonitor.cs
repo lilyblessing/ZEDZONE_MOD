@@ -37,7 +37,6 @@ public class FridgeMonitor : MonoBehaviour
 
     // 语言切换轮询（游戏切语言后 mod 物品名/描述需重设）
     private float _langCheckTimer = 2f;
-    private bool _lastLangEnglish = Locale.IsEnglish();
 
     private void Update()
     {
@@ -46,10 +45,8 @@ public class FridgeMonitor : MonoBehaviour
         if (_langCheckTimer <= 0f)
         {
             _langCheckTimer = 2f;
-            bool nowEnglish = Locale.IsEnglish();
-            if (nowEnglish != _lastLangEnglish)
+            if (Locale.Refresh())
             {
-                _lastLangEnglish = nowEnglish;
                 PortableFridgeItem.ReapplyLanguage();
             }
         }

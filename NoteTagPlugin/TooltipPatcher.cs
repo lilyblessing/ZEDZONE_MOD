@@ -13,8 +13,27 @@ namespace NoteTagPlugin;
 /// </summary>
 public static class TooltipPatcher
 {
-    /// <summary>备注行标记前缀（按当前语言），用于幂等判断（避免重复插入）。</summary>
-    private static string Marker() => "<color=#FFFF00>" + Locale.T("备注：", "Note: ");
+    /// <summary>备注行标记前缀（按语言缓存，避免每帧字符串拼接），用于幂等判断。</summary>
+    private static string _markerCache;
+    private static bool _markerEnglish;
+
+    private static string Marker()
+    {
+        bool en = Locale.IsEnglish();
+        if (_markerCache == null || en != _markerEnglish)
+        {
+            _markerEnglish = en;
+            _markerCache = "<color=#FFFF00>" + (en ? "Note: " : "备注：");
+        }
+        return _markerCache;
+    }
+
+    /// <summary>语言切换后调用：清 marker 缓存与 tooltip 目标缓存（下次访问重建）。</summary>
+    public static void InvalidateLanguage()
+    {
+        _markerCache = null;
+        InvalidateCache();
+    }
 
     private static bool _explored;
 

@@ -38,9 +38,8 @@ public class NoteTagUI : MonoBehaviour
     private bool _probeDone;
     private int _registerTries;
 
-    // 语言切换轮询（游戏切语言后 mod 物品名/描述需重设）
+    // 语言切换轮询（游戏切语言后 mod 物品名/描述与 tooltip marker 需重设）
     private float _langCheckTimer = 2f;
-    private bool _lastLangEnglish = Locale.IsEnglish();
 
     private void Awake()
     {
@@ -74,16 +73,15 @@ public class NoteTagUI : MonoBehaviour
             SelfCheck();
         }
 
-        // 语言切换检测：游戏内切语言后重设命名牌物品文本
+        // 语言切换检测：游戏内切语言后重设命名牌物品文本 + 重建 tooltip marker
         _langCheckTimer -= Time.deltaTime;
         if (_langCheckTimer <= 0f)
         {
             _langCheckTimer = 2f;
-            bool nowEnglish = Locale.IsEnglish();
-            if (nowEnglish != _lastLangEnglish)
+            if (Locale.Refresh())
             {
-                _lastLangEnglish = nowEnglish;
                 NameTagItem.ReapplyLanguage();
+                TooltipPatcher.InvalidateLanguage();
             }
         }
 
