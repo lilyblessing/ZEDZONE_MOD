@@ -93,9 +93,11 @@ public static class NameTagItem
         var attr = new ItemAttr();
         _attr = attr;
         Reflect.Set(attr, "itemId", id);
-        Reflect.Set(attr, "itemName", ItemName);
+        // 四个语言字段都按当前语言填：英文模式下游戏物品名走「英文本地化表查不到 → 回退 itemName」路径，
+        // 若 itemName 恒为中文则英文名不生效；itemName_Runtime/itemDescription_WithLanguage 是游戏直接读取的运行时文本。
+        Reflect.Set(attr, "itemName", Locale.T(ItemName, ItemName_EN));
         Reflect.Set(attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
-        Reflect.Set(attr, "itemDescription", ItemDescription);
+        Reflect.Set(attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemSize", new Vector2Int(1, 1));
         Reflect.Set(attr, "stackNumber", 32);
@@ -114,7 +116,9 @@ public static class NameTagItem
         if (!Registered || _attr == null) return;
         try
         {
+            Reflect.Set(_attr, "itemName", Locale.T(ItemName, ItemName_EN));
             Reflect.Set(_attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
             Reflect.Set(_attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
             Plugin.L.LogInfo($"[NoteTag] 语言切换重设物品文本: {Locale.T(ItemName, ItemName_EN)}");
         }
