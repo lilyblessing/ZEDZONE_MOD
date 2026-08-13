@@ -145,6 +145,12 @@ Reflect.cs          字段→属性→set_ 三级反射读写
 - 食物过期判定：`当前游戏时间 − ItemData.properties[0] ≥ ItemAttr_Food.perishTime`；`properties[0]` 是**采集时间戳**（游戏天单位，静态不随腐烂变化）
 - 保鲜 = 有电时把容器内食物 `properties[0]` 前移（等效暂停腐烂）
 
+**原版冰箱对照**（2026-08 探查确认，机制相同）：
+- 原版冰箱（`TerrainObject_Production_Fridge`）保鲜由 `OnTimeUpdate` → `UpdateRefrigeration` → `ApplyColdCredit` 驱动，**通电时同样把容器内食物 `properties[0]` 前移**（实测 `foodAgingRateWhenPowered = 0` = 完全保鲜；断电即停止前移，食物照常腐烂判定）
+- 与本 mod 的 `AdvanceFreshness`（`props[0] += days`）**实现等价**，驱动同一时间源（`TimeController.AddTime`），故小冰箱保鲜无需改动
+- 原版额外的增量跟踪持久化键（`PROP_LAST_REFRIGERATION_TIME`/`PROP_POWERED_AT_LAST_TICK`）由本 mod 的 `_lastKnownTime` 静态跟踪等价覆盖
+- 探查工具：`tools/FridgePreservationProbe`（F9 冰箱快照 / F7=0.1天 / F8=1天 推进时间）
+
 **扣电速率标定**（手电筒对照法，已实测）：
 - 装备手电筒（wattage=0.75, IsSwitchOn=true）开 0.5 游戏天 → 9V 电池耗 8.99 WH → **1 wattage = 23.97 WH/游戏天**
 - 目标 1200WH 电瓶用 5 天 = 240 WH/天 → wattage = 10（插件手动扣 `239.7 WH/天`）
