@@ -20,7 +20,7 @@ namespace FridgeModPlugin;
 /// 3. 字段兜底：集合内 InventoryData.inventorySize 直接写入 22x34
 /// 另保留 patch `TerrainObject_Production_Fridge.get_inventorySize`（新冰箱源头）。
 /// </summary>
-[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "0.2.2")]
+[BepInPlugin("com.zedzone.bigfridge", "BigFridge", "0.2.3")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -64,7 +64,7 @@ public class Plugin : BasePlugin
         // 3) 轮询收集冰箱库存 + 字段兜底
         AddComponent<FieldFixer>();
 
-        Log.LogInfo("大容量冰箱插件已加载 (v0.2.2)");
+        Log.LogInfo("大容量冰箱插件已加载 (v0.2.3)");
     }
 
     /// <summary>Fridge.get_inventorySize 前缀：新尺寸。</summary>

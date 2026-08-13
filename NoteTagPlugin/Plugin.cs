@@ -6,7 +6,7 @@ using HarmonyLib;
 
 namespace NoteTagPlugin;
 
-[BepInPlugin("com.zedzone.notetag", "NoteTag", "0.5.4")]
+[BepInPlugin("com.zedzone.notetag", "NoteTag", "0.5.5")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -43,6 +43,6 @@ public class Plugin : BasePlugin
             Log.LogError($"Harmony 初始化失败: {e}");
         }
 
-        Log.LogInfo("命名牌插件已加载 (v0.5.4)");
+        Log.LogInfo("命名牌插件已加载 (v0.5.5)");
     }
 }
