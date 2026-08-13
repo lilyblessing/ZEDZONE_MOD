@@ -24,7 +24,7 @@ public class Plugin : BasePlugin
         Instance = this;
         L = Log;
 
-        AddComponent<FridgeMonitor>();
+        AddComponent<FridgeRegistrar>();
 
         try
         {

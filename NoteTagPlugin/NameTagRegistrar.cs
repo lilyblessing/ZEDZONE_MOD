@@ -14,6 +14,7 @@ public class NameTagRegistrar : MonoBehaviour
     private const float RegisterDelay = 10f;
     private const float RetryInterval = 5f;
     private const int MaxRegisterTries = 6;
+    private const float GiveUpInterval = 60f; // 超过重试上限后的降频间隔（直到成功）
     private const float LangCheckInterval = 2f;
 
     private float _registerTimer = RegisterDelay;
@@ -51,7 +52,8 @@ public class NameTagRegistrar : MonoBehaviour
         }
         else if (++_registerTries >= MaxRegisterTries)
         {
-            Plugin.L.LogError("[NoteTag] 命名牌注册多次尝试仍失败");
+            // 超过重试上限：降频 60s 持续重试（覆盖游戏加载极慢/延迟注册场景）
+            _registerTimer = GiveUpInterval;
         }
         else
         {

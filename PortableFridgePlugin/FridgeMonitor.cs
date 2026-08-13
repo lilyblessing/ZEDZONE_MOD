@@ -1,33 +1,24 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace PortableFridgePlugin;
 
 /// <summary>
-/// 供电 + 保鲜核心（v0.3.0 性能优化版）：
-/// - 延迟注册物品（等 ItemManager 就绪，带重试）
+/// 供电 + 保鲜核心：
 /// - Harmony Postfix 挂 TimeController.AddTime / ChangeTimeTo：游戏时间推进 → 只累计
-/// - 累计达阈值（0.1 游戏天 ≈ 2.4 游戏小时）才批量处理一次小冰箱：
+/// - 累计达阈值（ProcessThreshold）才批量处理一次小冰箱：
 ///   读电池槽电量 → 有电则容器内食物 properties[0] 前移（暂停腐烂）+ 扣电
 /// 优化：时间推进合并（睡眠时每秒数十次调用 → 每 0.1 天处理一次），native 交互降 2-3 个数量级。
+/// 注册调度与语言轮询见 FridgeRegistrar。
 /// </summary>
-public class FridgeMonitor : MonoBehaviour
+public static class FridgeMonitor
 {
-    private float _registerTimer = 8f;
-    private bool _registered;
-    private int _registerTries;
-
-    // 时间推进累计（游戏天）；ChangeTimeTo 差值计算
-    private static float _pendingTime;
-    private static float _lastKnownTime = float.NaN;
-
     // 处理阈值：0.1 游戏天（约 2.4 游戏小时）批量处理一次
     private const float ProcessThreshold = 0.1f;
 
-    // 日志节流累计
-    private static float _accDays;
-    private static float _noPowerAcc;
+    // 日志节流阈值（游戏天）
+    private const float NoPowerLogThreshold = 0.5f;
+    private const float RunLogThreshold = 0.25f;
 
     // 保鲜写入开关
     private const bool ApplyPreservation = true;
@@ -35,38 +26,13 @@ public class FridgeMonitor : MonoBehaviour
     // isFood 判定缓存（物品类型定义加载后不变，按 itemId 缓存）
     private static readonly Dictionary<int, bool> IsFoodCache = new Dictionary<int, bool>();
 
-    // 语言切换轮询（游戏切语言后 mod 物品名/描述需重设）
-    private float _langCheckTimer = 2f;
+    // 时间推进累计（游戏天）；ChangeTimeTo 差值计算
+    private static float _pendingTime;
+    private static float _lastKnownTime = float.NaN;
 
-    private void Update()
-    {
-        // 语言切换检测：游戏内切语言后重设小冰箱物品文本
-        _langCheckTimer -= Time.deltaTime;
-        if (_langCheckTimer <= 0f)
-        {
-            _langCheckTimer = 2f;
-            if (Locale.Refresh())
-            {
-                PortableFridgeItem.ReapplyLanguage();
-            }
-        }
-
-        if (_registered) return;
-        _registerTimer -= Time.deltaTime;
-        if (_registerTimer > 0f) return;
-        if (PortableFridgeItem.Register())
-        {
-            _registered = true;
-        }
-        else if (++_registerTries >= 10)
-        {
-            _registered = true; // 放弃重试，避免每帧日志
-        }
-        else
-        {
-            _registerTimer = 5f;
-        }
-    }
+    // 日志节流累计
+    private static float _accDays;
+    private static float _noPowerAcc;
 
     // ---------- Harmony Postfix：游戏时间推进（只累计，不处理）----------
 
@@ -122,29 +88,12 @@ public class FridgeMonitor : MonoBehaviour
         var container = fridgeItem.inventoryData;   // 小冰箱的内部库存
         if (container == null) return;
 
-        // 电池槽 BatterySlot0 格式："电池itemId|电量WH"
-        float remaining = 0f;
-        int batteryId = 0;
-        try
-        {
-            string slot = fridgeItem.GetProperty("BatterySlot0");
-            if (!string.IsNullOrEmpty(slot) && slot.Contains("|"))
-            {
-                var parts = slot.Split('|');
-                if (parts.Length >= 2)
-                {
-                    batteryId = int.Parse(parts[0]);
-                    remaining = float.Parse(parts[1]);
-                }
-            }
-        }
-        catch (Exception e) { Plugin.L.LogWarning($"[PFridge] 读取电池槽失败: {e.Message}"); }
-
-        if (batteryId <= 0 || remaining <= 0f)
+        // 电池槽 BatterySlot0 格式："电池itemId|电量WH"（编解码见 BatterySlotCodec）
+        if (!BatterySlotCodec.TryRead(fridgeItem, out int batteryId, out float remaining) || batteryId <= 0 || remaining <= 0f)
         {
             // 无电：不保鲜（节流日志）
             _noPowerAcc += days;
-            if (_noPowerAcc >= 0.5f) { _noPowerAcc = 0f; Plugin.L.LogInfo("[PFridge] 电池仓无电，冰箱停止保鲜"); }
+            if (_noPowerAcc >= NoPowerLogThreshold) { _noPowerAcc = 0f; Plugin.L.LogInfo("[PFridge] 电池仓无电，冰箱停止保鲜"); }
             return;
         }
 
@@ -167,12 +116,11 @@ public class FridgeMonitor : MonoBehaviour
         float cost = PortableFridgeItem.WattagePerDayFromWattage * days;
         remaining -= cost;
         if (remaining < 0f) remaining = 0f;
-        try { fridgeItem.SetProperty("BatterySlot0", $"{batteryId}|{remaining:F6}"); }
-        catch (Exception e) { Plugin.L.LogWarning($"[PFridge] 写电池槽失败: {e.Message}"); }
+        BatterySlotCodec.Write(fridgeItem, batteryId, remaining);
 
-        // 日志节流：累计推进≥0.25 游戏天（约 6 小时）打一行
+        // 日志节流：累计推进≥RunLogThreshold 游戏天（约 6 小时）打一行
         _accDays += days;
-        if (_accDays >= 0.25f)
+        if (_accDays >= RunLogThreshold)
         {
             _accDays = 0f;
             Plugin.L.LogInfo($"[PFridge] 冰箱运转: +{days:F3}天 保鲜{foodCount}份食物 电瓶剩{remaining:F0}WH");
