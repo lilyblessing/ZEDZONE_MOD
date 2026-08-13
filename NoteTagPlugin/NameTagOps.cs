@@ -21,7 +21,7 @@ public static class NameTagOps
         {
             if (item == null)
             {
-                Plugin.L.LogWarning("[NoteTag] 消耗失败: 源物品为空");
+                Plugin.L.LogWarning("消耗失败: 源物品为空");
                 return;
             }
 
@@ -47,22 +47,22 @@ public static class NameTagOps
                 if (effectiveInv != null && RemoveItemMethod != null)
                 {
                     try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, true }); }
-                    catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(true) 异常: {e.Message}"); }
+                    catch (Exception e) { Plugin.L.LogError($"RemoveItem(true) 异常: {e.Message}"); }
                     if (!removed)
                     {
                         try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, false }); }
-                        catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(false) 异常: {e.Message}"); }
+                        catch (Exception e) { Plugin.L.LogError($"RemoveItem(false) 异常: {e.Message}"); }
                     }
                 }
 
                 // 无论移除结果，刷新所属面板清除残留图标
                 RefreshPanel(panel);
             }
-            Plugin.L.LogInfo("[NoteTag] 已消耗 1 个命名牌");
+            Plugin.L.LogInfo("已消耗 1 个命名牌");
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] 消耗命名牌失败: {e}");
+            Plugin.L.LogError($"消耗命名牌失败: {e}");
         }
     }
 
@@ -88,7 +88,7 @@ public static class NameTagOps
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
+            Plugin.L.LogError($"背包面板刷新失败: {e.Message}");
         }
     }
 

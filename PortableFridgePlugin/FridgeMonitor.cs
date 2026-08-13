@@ -62,7 +62,7 @@ public static class FridgeMonitor
         float batch = _pendingTime;
         _pendingTime = 0f;
         try { ProcessAllFridges(batch); }
-        catch (Exception e) { Plugin.L.LogError($"[PFridge] 批量处理异常: {e}"); }
+        catch (Exception e) { Plugin.L.LogError($"批量处理异常: {e}"); }
     }
 
     private static void ProcessAllFridges(float days)
@@ -93,7 +93,7 @@ public static class FridgeMonitor
         {
             // 无电：不保鲜（节流日志）
             _noPowerAcc += days;
-            if (_noPowerAcc >= NoPowerLogThreshold) { _noPowerAcc = 0f; Plugin.L.LogInfo("[PFridge] 电池仓无电，冰箱停止保鲜"); }
+            if (_noPowerAcc >= NoPowerLogThreshold) { _noPowerAcc = 0f; Plugin.L.LogInfo("电池仓无电，冰箱停止保鲜"); }
             return;
         }
 
@@ -123,7 +123,7 @@ public static class FridgeMonitor
         if (_accDays >= RunLogThreshold)
         {
             _accDays = 0f;
-            Plugin.L.LogInfo($"[PFridge] 冰箱运转: +{days:F3}天 保鲜{foodCount}份食物 电瓶剩{remaining:F0}WH");
+            Plugin.L.LogInfo($"冰箱运转: +{days:F3}天 保鲜{foodCount}份食物 电瓶剩{remaining:F0}WH");
         }
     }
 
@@ -154,7 +154,7 @@ public static class FridgeMonitor
         }
         catch (Exception e)
         {
-            Plugin.L.LogWarning($"[PFridge] 食物保鲜失败: {e.Message}");
+            Plugin.L.LogWarning($"食物保鲜失败: {e.Message}");
             return false;
         }
     }

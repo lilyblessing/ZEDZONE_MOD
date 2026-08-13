@@ -1,11 +1,12 @@
 using System;
 using System.Reflection;
 
-namespace NoteTagPlugin;
+namespace ZedZoneShared;
 
 /// <summary>
 /// Il2CppInterop 运行时反射辅助：成员可能是字段、属性或 set_ 方法，
 /// 统一按 字段 → 属性 → set_方法 的顺序查找读写。
+/// 日志经 SharedLog 注入（各 mod Plugin.Load 时设置，共享库不耦合具体插件）。
 /// </summary>
 public static class Reflect
 {
@@ -35,14 +36,14 @@ public static class Reflect
         if (f != null)
         {
             try { f.SetValue(obj, Convert(value, f.FieldType)); return true; }
-            catch (Exception e) { Plugin.L.LogError($"[NoteTag] SetField {t.Name}.{name} 失败: {e.Message}"); return false; }
+            catch (Exception e) { SharedLog.Error($"SetField {t.Name}.{name} 失败: {e.Message}"); return false; }
         }
 
         var p = t.GetProperty(name, AnyInst);
         if (p != null && p.CanWrite)
         {
             try { p.SetValue(obj, Convert(value, p.PropertyType)); return true; }
-            catch (Exception e) { Plugin.L.LogError($"[NoteTag] SetProp {t.Name}.{name} 失败: {e.Message}"); return false; }
+            catch (Exception e) { SharedLog.Error($"SetProp {t.Name}.{name} 失败: {e.Message}"); return false; }
         }
 
         var setter = t.GetMethod("set_" + name, AnyInst);
@@ -54,10 +55,10 @@ public static class Reflect
                 setter.Invoke(obj, new[] { Convert(value, pt) });
                 return true;
             }
-            catch (Exception e) { Plugin.L.LogError($"[NoteTag] set_{t.Name}.{name} 失败: {e.Message}"); return false; }
+            catch (Exception e) { SharedLog.Error($"set_{t.Name}.{name} 失败: {e.Message}"); return false; }
         }
 
-        Plugin.L.LogWarning($"[NoteTag] 成员不可写: {t.Name}.{name}");
+        SharedLog.Warning($"成员不可写: {t.Name}.{name}");
         return false;
     }
 

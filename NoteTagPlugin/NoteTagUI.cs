@@ -45,7 +45,7 @@ public class NoteTagUI : MonoBehaviour
     {
         if (Instance == null)
         {
-            Plugin.L.LogError("[NoteTag] NoteTagUI 实例不存在");
+            Plugin.L.LogError("NoteTagUI 实例不存在");
             return;
         }
         Instance.OpenEditorFor(target, sourceUI);
@@ -65,7 +65,7 @@ public class NoteTagUI : MonoBehaviour
     {
         if (target == null)
         {
-            Plugin.L.LogWarning("[NoteTag] 目标物品没有 ItemData");
+            Plugin.L.LogWarning("目标物品没有 ItemData");
             return;
         }
         _targetItem = target;
@@ -74,7 +74,7 @@ public class NoteTagUI : MonoBehaviour
         _editText = NoteTagStore.Get(_targetItem);
         _windowOpen = true;
         try { Input.imeCompositionMode = IMECompositionMode.On; } catch { }
-        Plugin.L.LogInfo($"[NoteTag] 打开备注编辑: 物品={NameTagOps.GetItemName(_targetItem)} Ptr=0x{_targetItem.Pointer.ToInt64():X} 已有备注={NoteTagStore.Has(_targetItem)} 来源={(sourceUI != null ? "拖放" : "快捷键")}");
+        Plugin.L.LogInfo($"打开备注编辑: 物品={NameTagOps.GetItemName(_targetItem)} Ptr=0x{_targetItem.Pointer.ToInt64():X} 已有备注={NoteTagStore.Has(_targetItem)} 来源={(sourceUI != null ? "拖放" : "快捷键")}");
     }
 
     private void CloseEditor(bool save)
@@ -84,7 +84,7 @@ public class NoteTagUI : MonoBehaviour
         {
             NoteTagStore.Set(_targetItem, _editText);
             TooltipPatcher.InvalidateCache(); // 备注变更后使 tooltip 缓存失效
-            Plugin.L.LogInfo($"[NoteTag] 已保存备注 ({_editText.Length} 字符): {NameTagOps.GetItemName(_targetItem)}");
+            Plugin.L.LogInfo($"已保存备注 ({_editText.Length} 字符): {NameTagOps.GetItemName(_targetItem)}");
             // 拖放流程：保存成功后消耗 1 个命名牌（按 ItemData 引用，格子可能已重建）
             if (_sourceItem != null)
                 NameTagOps.ConsumeNameTag(_sourceItem, _sourceInv);
@@ -107,8 +107,8 @@ public class NoteTagUI : MonoBehaviour
         {
             _fontReady = true;
             _font = FindGameFont();
-            if (_font != null) Plugin.L.LogInfo($"[NoteTag] 使用游戏字体: {_font.name}");
-            else Plugin.L.LogWarning("[NoteTag] 未找到可用中文字体，输入框中文可能显示为方块（tooltip 备注不受影响，走游戏字体渲染）");
+            if (_font != null) Plugin.L.LogInfo($"使用游戏字体: {_font.name}");
+            else Plugin.L.LogWarning("未找到可用中文字体，输入框中文可能显示为方块（tooltip 备注不受影响，走游戏字体渲染）");
         }
 
         _textAreaStyle = GUI.skin.textArea;
@@ -137,7 +137,7 @@ public class NoteTagUI : MonoBehaviour
         }
         catch (Exception e)
         {
-            Plugin.L.LogInfo($"[NoteTag] 取 DescriptionTipPanel 字体失败: {e.Message}");
+            Plugin.L.LogInfo($"取 DescriptionTipPanel 字体失败: {e.Message}");
         }
 
         try
@@ -159,7 +159,7 @@ public class NoteTagUI : MonoBehaviour
         }
         catch (Exception e)
         {
-            Plugin.L.LogInfo($"[NoteTag] FindObjectsOfTypeAll 失败: {e.Message}");
+            Plugin.L.LogInfo($"FindObjectsOfTypeAll 失败: {e.Message}");
         }
         return null;
     }
@@ -208,19 +208,19 @@ public class NoteTagUI : MonoBehaviour
         // ---- 窗口内容（组内局部坐标） ----
         GUI.BeginGroup(_windowRect);
         GUI.Box(new Rect(0f, 0f, _windowRect.width, _windowRect.height), GUIContent.none, _windowStyle);
-        GUI.Label(new Rect(8f, 4f, _windowRect.width - 16f, 20f), Locale.T("为物品添加备注", "Add Note to Item"), _labelStyle);
-        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), Locale.T("物品：", "Item: ") + NameTagOps.GetItemName(_targetItem), _labelStyle);
+        GUI.Label(new Rect(8f, 4f, _windowRect.width - 16f, 20f), GameLocale.T("为物品添加备注", "Add Note to Item"), _labelStyle);
+        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), GameLocale.T("物品：", "Item: ") + NameTagOps.GetItemName(_targetItem), _labelStyle);
 
         float areaHeight = Mathf.Max(40f, _windowRect.height - 122f);
         _editText = GUI.TextArea(new Rect(8f, 50f, _windowRect.width - 16f, areaHeight), _editText, _textAreaStyle);
 
-        if (GUI.Button(new Rect(_windowRect.width - 108f, _windowRect.height - 34f, 48f, 26f), Locale.T("取消", "Cancel"), _buttonStyle))
+        if (GUI.Button(new Rect(_windowRect.width - 108f, _windowRect.height - 34f, 48f, 26f), GameLocale.T("取消", "Cancel"), _buttonStyle))
         {
             CloseEditor(false);
             GUI.EndGroup();
             return;
         }
-        if (GUI.Button(new Rect(_windowRect.width - 54f, _windowRect.height - 34f, 46f, 26f), Locale.T("确定", "OK"), _buttonStyle))
+        if (GUI.Button(new Rect(_windowRect.width - 54f, _windowRect.height - 34f, 46f, 26f), GameLocale.T("确定", "OK"), _buttonStyle))
         {
             CloseEditor(true);
             GUI.EndGroup();

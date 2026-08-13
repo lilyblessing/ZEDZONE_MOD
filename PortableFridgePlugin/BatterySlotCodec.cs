@@ -31,7 +31,7 @@ public static class BatterySlotCodec
         }
         catch (Exception e)
         {
-            Plugin.L.LogWarning($"[PFridge] 读取电池槽失败: {e.Message}");
+            Plugin.L.LogWarning($"读取电池槽失败: {e.Message}");
             return false;
         }
     }
@@ -41,6 +41,6 @@ public static class BatterySlotCodec
     {
         if (item == null) return;
         try { item.SetProperty(PropertyKey, $"{batteryId}{Separator}{remaining:F6}"); }
-        catch (Exception e) { Plugin.L.LogWarning($"[PFridge] 写电池槽失败: {e.Message}"); }
+        catch (Exception e) { Plugin.L.LogWarning($"写电池槽失败: {e.Message}"); }
     }
 }

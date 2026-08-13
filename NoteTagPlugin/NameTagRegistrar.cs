@@ -35,7 +35,7 @@ public class NameTagRegistrar : MonoBehaviour
         if (_langCheckTimer <= 0f)
         {
             _langCheckTimer = LangCheckInterval;
-            if (Locale.Refresh())
+            if (GameLocale.Refresh())
             {
                 NameTagItem.ReapplyLanguage();
                 TooltipPatcher.InvalidateLanguage();
@@ -67,11 +67,11 @@ public class NameTagRegistrar : MonoBehaviour
         {
             var list = BasicItemUI.ActiveObjects;
             int count = list != null ? list.Count : -1;
-            Plugin.L.LogInfo($"[NoteTag] 自检: ActiveObjects={count}");
+            Plugin.L.LogInfo($"自检: ActiveObjects={count}");
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] 自检失败: {e}");
+            Plugin.L.LogError($"自检失败: {e}");
         }
     }
 }

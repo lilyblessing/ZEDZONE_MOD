@@ -16,6 +16,10 @@ public class Plugin : BasePlugin
     {
         Instance = this;
         L = Log;
+        ZedZoneShared.SharedLog.Initialize(
+            m => Log.LogError(m),
+            m => Log.LogWarning(m),
+            m => Log.LogInfo(m));
         NoteTagUI.Instance = AddComponent<NoteTagUI>();
         AddComponent<NameTagRegistrar>();
 
@@ -25,7 +29,7 @@ public class Plugin : BasePlugin
         }
         catch (Exception e)
         {
-            Log.LogError($"[NoteTag] 初始化插件目录失败: {e}");
+            Log.LogError($"初始化插件目录失败: {e}");
         }
 
         try
@@ -36,9 +40,9 @@ public class Plugin : BasePlugin
         }
         catch (Exception e)
         {
-            Log.LogError($"[NoteTag] Harmony 初始化失败: {e}");
+            Log.LogError($"Harmony 初始化失败: {e}");
         }
 
-        Log.LogInfo("[NoteTag] 命名牌插件已加载 (v0.5.4)");
+        Log.LogInfo("命名牌插件已加载 (v0.5.4)");
     }
 }

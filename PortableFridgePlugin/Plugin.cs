@@ -23,6 +23,10 @@ public class Plugin : BasePlugin
     {
         Instance = this;
         L = Log;
+        ZedZoneShared.SharedLog.Initialize(
+            m => Log.LogError(m),
+            m => Log.LogWarning(m),
+            m => Log.LogInfo(m));
 
         AddComponent<FridgeRegistrar>();
 
@@ -32,7 +36,7 @@ public class Plugin : BasePlugin
         }
         catch (Exception e)
         {
-            Log.LogError($"[PFridge] 初始化目录失败: {e}");
+            Log.LogError($"初始化目录失败: {e}");
         }
 
         try
@@ -42,10 +46,10 @@ public class Plugin : BasePlugin
         }
         catch (Exception e)
         {
-            Log.LogError($"[PFridge] Harmony 初始化失败: {e}");
+            Log.LogError($"Harmony 初始化失败: {e}");
         }
 
-        Log.LogInfo("[PFridge] 便携小冰箱插件已加载 (v0.3.2)");
+        Log.LogInfo("便携小冰箱插件已加载 (v0.3.2)");
     }
 
     private void PatchTime(Harmony harmony)
@@ -56,13 +60,13 @@ public class Plugin : BasePlugin
             null, new[] { typeof(float) }, null);
         if (addTime == null)
         {
-            Log.LogError("[PFridge] TimeController.AddTime(float) 反射失败");
+            Log.LogError("TimeController.AddTime(float) 反射失败");
             return;
         }
         harmony.Patch(addTime, postfix: new HarmonyMethod(
             typeof(FridgeMonitor).GetMethod(nameof(FridgeMonitor.Postfix_AddTime),
                 BindingFlags.NonPublic | BindingFlags.Static)));
-        Log.LogInfo("[PFridge] 已挂钩 TimeController.AddTime");
+        Log.LogInfo("已挂钩 TimeController.AddTime");
 
         // ChangeTimeTo(float) —— 睡觉/时间跳跃（绝对设置）也 hook，差值 = 推进量
         var changeTime = typeof(TimeController).GetMethod("ChangeTimeTo",
@@ -70,13 +74,13 @@ public class Plugin : BasePlugin
             null, new[] { typeof(float) }, null);
         if (changeTime == null)
         {
-            Log.LogError("[PFridge] TimeController.ChangeTimeTo(float) 反射失败");
+            Log.LogError("TimeController.ChangeTimeTo(float) 反射失败");
             return;
         }
         harmony.Patch(changeTime, postfix: new HarmonyMethod(
             typeof(FridgeMonitor).GetMethod(nameof(FridgeMonitor.Postfix_ChangeTimeTo),
                 BindingFlags.NonPublic | BindingFlags.Static)));
-        Log.LogInfo("[PFridge] 已挂钩 TimeController.ChangeTimeTo");
+        Log.LogInfo("已挂钩 TimeController.ChangeTimeTo");
     }
 }
 

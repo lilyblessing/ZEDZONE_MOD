@@ -47,4 +47,10 @@
     <Reference Include="$(InteropDir)\UnityEngine.Physics2DModule.dll" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- 跨 mod 共享源码（../Shared：Reflect/Locale/ItemRegistryHelper/SharedLog） -->
+    <Compile Include="..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
+    <Using Include="ZedZoneShared" />
+  </ItemGroup>
+
 </Project>

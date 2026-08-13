@@ -36,7 +36,7 @@ public static class NoteTagStore
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] SetProperty 失败: {e.Message}");
+            Plugin.L.LogError($"SetProperty 失败: {e.Message}");
         }
     }
 

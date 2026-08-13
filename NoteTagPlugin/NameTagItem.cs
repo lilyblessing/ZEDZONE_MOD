@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Reflection;
 using UnityEngine;
 using Il2CppSystem.Collections.Generic;
 
@@ -12,6 +10,7 @@ namespace NoteTagPlugin;
 /// - RecipeData：配方（木头×1 + 炭×1 = 命名牌×2，byhand 徒手，0 级）
 /// - ModSpriteRegistry：贴图注册（Main slot）
 /// 物品 ID 使用 mod 物品区间 100000+，启动时动态避开冲突。
+/// 反射/集合/贴图辅助统一走 Shared（Reflect / ItemRegistryHelper）。
 /// </summary>
 public static class NameTagItem
 {
@@ -44,7 +43,7 @@ public static class NameTagItem
             var mgr = ItemManager.instance;
             if (mgr == null)
             {
-                Plugin.L.LogWarning("[NoteTag] ItemManager 未就绪，命名牌注册推迟");
+                Plugin.L.LogWarning("ItemManager 未就绪，命名牌注册推迟");
                 return false;
             }
 
@@ -52,36 +51,36 @@ public static class NameTagItem
             var dic = Reflect.Get(mgr, "itemAttrDic");
             if (dic == null)
             {
-                Plugin.L.LogError("[NoteTag] itemAttrDic 为 null，无法注册命名牌");
+                Plugin.L.LogError("itemAttrDic 为 null，无法注册命名牌");
                 return false;
             }
 
             // 分配无冲突 ID（mod 物品区间 100000–999999）
             int id = BaseItemId;
             int guard = 0;
-            while (DicContains(dic, id) && guard++ < 1000) id++;
+            while (ItemRegistryHelper.DicContains(dic, id) && guard++ < 1000) id++;
             ItemId = id;
 
             // 物品定义
             var attr = CreateItemAttr(id);
-            DicAdd(dic, id, attr);
-            AddToCollection(Reflect.Get(mgr, "itemList"), attr);
-            AddToCollection(Reflect.Get(mgr, "materialList"), attr);
+            ItemRegistryHelper.DicAdd(dic, id, attr);
+            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "itemList"), attr);
+            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "materialList"), attr);
 
             // 配方
             var recipe = CreateRecipe(id);
-            AddToCollection(Reflect.Get(mgr, "allRecipeList"), recipe);
+            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "allRecipeList"), recipe);
 
             // 贴图
-            RegisterSprite(id);
+            ItemRegistryHelper.RegisterSprite(_pluginDir, "Name_Tag.png", id, MainSlot, 160, 160);
 
             Registered = true;
-            Plugin.L.LogInfo($"[NoteTag] 命名牌注册成功: itemId={id} (堆叠32 重0.01 价1 材料类 徒手)");
+            Plugin.L.LogInfo($"命名牌注册成功: itemId={id} (堆叠32 重0.01 价1 材料类 徒手)");
             return true;
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] 命名牌注册失败: {e}");
+            Plugin.L.LogError($"命名牌注册失败: {e}");
             return false;
         }
     }
@@ -95,10 +94,10 @@ public static class NameTagItem
         Reflect.Set(attr, "itemId", id);
         // 四个语言字段都按当前语言填：英文模式下游戏物品名走「英文本地化表查不到 → 回退 itemName」路径，
         // 若 itemName 恒为中文则英文名不生效；itemName_Runtime/itemDescription_WithLanguage 是游戏直接读取的运行时文本。
-        Reflect.Set(attr, "itemName", Locale.T(ItemName, ItemName_EN));
-        Reflect.Set(attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
-        Reflect.Set(attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
-        Reflect.Set(attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
+        Reflect.Set(attr, "itemName", GameLocale.T(ItemName, ItemName_EN));
+        Reflect.Set(attr, "itemName_Runtime", GameLocale.T(ItemName, ItemName_EN));
+        Reflect.Set(attr, "itemDescription", GameLocale.T(ItemDescription, ItemDescription_EN));
+        Reflect.Set(attr, "itemDescription_WithLanguage", GameLocale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemSize", new Vector2Int(1, 1));
         Reflect.Set(attr, "stackNumber", 32);
         Reflect.Set(attr, "weight", 0.01f);
@@ -116,13 +115,13 @@ public static class NameTagItem
         if (!Registered || _attr == null) return;
         try
         {
-            Reflect.Set(_attr, "itemName", Locale.T(ItemName, ItemName_EN));
-            Reflect.Set(_attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
-            Reflect.Set(_attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
-            Reflect.Set(_attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
-            Plugin.L.LogInfo($"[NoteTag] 语言切换重设物品文本: {Locale.T(ItemName, ItemName_EN)}");
+            Reflect.Set(_attr, "itemName", GameLocale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemName_Runtime", GameLocale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemDescription", GameLocale.T(ItemDescription, ItemDescription_EN));
+            Reflect.Set(_attr, "itemDescription_WithLanguage", GameLocale.T(ItemDescription, ItemDescription_EN));
+            Plugin.L.LogInfo($"语言切换重设物品文本: {GameLocale.T(ItemName, ItemName_EN)}");
         }
-        catch (Exception e) { Plugin.L.LogError($"[NoteTag] 重设语言文本失败: {e.Message}"); }
+        catch (Exception e) { Plugin.L.LogError($"重设语言文本失败: {e.Message}"); }
     }
 
     // ---------- 配方 ----------
@@ -154,52 +153,5 @@ public static class NameTagItem
         Reflect.Set(recipe, "fatigueCost", 0f);
         Reflect.Set(recipe, "craftAudioClipType", 0);
         return recipe;
-    }
-
-    // ---------- 贴图 ----------
-
-    private static void RegisterSprite(int id)
-    {
-        string path = Path.Combine(_pluginDir, "Name_Tag.png");
-        if (!File.Exists(path))
-        {
-            Plugin.L.LogWarning($"[NoteTag] 贴图不存在: {path}");
-            return;
-        }
-        var bytes = File.ReadAllBytes(path);
-        var tex = new Texture2D(160, 160, TextureFormat.RGBA32, false);
-        if (!ImageConversion.LoadImage(tex, bytes))
-        {
-            Plugin.L.LogWarning("[NoteTag] LoadImage 失败");
-            return;
-        }
-        var sprite = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-        ModSpriteRegistry.Register(id, MainSlot, sprite);
-        Plugin.L.LogInfo($"[NoteTag] 贴图注册完成: {tex.width}x{tex.height}");
-    }
-
-    // ---------- 反射辅助 ----------
-
-    private static bool DicContains(object dic, int key)
-    {
-        try
-        {
-            var m = dic.GetType().GetMethod("ContainsKey");
-            return m != null && (bool)m.Invoke(dic, new object[] { key });
-        }
-        catch { return false; }
-    }
-
-    private static void DicAdd(object dic, int key, object value)
-    {
-        var m = dic.GetType().GetMethod("Add");
-        if (m != null) m.Invoke(dic, new[] { key, value });
-    }
-
-    private static void AddToCollection(object collection, object item)
-    {
-        if (collection == null) return;
-        var m = collection.GetType().GetMethod("Add");
-        if (m != null) m.Invoke(collection, new[] { item });
     }
 }

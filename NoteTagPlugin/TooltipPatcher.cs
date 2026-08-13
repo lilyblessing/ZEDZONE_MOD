@@ -19,7 +19,7 @@ public static class TooltipPatcher
 
     private static string Marker()
     {
-        bool en = Locale.IsEnglish();
+        bool en = GameLocale.IsEnglish();
         if (_markerCache == null || en != _markerEnglish)
         {
             _markerEnglish = en;
@@ -60,11 +60,11 @@ public static class TooltipPatcher
         {
             harmony.Patch(showDesc, postfix: new HarmonyMethod(
                 typeof(TooltipPatcher).GetMethod(nameof(Postfix_ShowDescription), BindingFlags.NonPublic | BindingFlags.Static)));
-            Plugin.L.LogInfo("[NoteTag] 已挂钩 DescriptionTipPanel.ShowDescription");
+            Plugin.L.LogInfo("已挂钩 DescriptionTipPanel.ShowDescription");
         }
         else
         {
-            Plugin.L.LogWarning("[NoteTag] ShowDescription 反射失败（运行时无此方法），依赖 Update 兜底");
+            Plugin.L.LogWarning("ShowDescription 反射失败（运行时无此方法），依赖 Update 兜底");
         }
 
         var update = t.GetMethod("Update", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -72,11 +72,11 @@ public static class TooltipPatcher
         {
             harmony.Patch(update, postfix: new HarmonyMethod(
                 typeof(TooltipPatcher).GetMethod(nameof(Postfix_Update), BindingFlags.NonPublic | BindingFlags.Static)));
-            Plugin.L.LogInfo("[NoteTag] 已挂钩 DescriptionTipPanel.Update");
+            Plugin.L.LogInfo("已挂钩 DescriptionTipPanel.Update");
         }
         else
         {
-            Plugin.L.LogWarning("[NoteTag] DescriptionTipPanel.Update 反射失败");
+            Plugin.L.LogWarning("DescriptionTipPanel.Update 反射失败");
         }
     }
 
@@ -97,7 +97,7 @@ public static class TooltipPatcher
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] ShowDescription Postfix 异常: {e}");
+            Plugin.L.LogError($"ShowDescription Postfix 异常: {e}");
         }
     }
 
@@ -121,7 +121,7 @@ public static class TooltipPatcher
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] Update Postfix 异常: {e}");
+            Plugin.L.LogError($"Update Postfix 异常: {e}");
         }
     }
 
@@ -143,7 +143,7 @@ public static class TooltipPatcher
         if (newText != information)
         {
             panel.informationText.text = newText;
-            Plugin.L.LogInfo($"[NoteTag] tooltip 已插入备注: {note}");
+            Plugin.L.LogInfo($"tooltip 已插入备注: {note}");
         }
     }
 

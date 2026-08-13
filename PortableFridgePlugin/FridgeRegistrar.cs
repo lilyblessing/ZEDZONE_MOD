@@ -28,7 +28,7 @@ public class FridgeRegistrar : MonoBehaviour
         if (_langCheckTimer <= 0f)
         {
             _langCheckTimer = LangCheckInterval;
-            if (Locale.Refresh())
+            if (GameLocale.Refresh())
             {
                 PortableFridgeItem.ReapplyLanguage();
             }

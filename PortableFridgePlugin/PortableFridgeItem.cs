@@ -1,5 +1,4 @@
 using System;
-using System.IO;
 using UnityEngine;
 using Il2CppSystem.Collections.Generic;
 
@@ -11,6 +10,7 @@ namespace PortableFridgePlugin;
 /// - 制作配方：工作台(workbench=2)：铁块(8)×6 + 铁管(10)×4 + 铜丝(13)×4 → 1
 /// - 修复配方：物品维修工具包(56)×1
 /// - 贴图：Portable_Fridge.png（插件目录）
+/// 反射/集合/贴图辅助统一走 Shared（Reflect / ItemRegistryHelper）。
 /// </summary>
 public static class PortableFridgeItem
 {
@@ -63,44 +63,44 @@ public static class PortableFridgeItem
             var mgr = ItemManager.instance;
             if (mgr == null)
             {
-                Plugin.L.LogWarning("[PFridge] ItemManager 未就绪，注册推迟");
+                Plugin.L.LogWarning("ItemManager 未就绪，注册推迟");
                 return false;
             }
 
             var dic = Reflect.Get(mgr, "itemAttrDic");
             if (dic == null)
             {
-                Plugin.L.LogError("[PFridge] itemAttrDic 为 null，无法注册");
+                Plugin.L.LogError("itemAttrDic 为 null，无法注册");
                 return false;
             }
 
             // 分配无冲突 ID
             int id = BaseItemId;
             int guard = 0;
-            while (DicContains(dic, id) && guard++ < 1000) id++;
+            while (ItemRegistryHelper.DicContains(dic, id) && guard++ < 1000) id++;
             ItemId = id;
 
             var attr = CreateItemAttr(id);
-            DicAdd(dic, id, attr);
-            AddToCollection(Reflect.Get(mgr, "itemList"), attr);
+            ItemRegistryHelper.DicAdd(dic, id, attr);
+            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "itemList"), attr);
 
             // 制作配方（工作台）
             var recipe = CreateRecipe(id);
-            AddToCollection(Reflect.Get(mgr, "allRecipeList"), recipe);
+            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "allRecipeList"), recipe);
 
             // 修复配方（直接设 repairData）
             attr.repairData = CreateRepairData(id);
 
             // 贴图
-            RegisterSprite(id);
+            ItemRegistryHelper.RegisterSprite(_pluginDir, "Portable_Fridge.png", id, MainSlot, 128, 100);
 
             Registered = true;
-            Plugin.L.LogInfo($"[PFridge] 便携小冰箱注册成功: itemId={id} (Backpack 10x8 工作台配方 修复=维修包x1)");
+            Plugin.L.LogInfo($"便携小冰箱注册成功: itemId={id} (Backpack 10x8 工作台配方 修复=维修包x1)");
             return true;
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[PFridge] 注册失败: {e}");
+            Plugin.L.LogError($"注册失败: {e}");
             return false;
         }
     }
@@ -116,10 +116,10 @@ public static class PortableFridgeItem
         Reflect.Set(attr, "itemId", id);
         // 四个语言字段都按当前语言填：英文模式下游戏物品名走「英文本地化表查不到 → 回退 itemName」路径，
         // 若 itemName 恒为中文则英文名不生效；itemName_Runtime/itemDescription_WithLanguage 是游戏直接读取的运行时文本。
-        Reflect.Set(attr, "itemName", Locale.T(ItemName, ItemName_EN));
-        Reflect.Set(attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
-        Reflect.Set(attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
-        Reflect.Set(attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
+        Reflect.Set(attr, "itemName", GameLocale.T(ItemName, ItemName_EN));
+        Reflect.Set(attr, "itemName_Runtime", GameLocale.T(ItemName, ItemName_EN));
+        Reflect.Set(attr, "itemDescription", GameLocale.T(ItemDescription, ItemDescription_EN));
+        Reflect.Set(attr, "itemDescription_WithLanguage", GameLocale.T(ItemDescription, ItemDescription_EN));
         Reflect.Set(attr, "itemSize", new Vector2Int(5, 4));
         Reflect.Set(attr, "stackNumber", 1);
         Reflect.Set(attr, "weight", 2.8f);
@@ -143,13 +143,13 @@ public static class PortableFridgeItem
         if (!Registered || _attr == null) return;
         try
         {
-            Reflect.Set(_attr, "itemName", Locale.T(ItemName, ItemName_EN));
-            Reflect.Set(_attr, "itemName_Runtime", Locale.T(ItemName, ItemName_EN));
-            Reflect.Set(_attr, "itemDescription", Locale.T(ItemDescription, ItemDescription_EN));
-            Reflect.Set(_attr, "itemDescription_WithLanguage", Locale.T(ItemDescription, ItemDescription_EN));
-            Plugin.L.LogInfo($"[PFridge] 语言切换重设物品文本: {Locale.T(ItemName, ItemName_EN)}");
+            Reflect.Set(_attr, "itemName", GameLocale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemName_Runtime", GameLocale.T(ItemName, ItemName_EN));
+            Reflect.Set(_attr, "itemDescription", GameLocale.T(ItemDescription, ItemDescription_EN));
+            Reflect.Set(_attr, "itemDescription_WithLanguage", GameLocale.T(ItemDescription, ItemDescription_EN));
+            Plugin.L.LogInfo($"语言切换重设物品文本: {GameLocale.T(ItemName, ItemName_EN)}");
         }
-        catch (Exception e) { Plugin.L.LogError($"[PFridge] 重设语言文本失败: {e.Message}"); }
+        catch (Exception e) { Plugin.L.LogError($"重设语言文本失败: {e.Message}"); }
     }
 
     // ---------- 电池槽特性注册（参照手电筒91：BatteryBox + BatteryConsuming）----------
@@ -262,52 +262,4 @@ public static class PortableFridgeItem
         Reflect.Set(rd, "craftAudioClipType", 0);
         return rd;
     }
-
-    // ---------- 贴图 ----------
-
-    private static void RegisterSprite(int id)
-    {
-        string path = Path.Combine(_pluginDir, "Portable_Fridge.png");
-        if (!File.Exists(path))
-        {
-            Plugin.L.LogWarning($"[PFridge] 贴图不存在: {path}");
-            return;
-        }
-        var bytes = File.ReadAllBytes(path);
-        var tex = new Texture2D(128, 100, TextureFormat.RGBA32, false);
-        if (!ImageConversion.LoadImage(tex, bytes))
-        {
-            Plugin.L.LogWarning("[PFridge] LoadImage 失败");
-            return;
-        }
-        var sprite = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
-        ModSpriteRegistry.Register(id, MainSlot, sprite);
-        Plugin.L.LogInfo($"[PFridge] 贴图注册完成: {tex.width}x{tex.height}");
-    }
-
-    // ---------- 反射辅助 ----------
-
-    private static bool DicContains(object dic, int key)
-    {
-        try
-        {
-            var m = dic.GetType().GetMethod("ContainsKey");
-            return m != null && (bool)m.Invoke(dic, new object[] { key });
-        }
-        catch { return false; }
-    }
-
-    private static void DicAdd(object dic, int key, object value)
-    {
-        var m = dic.GetType().GetMethod("Add");
-        if (m != null) m.Invoke(dic, new[] { key, value });
-    }
-
-    private static void AddToCollection(object collection, object item)
-    {
-        if (collection == null) return;
-        var m = collection.GetType().GetMethod("Add");
-        if (m != null) m.Invoke(collection, new[] { item });
-    }
 }
-

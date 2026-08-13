@@ -1,12 +1,13 @@
 using System;
 
-namespace PortableFridgePlugin;
+namespace ZedZoneShared;
 
 /// <summary>
 /// 游戏语言检测（仅支持简体中文 / 英文两档）。
-/// 语言状态缓存：IsEnglish()/T() 读缓存（零 native 调用）；语言切换由轮询调 Refresh() 更新并返回是否变化。
+/// 语言状态缓存：IsEnglish()/T() 读缓存（零 native 调用，供 OnGUI/tooltip 每帧热路径使用）；
+/// 语言切换由轮询调 Refresh() 更新缓存并返回是否变化。
 /// </summary>
-public static class Locale
+public static class GameLocale
 {
     private static bool _isEnglish;
     private static bool _known;

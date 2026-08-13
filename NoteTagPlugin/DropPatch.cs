@@ -24,11 +24,11 @@ public static class DropPatch
         if (dropOn != null)
         {
             harmony.Patch(dropOn, prefix: new HarmonyMethod(typeof(DropPatch).GetMethod(nameof(Prefix_DropOn), StaticFlags)));
-            Plugin.L.LogInfo("[NoteTag] 已挂钩 BasicItemUI.DropOn (非virtual, 安全)");
+            Plugin.L.LogInfo("已挂钩 BasicItemUI.DropOn (非virtual, 安全)");
         }
         else
         {
-            Plugin.L.LogError("[NoteTag] DropOn 反射失败，拖放功能不可用");
+            Plugin.L.LogError("DropOn 反射失败，拖放功能不可用");
         }
     }
 
@@ -57,7 +57,7 @@ public static class DropPatch
 
             string targetName = "?";
             try { targetName = target.GetItemName(); } catch { }
-            Plugin.L.LogInfo($"[NoteTag] 命名牌拖放到物品上: {targetName}");
+            Plugin.L.LogInfo($"命名牌拖放到物品上: {targetName}");
             NoteTagUI.OpenForItem(target, src);
             // 拦截 DropOn 后必须恢复游戏拖拽状态：OnBeginDrag 把命名牌暂存进 itemdataTemp，
             // 若不清空，关闭背包时游戏会清理"未放置的拖拽物品"→ 命名牌整组消失。
@@ -66,7 +66,7 @@ public static class DropPatch
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] DropOn Prefix 异常: {e}");
+            Plugin.L.LogError($"DropOn Prefix 异常: {e}");
             return true;
         }
     }
@@ -78,16 +78,16 @@ public static class DropPatch
         {
             if (RestoreDragMethod == null)
             {
-                Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 反射失败");
+                Plugin.L.LogWarning("RestoreDraggedItemToSource 反射失败");
                 return;
             }
             bool ok = (bool)RestoreDragMethod.Invoke(src, null);
-            if (!ok) Plugin.L.LogWarning("[NoteTag] RestoreDraggedItemToSource 返回 false");
-            Plugin.L.LogInfo($"[NoteTag] 拖拽状态恢复: {ok}");
+            if (!ok) Plugin.L.LogWarning("RestoreDraggedItemToSource 返回 false");
+            Plugin.L.LogInfo($"拖拽状态恢复: {ok}");
         }
         catch (Exception e)
         {
-            Plugin.L.LogError($"[NoteTag] 恢复拖拽状态失败: {e.Message}");
+            Plugin.L.LogError($"恢复拖拽状态失败: {e.Message}");
         }
     }
 
