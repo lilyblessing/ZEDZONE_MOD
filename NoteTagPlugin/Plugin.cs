@@ -17,6 +17,7 @@ public class Plugin : BasePlugin
         Instance = this;
         L = Log;
         NoteTagUI.Instance = AddComponent<NoteTagUI>();
+        AddComponent<NameTagRegistrar>();
 
         try
         {

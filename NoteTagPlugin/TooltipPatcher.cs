@@ -35,8 +35,6 @@ public static class TooltipPatcher
         InvalidateCache();
     }
 
-    private static bool _explored;
-
     // ---- P0-1 热路径缓存：当前 tooltip 目标（目标指针 → 物品 → 备注）----
     // tooltip 面板激活期间 Update 每帧触发；目标不变时复用缓存，避免
     // 每帧遍历 ActiveObjects + GetProperty native 调用。
@@ -56,13 +54,6 @@ public static class TooltipPatcher
     public static void Apply(Harmony harmony)
     {
         var t = typeof(DescriptionTipPanel);
-        var methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static);
-        Plugin.L.LogInfo($"[NoteTag] DescriptionTipPanel 运行时方法数: {methods.Length}");
-        foreach (var m in methods)
-        {
-            if (m.Name.Contains("ShowDescription") || m.Name == "Update" || m.Name == "ClosePanel")
-                Plugin.L.LogInfo($"[NoteTag]   - 找到方法: {m.Name}");
-        }
 
         var showDesc = t.GetMethod("ShowDescription", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         if (showDesc != null)
@@ -101,12 +92,6 @@ public static class TooltipPatcher
             var information = __args[1] as string;
             if (targetRect == null || string.IsNullOrEmpty(information))
                 return;
-
-            if (!_explored)
-            {
-                _explored = true;
-                Plugin.L.LogInfo($"[NoteTag][探查] ShowDescription 原始文本 (target={targetRect.name}):\n---BEGIN---\n{information}\n---END---");
-            }
 
             TryInsertNote(__instance, targetRect, information);
         }
@@ -162,7 +147,7 @@ public static class TooltipPatcher
         }
     }
 
-    /// <summary>按目标 RectTransform 取物品，带单条目缓存（目标不变时零遍历）。</summary>
+    /// <summary>按目标 RectTransform 取物品（带单条目缓存：目标不变时零遍历）。</summary>
     private static ItemData GetCachedItem(RectTransform target)
     {
         long ptr = target.Pointer.ToInt64();
@@ -170,7 +155,7 @@ public static class TooltipPatcher
             return _cachedItem;
 
         // 缓存未命中：遍历查找并更新缓存（目标与备注缓存必须原子更新，防止错绑）
-        var item = FindItemByRect(target);
+        var item = ItemSlotHelper.FindByRect(target)?.itemdata;
         _cachedTargetPtr = ptr;
         _cachedItem = item;
         _cachedNote = null; // 关键：目标变化时清除备注缓存
@@ -188,29 +173,6 @@ public static class TooltipPatcher
         if (_cacheReady && item == _cachedItem)
             _cachedNote = note; // 空备注也缓存，防止每帧 GetProperty
         return note;
-    }
-
-    /// <summary>通过目标 RectTransform 反查对应的物品实例。</summary>
-    private static ItemData FindItemByRect(RectTransform target)
-    {
-        var list = BasicItemUI.ActiveObjects;
-        if (list == null) return null;
-        try
-        {
-            for (int i = 0; i < list.Count; i++)
-            {
-                var ui = list[i];
-                if (ui == null || ui.itemdata == null) continue;
-                var rt = ui.rectTransform;
-                if (rt != null && rt.Pointer == target.Pointer)
-                    return ui.itemdata;
-            }
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] FindItemByRect 异常: {e}");
-        }
-        return null;
     }
 
     /// <summary>

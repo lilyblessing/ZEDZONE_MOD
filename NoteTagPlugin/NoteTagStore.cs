@@ -53,7 +53,4 @@ public static class NoteTagStore
             return false;
         }
     }
-
-    /// <summary>当前内存中备注数（诊断用；实际存储走 ItemData 属性）。</summary>
-    public static int Count => 0;
 }

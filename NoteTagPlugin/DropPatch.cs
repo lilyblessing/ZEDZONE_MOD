@@ -48,7 +48,7 @@ public static class DropPatch
                 return true; // 非命名牌拖放，走游戏正常流程
 
             // 目标格子：从指针悬停对象中找（排除源自身）
-            var targetUI = FindTargetItemUI(eventData, src);
+            var targetUI = ItemSlotHelper.FindFromHovered(eventData, src);
             if (targetUI == null)
                 return true; // 拖到格子外/自身：交给游戏
             var target = targetUI.itemdata;
@@ -69,29 +69,6 @@ public static class DropPatch
             Plugin.L.LogError($"[NoteTag] DropOn Prefix 异常: {e}");
             return true;
         }
-    }
-
-    /// <summary>从 PointerEventData.hovered 中找到目标物品格子（排除拖拽源自身）。</summary>
-    private static BasicItemUI FindTargetItemUI(PointerEventData eventData, BasicItemUI exclude)
-    {
-        var hovered = eventData.hovered;
-        if (hovered == null) return null;
-        try
-        {
-            for (int i = 0; i < hovered.Count; i++)
-            {
-                var go = hovered[i];
-                if (go == null) continue;
-                var ui = go.GetComponent<BasicItemUI>();
-                if (ui != null && ui != exclude)
-                    return ui;
-            }
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 遍历 hovered 失败: {e}");
-        }
-        return null;
     }
 
     /// <summary>恢复游戏拖拽状态：调用 RestoreDraggedItemToSource 把 itemdataTemp 放回源格子。</summary>

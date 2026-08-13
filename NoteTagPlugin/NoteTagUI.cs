@@ -1,45 +1,39 @@
 using System;
-using System.Collections.Generic;
-using System.Reflection;
 using UnityEngine;
 
 namespace NoteTagPlugin;
 
 /// <summary>
-/// 测试版 UI：打开背包并悬停物品时，按小键盘 + 弹出备注输入框。
-/// 输入框：可拖动（标题栏）、可调整大小（右下角手柄）、取消/确定按钮。
-/// 备注按 ItemData 实例指针绑定（NoteTagStore）。
+/// 备注输入框 UI：拖放命名牌到物品上时弹出，可拖动（标题栏）、可调整大小（右下角手柄）、
+/// 取消/确定按钮；确定后保存备注到 NoteTagStore 并消耗 1 个命名牌（NameTagOps）。
+/// 命名牌注册调度与语言轮询见 NameTagRegistrar。
 /// </summary>
 public class NoteTagUI : MonoBehaviour
 {
-    private const int WindowId = 847261;
     private const float ResizeHandleSize = 18f;
+    private const float MinWindowWidth = 300f;
+    private const float MinWindowHeight = 180f;
+    private static readonly Rect DefaultWindowRect = new Rect(400f, 180f, 440f, 260f);
 
     /// <summary>场景中的 NoteTagUI 实例（拖放交互通过静态入口打开输入框）。</summary>
     public static NoteTagUI Instance;
 
-    // P1-2: 反射缓存（一次性查找，避免每次消耗/刷新重复 GetMethod）
-    private static readonly MethodInfo RemoveItemMethod =
-        typeof(InventoryData).GetMethod("RemoveItem",
-            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance,
-            null, new[] { typeof(ItemData), typeof(bool) }, null);
-    private static readonly Dictionary<Type, MethodInfo> PanelRefreshCache = new Dictionary<Type, MethodInfo>();
-
     private bool _windowOpen;
-    private Rect _windowRect = new Rect(400f, 180f, 440f, 260f);
+    private Rect _windowRect = DefaultWindowRect;
     private string _editText = "";
     private ItemData _targetItem;
     private ItemData _sourceItem; // 拖放来源命名牌（ItemData 引用，比格子 BasicItemUI 稳定）
     private object _sourceInv;   // 拖放前源物品所属 InventoryData（RestoreDrag 后可能丢失）
     private bool _resizing;
     private bool _dragging;
-    private bool _selfChecked;
-    private float _probeTimer = 10f;
-    private bool _probeDone;
-    private int _registerTries;
 
-    // 语言切换轮询（游戏切语言后 mod 物品名/描述与 tooltip marker 需重设）
-    private float _langCheckTimer = 2f;
+    private Font _font;
+    private bool _fontReady;
+    private bool _stylesReady;
+    private GUIStyle _textAreaStyle;
+    private GUIStyle _buttonStyle;
+    private GUIStyle _windowStyle;
+    private GUIStyle _labelStyle;
 
     private void Awake()
     {
@@ -57,74 +51,12 @@ public class NoteTagUI : MonoBehaviour
         Instance.OpenEditorFor(target, sourceUI);
     }
 
-    private Font _font;
-    private bool _fontReady;
-    private bool _stylesReady;
-    private GUIStyle _textAreaStyle;
-    private GUIStyle _buttonStyle;
-    private GUIStyle _windowStyle;
-    private GUIStyle _labelStyle;
-
     private void Update()
     {
-        if (!_selfChecked)
-        {
-            _selfChecked = true;
-            SelfCheck();
-        }
-
-        // 语言切换检测：游戏内切语言后重设命名牌物品文本 + 重建 tooltip marker
-        _langCheckTimer -= Time.deltaTime;
-        if (_langCheckTimer <= 0f)
-        {
-            _langCheckTimer = 2f;
-            if (Locale.Refresh())
-            {
-                NameTagItem.ReapplyLanguage();
-                TooltipPatcher.InvalidateLanguage();
-            }
-        }
-
-        // 延迟注册命名牌（等 ItemManager 初始化，最多重试 6 次）
-        if (!_probeDone)
-        {
-            _probeTimer -= Time.deltaTime;
-            if (_probeTimer <= 0f)
-            {
-                if (NameTagItem.Register())
-                {
-                    _probeDone = true;
-                }
-                else if (++_registerTries >= 6)
-                {
-                    _probeDone = true;
-                    Plugin.L.LogError("[NoteTag] 命名牌注册多次尝试仍失败");
-                }
-                else
-                {
-                    _probeTimer = 5f;
-                }
-            }
-        }
-
         // 输入框打开时支持 Escape 关闭（不保存）
         if (_windowOpen && Input.GetKeyDown(KeyCode.Escape))
         {
             CloseEditor(false);
-        }
-    }
-
-    private void SelfCheck()
-    {
-        try
-        {
-            var list = BasicItemUI.ActiveObjects;
-            int count = list != null ? list.Count : -1;
-            Plugin.L.LogInfo($"[NoteTag] 自检: ActiveObjects={count}");
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 自检失败: {e}");
         }
     }
 
@@ -142,7 +74,7 @@ public class NoteTagUI : MonoBehaviour
         _editText = NoteTagStore.Get(_targetItem);
         _windowOpen = true;
         try { Input.imeCompositionMode = IMECompositionMode.On; } catch { }
-        Plugin.L.LogInfo($"[NoteTag] 打开备注编辑: 物品={GetItemName(_targetItem)} Ptr=0x{_targetItem.Pointer.ToInt64():X} 已有备注={NoteTagStore.Has(_targetItem)} 来源={(sourceUI != null ? "拖放" : "快捷键")}");
+        Plugin.L.LogInfo($"[NoteTag] 打开备注编辑: 物品={NameTagOps.GetItemName(_targetItem)} Ptr=0x{_targetItem.Pointer.ToInt64():X} 已有备注={NoteTagStore.Has(_targetItem)} 来源={(sourceUI != null ? "拖放" : "快捷键")}");
     }
 
     private void CloseEditor(bool save)
@@ -152,122 +84,15 @@ public class NoteTagUI : MonoBehaviour
         {
             NoteTagStore.Set(_targetItem, _editText);
             TooltipPatcher.InvalidateCache(); // 备注变更后使 tooltip 缓存失效
-            Plugin.L.LogInfo($"[NoteTag] 已保存备注 ({_editText.Length} 字符): {GetItemName(_targetItem)}");
+            Plugin.L.LogInfo($"[NoteTag] 已保存备注 ({_editText.Length} 字符): {NameTagOps.GetItemName(_targetItem)}");
             // 拖放流程：保存成功后消耗 1 个命名牌（按 ItemData 引用，格子可能已重建）
             if (_sourceItem != null)
-                ConsumeNameTag(_sourceItem, _sourceInv);
+                NameTagOps.ConsumeNameTag(_sourceItem, _sourceInv);
         }
         _windowOpen = false;
         _targetItem = null;
         _sourceItem = null;
         _sourceInv = null;
-    }
-
-    /// <summary>消耗 1 个命名牌；数量耗尽时用游戏原生移除逻辑清空格子。</summary>
-    private static void ConsumeNameTag(ItemData item, object inv)
-    {
-        try
-        {
-            if (item == null)
-            {
-                Plugin.L.LogWarning("[NoteTag] 消耗失败: 源物品为空");
-                return;
-            }
-
-            // 移除/刷新前先定位持有该物品的格子与所属面板（移除后 itemdata 被清空无法再定位）
-            var slotUI = FindSlotOf(item);
-            object panel = slotUI != null ? Reflect.Get(slotUI, "inventoryPanel") : null;
-
-            if (item.itemNumberFloat > 1f)
-            {
-                // 数量 >1：减 1 并刷新数量显示（FindSlotOf 已定位格子，直接刷新）
-                item.itemNumberFloat -= 1f;
-                if (slotUI != null) { try { slotUI.RefreshItemNumber(); } catch { } }
-            }
-            else
-            {
-                // 只剩 1 个：整体移除（数据 + UI 刷新）
-                // 拖放后 item.inventoryData 为 null（游戏拖拽期间清空归属）：
-                // 从 格子 → 所属面板 → 面板的 inventoryData 拿正确归属
-                object panelInv = null;
-                if (slotUI != null)
-                {
-                    var panel2 = Reflect.Get(slotUI, "inventoryPanel");
-                    if (panel2 != null) panelInv = Reflect.Get(panel2, "inventoryData");
-                }
-                var effectiveInv = panelInv ?? item.inventoryData ?? inv;
-
-                bool removed = false;
-                if (effectiveInv != null && RemoveItemMethod != null)
-                {
-                    try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, true }); }
-                    catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(true) 异常: {e.Message}"); }
-                    if (!removed)
-                    {
-                        try { removed = (bool)RemoveItemMethod.Invoke(effectiveInv, new object[] { item, false }); }
-                        catch (Exception e) { Plugin.L.LogError($"[NoteTag] RemoveItem(false) 异常: {e.Message}"); }
-                    }
-                }
-
-                // 无论移除结果，刷新所属面板清除残留图标
-                RefreshPanel(panel);
-            }
-            Plugin.L.LogInfo("[NoteTag] 已消耗 1 个命名牌");
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 消耗命名牌失败: {e}");
-        }
-    }
-
-    /// <summary>遍历激活格子，找到持有该 ItemData 的格子。</summary>
-    private static BasicItemUI FindSlotOf(ItemData item)
-    {
-        try
-        {
-            var list = BasicItemUI.ActiveObjects;
-            if (list == null) return null;
-            for (int i = 0; i < list.Count; i++)
-            {
-                var ui = list[i];
-                if (ui == null || ui.itemdata == null) continue;
-                if (ui.itemdata == item) return ui;
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    /// <summary>刷新背包面板（反射调 Refresh，按类型缓存 MethodInfo）。</summary>
-    private static void RefreshPanel(object panel)
-    {
-        if (panel == null) return;
-        try
-        {
-            var t = panel.GetType();
-            if (PanelRefreshCache.TryGetValue(t, out var m) && m != null)
-            {
-                m.Invoke(panel, null);
-                return;
-            }
-            var m2 = t.GetMethod("Refresh",
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (m2 != null)
-            {
-                PanelRefreshCache[t] = m2;
-                m2.Invoke(panel, null);
-            }
-        }
-        catch (Exception e)
-        {
-            Plugin.L.LogError($"[NoteTag] 背包面板刷新失败: {e.Message}");
-        }
-    }
-
-    private static string GetItemName(ItemData d)
-    {
-        try { return d.GetItemName(); }
-        catch { return "?"; }
     }
 
     private void EnsureStyles()
@@ -375,8 +200,8 @@ public class NoteTagUI : MonoBehaviour
         }
         if (_resizing && ev.type == EventType.MouseDrag)
         {
-            _windowRect.width = Mathf.Max(300f, ev.mousePosition.x - _windowRect.x);
-            _windowRect.height = Mathf.Max(180f, ev.mousePosition.y - _windowRect.y);
+            _windowRect.width = Mathf.Max(MinWindowWidth, ev.mousePosition.x - _windowRect.x);
+            _windowRect.height = Mathf.Max(MinWindowHeight, ev.mousePosition.y - _windowRect.y);
             ev.Use();
         }
 
@@ -384,7 +209,7 @@ public class NoteTagUI : MonoBehaviour
         GUI.BeginGroup(_windowRect);
         GUI.Box(new Rect(0f, 0f, _windowRect.width, _windowRect.height), GUIContent.none, _windowStyle);
         GUI.Label(new Rect(8f, 4f, _windowRect.width - 16f, 20f), Locale.T("为物品添加备注", "Add Note to Item"), _labelStyle);
-        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), Locale.T("物品：", "Item: ") + GetItemName(_targetItem), _labelStyle);
+        GUI.Label(new Rect(8f, 26f, _windowRect.width - 16f, 20f), Locale.T("物品：", "Item: ") + NameTagOps.GetItemName(_targetItem), _labelStyle);
 
         float areaHeight = Mathf.Max(40f, _windowRect.height - 122f);
         _editText = GUI.TextArea(new Rect(8f, 50f, _windowRect.width - 16f, areaHeight), _editText, _textAreaStyle);
