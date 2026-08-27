@@ -25,7 +25,7 @@ namespace TeleportStationPlugin;
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.17")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.20")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -148,35 +148,65 @@ public class SpriteInjector
 {
     internal static readonly Dictionary<int, Sprite> Cache = new();
 
-    // v0.6.17：延迟修复（挂源头注入链）——pending 保持直到全好；1s 节流；全好即停（无持续作用）
+    // v0.6.17：延迟修复（挂源头注入链）——pending 保持直到全好；1s 节流；全好即停
     private static bool _iconFixPending;
     private static float _iconFixAt;
-    private static float _iconFixTickT;
+    private static float _lastTick = -1f;
 
     internal static void ScheduleCardIconFix()
     {
         _iconFixPending = true;
         _iconFixAt = Time.unscaledTime + 1.5f;
+        Plugin.L.LogInfo($"[TS] 图标修复已调度 at={_iconFixAt:F1}");
     }
 
-    /// <summary>由 RegistrationProbe.Update 每帧调用（仅浮点比较）；菜单关闭或未到时零动作。</summary>
+    /// <summary>由 RegistrationProbe.Update 每帧调用；未到时/节流内/菜单关闭零动作。</summary>
     internal static void TickCardIconFix()
     {
         if (!_iconFixPending) return;
-        if (Time.unscaledTime < _iconFixAt) return;
-        _iconFixTickT -= 1f; // 1s 节流（Update 每帧进，用负偏移近似）
-        if (_iconFixTickT > 0f) return;
-        _iconFixTickT = 1f;
+        float now = Time.unscaledTime;
+        if (now < _iconFixAt) return;
+        if (now - _lastTick < 1f) return;
+        _lastTick = now;
         try
         {
-            // 面板必须开着且是电力栏
             var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return; // 关着→保持 pending 等下次开
+            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return; // 关着→保持 pending
             var genre = Reflect.Get(inst, "currentGenre");
             if (genre == null || genre.ToString() != "Electricity") return;
-            InjectCardIcons();
-            // 全好即停
-            if (IconsAllOk(inst)) _iconFixPending = false;
+            int hit = InjectCardIcons();
+            if (hit == 0)
+            {
+                // v0.6.20 深度诊断：单卡组件与字段
+                try
+                {
+                    Plugin.L.LogInfo($"[TS] Tick: Cache={Cache.Count} Attrs={RegistrationStore.Attrs.Count}");
+                    var gc = Reflect.Get(inst, "gridContent") as RectTransform;
+                    if (gc != null)
+                    {
+                        for (int i = 0; i < gc.childCount; i++)
+                        {
+                            var c = gc.GetChild(i);
+                            if (c == null || !c.name.StartsWith("Card_9001")) continue;
+                            var comps = new System.Text.StringBuilder();
+                            try
+                            {
+                                var cs = c.GetComponents<Component>();
+                                foreach (var comp in cs) { if (comp != null) comps.Append(comp.GetType().Name).Append(','); }
+                            }
+                            catch { }
+                            var ui = c.GetComponent<ConstructionItemCardUI>();
+                            string ic = "?";
+                            try { ic = ui == null ? "<UI=null>" : (ui.iconImage == null ? "<icon=null>" : "OK"); }
+                            catch (Exception e3) { ic = "<异常:" + e3.Message.Split('\n')[0] + ">"; }
+                            Plugin.L.LogInfo($"[TS] 诊断 '{c.name}': comps=[{comps}] uiIcon={ic} CacheHas900101={Cache.ContainsKey(900101)}");
+                        }
+                    }
+                }
+                catch (Exception e2) { Plugin.L.LogWarning($"[TS] Tick dump 异常: {e2.Message.Split('\n')[0]}"); }
+            }
+            Plugin.L.LogInfo($"[TS] Tick修复: hit={hit}");
+            if (IconsAllOk(inst)) { _iconFixPending = false; Plugin.L.LogInfo("[TS] 图标全好，修复停止"); }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] 延迟图标修复异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -307,16 +337,16 @@ public class SpriteInjector
         catch (Exception e) { Plugin.L.LogWarning($"[TS] FixIconsOnce 异常: {e.Message.Split('\n')[0]}"); }
     }
 
-    /// <summary>LoadConstructionMenu 后置：对电力栏我们的卡片直接设置图标。</summary>
-    internal static void InjectCardIcons()
+    /// <summary>LoadConstructionMenu 后置 / 延迟修复：对电力栏我们的卡片直接设置图标；返回命中数。</summary>
+    internal static int InjectCardIcons()
     {
         try
         {
-            if (RegistrationStore.Attrs.Count == 0 || Cache.Count == 0) return;
+            if (RegistrationStore.Attrs.Count == 0 || Cache.Count == 0) return 0;
             var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return;
+            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return 0;
             var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-            if (gc == null) return;
+            if (gc == null) return 0;
             int hit = 0;
             for (int i = 0; i < gc.childCount; i++)
             {
@@ -339,8 +369,9 @@ public class SpriteInjector
                 hit++;
             }
             if (hit > 0) Plugin.L.LogInfo($"[TS] 卡片图标直接注入: {hit} 张");
+            return hit;
         }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS] 卡片图标注入异常: {e.Message.Split('\n')[0]}"); }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] 卡片图标注入异常: {e.Message.Split('\n')[0]}"); return 0; }
     }
 
     private static int CardIdFromName(string n)
