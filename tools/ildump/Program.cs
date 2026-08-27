@@ -111,7 +111,10 @@ class Program
             catch { Console.WriteLine($"  FIELD {f.Name} (type-err)"); }
         }
 
-        foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+        PropertyInfo[] props;
+        try { props = t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static); }
+        catch (Exception e) { Console.WriteLine($"  <属性枚举失败: {e.Message.Split('\n')[0]}>"); props = Array.Empty<PropertyInfo>(); }
+        foreach (var p in props)
         {
             try
             {
@@ -124,7 +127,10 @@ class Program
 
         if (members)
         {
-            foreach (var m in t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly))
+            MethodInfo[] methods;
+            try { methods = t.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly); }
+            catch (Exception e) { Console.WriteLine($"  <方法枚举失败: {e.Message.Split('\n')[0]}>"); methods = Array.Empty<MethodInfo>(); }
+            foreach (var m in methods)
             {
                 try { Console.WriteLine($"  METHOD {FormatMethod(m)}"); }
                 catch { Console.WriteLine($"  METHOD {m.Name} (sig-err)"); }
