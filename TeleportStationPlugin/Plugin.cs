@@ -25,7 +25,7 @@ namespace TeleportStationPlugin;
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.23")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.25")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -630,6 +630,51 @@ internal static class RegistrarLogic
                         catch { }
                     }
                     sb.AppendLine($"  字典镜像完成: {mirrored} 个");
+                // ── 6. v0.6.24 源头列表注册：terrainObjectAttrTechGenreDic[Electricity] 的 List 追加（源头长出卡片，GetAvailable 只需幂等）──
+                try
+                {
+                    var gd2 = Reflect.Get(gc, "terrainObjectAttrTechGenreDic");
+                    int addedToList = 0;
+                    if (gd2 != null)
+                    {
+                        var itemProp = gd2.GetType().GetProperty("Item");
+                        object electrList = null;
+                        if (itemProp != null) electrList = itemProp.GetValue(gd, new object[] { TechGenre.Electricity });
+                        else
+                        {
+                            var gim = gd.GetType().GetMethod("get_Item");
+                            if (gim != null) electrList = gim.Invoke(gd, new object[] { TechGenre.Electricity });
+                        }
+                        if (electrList != null)
+                        {
+                            var cntProp = electrList.GetType().GetProperty("Count");
+                            int lstCnt = cntProp == null ? -1 : Convert.ToInt32(cntProp.GetValue(electrList));
+                            foreach (var kv in RegistrationStore.Attrs)
+                            {
+                                bool exists = false;
+                                for (int i = 0; i < lstCnt; i++)
+                                {
+                                    var existing = ListItemReflect(electrList, i) as TerrainObjectAttr;
+                                    if (existing != null && AttrIdOf(existing) == kv.Key) { exists = true; break; }
+                                }
+                                if (!exists)
+                                {
+                                    var addM = electrList.GetType().GetMethod("Add");
+                                    if (addM != null)
+                                    {
+                                        addM.Invoke(electrList, new object[] { kv.Value });
+                                        addedToList++;
+                                    }
+                                }
+                            }
+                            var cntProp2 = electrList.GetType().GetProperty("Count");
+                            sb.AppendLine($"  techGenreDic[Electricity] 列表: +{addedToList}（现 {cntProp2?.GetValue(electrList)} 项）");
+                        }
+                        else sb.AppendLine("  techGenreDic[Electricity] 获取失败");
+                    }
+                    else sb.AppendLine("  techGenreDic=null");
+                }
+                catch (Exception e4) { sb.AppendLine($"  源头列表注册异常: {e4.Message.Split('\n')[0]}"); }
                 }
                 catch (Exception e3) { sb.AppendLine($"  字典镜像异常: {e3.Message.Split('\n')[0]}"); }
             }
@@ -656,6 +701,20 @@ internal static class RegistrarLogic
         var recipe = new RecipeData();
         Reflect.Set(recipe, "itemId", def.Id);
         Reflect.Set(recipe, "outputItemNumber", 1f);
+        // v0.6.25：建造时间——按模板 craftTime 等比缩到 3 秒（原 40-48 秒）
+        try
+        {
+            var tplRt = Reflect.Get(template, "recipeData") as RecipeData;
+            float tplT = -1f;
+            if (tplRt != null) { var o = Reflect.Get(tplRt, "craftTime"); if (o != null) tplT = Convert.ToSingle(o); }
+            Plugin.L.LogInfo($"[TS] 模板 craftTime={tplT}");
+            if (tplT > 0f)
+            {
+                float target = tplT * (3f / 45f); // 45s-ish → 3s
+                Reflect.Set(recipe, "craftTime", target);
+            }
+        }
+        catch { }
         var mats = new Il2CppSystem.Collections.Generic.List<RecipeItemData>();
         foreach (var (mid, mnum) in def.Recipe)
         {
@@ -680,6 +739,26 @@ internal static class RegistrarLogic
 
     // ── v0.5.0：卡片层不再操作（源头注入后游戏原版建卡流程，引用/名字/交互全由游戏处理）。
     //    图标先沿用模板 spriteName（建筑贴图表注册排后）。
+
+    // ── v0.6.24 辅助：il2cpp List 反射读元素 / attr id ──
+    private static object ListItemReflect(object list, int i)
+    {
+        if (list == null) return null;
+        try
+        {
+            var p = list.GetType().GetProperty("Item");
+            if (p != null) return p.GetValue(list, new object[] { i });
+            var m = list.GetType().GetMethod("get_Item");
+            return m == null ? null : m.Invoke(list, new object[] { i });
+        }
+        catch { return null; }
+    }
+
+    private static int AttrIdOf(TerrainObjectAttr a)
+    {
+        try { var o = Reflect.Get(a, "id"); return o == null ? -1 : Convert.ToInt32(o); }
+        catch { return -1; }
+    }
 
     internal static Texture2D LoadTex(string file)
     {
