@@ -25,7 +25,7 @@ namespace TeleportStationPlugin;
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.20")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.23")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -77,6 +77,15 @@ public class Plugin : BasePlugin
             // v0.6.1：OnCardClicked 后置——详情图标注入
 // 已移除 v0.6.3：OnCardClicked/ShowTerrainObjectDetails/SelectItem 的 patch 均未命中详情渲染路径，
 //   SelectItem(private) patch 甚至破坏了点击流程（回滚）；详情大图标单独再议
+        // v0.6.22：GetTerrainObjectPrefabById 兜底——BuildSelected→BuildTerrainObject 按 id 查 prefab 字典（KeyNotFoundException 源头）
+            var prefabById = AccessTools.Method(typeof(GameController), "GetTerrainObjectPrefabById");
+            if (prefabById != null)
+            {
+                h.Patch(prefabById, postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
+                    nameof(SourceInjector.PrefabByIdPostfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectPrefabById（prefab 兜底）");
+            }
+            else Log.LogWarning("[TS] GetTerrainObjectPrefabById 挂钩失败");
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
@@ -128,6 +137,26 @@ public static class SourceInjector
                 try { SpriteInjector.InjectCardIconOnce(id); }
                 catch (Exception e) { Plugin.L.LogWarning($"[TS] 卡片图标修复异常: {e.Message.Split('\n')[0]}"); }
             }
+        }
+        catch { }
+    }
+
+    /// <summary>v0.6.22：GetTerrainObjectPrefabById 兜底——我们的 id 用参照建筑（120 斯特林）prefab 过渡。</summary>
+    public static void PrefabByIdPostfix(object __0, ref GameObject __result)
+    {
+        try
+        {
+            if (RegistrationStore.Attrs.Count == 0) return;
+            int id = Convert.ToInt32(__0);
+            if (id < 900101 || id > 900103) return;
+            if (__result != null) return;
+            var gc = typeof(GameController).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            if (gc == null) return;
+            var m = typeof(GameController).GetMethod("GetTerrainObjectPrefabById");
+            if (m == null) return;
+            var prefab = m.Invoke(gc, new object[] { 120 });
+            __result = prefab as GameObject;
+            if (__result != null) Plugin.L.LogInfo($"[TS] Prefab 兜底: id={id} → 参照120（斯特林模型过渡）");
         }
         catch { }
     }
@@ -513,6 +542,100 @@ internal static class RegistrarLogic
         catch (Exception e) { sb.AppendLine($"  注册异常: {e}"); }
 
         // ── 3. 源头注入由 GameController hook 完成（GetAvailableTerrainObjectAttrsByTechGenre 追加）──
+
+        // ── 4. v0.6.21 注册进 GameController.terrainObjectAttrDic（点击/建造用 dic[id] 索引——不注册会 KeyNotFoundException）──
+        try
+        {
+            var gc = typeof(GameController).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            if (gc != null)
+            {
+                var dic = Reflect.Get(gc, "terrainObjectAttrDic");
+                if (dic != null)
+                {
+                    int added = 0;
+                    foreach (var kv in RegistrationStore.Attrs)
+                    {
+                        if (!ItemRegistryHelper.DicContains(dic, kv.Key))
+                        {
+                            ItemRegistryHelper.DicAdd(dic, kv.Key, kv.Value);
+                            added++;
+                        }
+                    }
+                    sb.AppendLine($"  建筑字典注册: +{added}");
+                }
+                else sb.AppendLine("  terrainObjectAttrDic=null");
+                var gd = Reflect.Get(gc, "terrainObjectAttrTechGenreDic");
+                string gdInfo = "<null>";
+                if (gd != null)
+                {
+                    try
+                    {
+                        var cp = gd.GetType().GetProperty("Count");
+                        int cnt = cp == null ? -1 : Convert.ToInt32(cp.GetValue(gd));
+                        gdInfo = $"{gd.GetType().FullName} count={cnt}";
+                    }
+                    catch (Exception e2) { gdInfo = "读取异常:" + e2.Message.Split('\n')[0]; }
+                }
+                sb.AppendLine($"  techGenreDic: {gdInfo}");
+                // ── 5. v0.6.23 字典镜像：扫描含参照 id(120) 的字典成员，把我们的 id 镜像补入（prefab 字典等，绕开不稳定 hook）──
+                try
+                {
+                    int mirrored = 0;
+                    var members = new List<object>();
+                    try
+                    {
+                        foreach (var p in gc.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                        {
+                            try { var v = p.GetValue(gc); if (v != null) members.Add(v); } catch { }
+                        }
+                    }
+                    catch { }
+                    try
+                    {
+                        foreach (var f in gc.GetType().GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
+                        {
+                            if (f.Name.StartsWith("Native") || f.Name is "isWrapped" or "pooledPtr") continue;
+                            try { var v = f.GetValue(gc); if (v != null) members.Add(v); } catch { }
+                        }
+                    }
+                    catch { }
+                    foreach (var mem in members)
+                    {
+                        string tn = mem.GetType().Name;
+                        if (!tn.Contains("Dictionary")) continue;
+                        try
+                        {
+                            var contains = mem.GetType().GetMethod("ContainsKey");
+                            if (contains == null) continue;
+                            bool has120 = (bool)contains.Invoke(mem, new object[] { 120 });
+                            if (!has120) continue;
+                            bool has900 = (bool)contains.Invoke(mem, new object[] { 900103 });
+                            if (has900) continue;
+                            var itemProp = mem.GetType().GetProperty("Item");
+                            object srcVal = null;
+                            if (itemProp != null) srcVal = itemProp.GetValue(mem, new object[] { 120 });
+                            else
+                            {
+                                var gim = mem.GetType().GetMethod("get_Item");
+                                if (gim != null) srcVal = gim.Invoke(mem, new object[] { 120 });
+                            }
+                            var add = mem.GetType().GetMethod("Add");
+                            if (srcVal != null && add != null)
+                            {
+                                add.Invoke(mem, new object[] { 900103, srcVal });
+                                mirrored++;
+                                sb.AppendLine($"  字典镜像: {tn} 900103←120");
+                            }
+                        }
+                        catch { }
+                    }
+                    sb.AppendLine($"  字典镜像完成: {mirrored} 个");
+                }
+                catch (Exception e3) { sb.AppendLine($"  字典镜像异常: {e3.Message.Split('\n')[0]}"); }
+            }
+            else sb.AppendLine("  GameController.instance=null");
+        }
+        catch (Exception e) { sb.AppendLine($"  字典注册异常: {e.Message.Split('\n')[0]}"); }
 
         sb.AppendLine("[TS] ===== 注入结束 =====");
         Plugin.L.LogInfo(sb.ToString());
