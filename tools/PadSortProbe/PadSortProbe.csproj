@@ -38,6 +38,13 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- 引用 TS 插件以检测 PadLayerPin 组件是否随实例复制 -->
+    <Reference Include="TeleportStationPlugin">
+      <HintPath>$(GameDir)\BepInEx\plugins\TeleportStation\TeleportStationPlugin.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- 跨 mod 共享源码（../../Shared：Reflect/SharedLog 等） -->
     <Compile Include="..\..\Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
     <Using Include="ZedZoneShared" />

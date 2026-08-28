@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
+using TeleportStationPlugin; // PadLayerPin 组件检测（编译期引用 TS 插件）
 using UnityEngine;
 
 namespace PadSortProbe;
@@ -80,27 +81,39 @@ public class SortProbe : MonoBehaviour
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
 
-        // 圆盘：Resources.FindObjectsOfTypeAll（含隐藏对象——克隆 prefab 的 HideAndDontSave 可能被实例继承，FindObjectsOfType 看不到）
+        // 圆盘/近距建筑：Resources.FindObjectsOfTypeAll（含隐藏）→ 以玩家位置 40 单位内过滤 → dump SR 层/order + PadLayerPin 组件存在性
         bool found = false;
         try
         {
+            Vector2 pl = Vector2.zero;
+            try
+            {
+                var pc0 = typeof(GameController).GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)?.GetValue(null);
+                var player0 = pc0 == null ? null : Reflect.Get(pc0, "playerCharacter") as Component;
+                if (player0 != null) { pl.x = player0.transform.position.x; pl.y = player0.transform.position.y; }
+            }
+            catch { }
             foreach (var sr in Resources.FindObjectsOfTypeAll<SpriteRenderer>())
             {
                 if (sr == null) continue;
-                bool isPad = false;
+                var pos = sr.transform.position;
+                float dx = pos.x - pl.x, dy = pos.y - pl.y;
+                if (dx * dx + dy * dy > 40f * 40f) continue; // 只采玩家附近
+                bool nearPad = false;
                 var cur = sr.transform;
                 int d = 0;
                 while (cur != null && d++ < 16)
                 {
-                    if (cur.name != null && cur.name.Contains("TS_TeleportPad")) { isPad = true; break; }
+                    if (cur.name != null && (cur.name.Contains("TS_TeleportPad") || cur.name.Contains("TerrainObject") || cur.name.Contains("90010"))) { nearPad = true; break; }
                     cur = cur.parent;
                 }
-                if (!isPad) continue;
+                if (!nearPad) continue;
                 found = true;
-                Plugin.L.LogInfo($"[PSP] 圆盘SR '{sr.transform.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({sr.transform.position.x:F1},{sr.transform.position.y:F1}) activeInHierarchy={sr.gameObject.activeInHierarchy} hideFlags={sr.gameObject.hideFlags}");
+                bool hasPin = sr.GetComponentInParent<PadLayerPin>() != null;
+                Plugin.L.LogInfo($"[PSP] 近距SR '{sr.transform.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1}) PadLayerPin={(hasPin ? "YES" : "no")} active={sr.gameObject.activeInHierarchy}");
             }
         }
-        catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 圆盘采集异常: {e2.Message.Split('\n')[0]}"); }
-        Plugin.L.LogInfo(found ? "[PSP] === 圆盘采集完成 ===" : "[PSP] 圆盘未找到（Resources 全量亦无，排查克隆/实例化）");
+        catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 近距采集异常: {e2.Message.Split('\n')[0]}"); }
+        Plugin.L.LogInfo(found ? "[PSP] === 近距采集完成 ===" : "[PSP] 近距无候选（含 TerrainObject/90010x/TS_TeleportPad 名字）（玩家可能未在圆盘上）");
     }
 }
