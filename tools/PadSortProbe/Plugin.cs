@@ -16,7 +16,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.1")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.3")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -25,13 +25,14 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.1 已加载（Resources 全量采集含隐藏对象）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.3 已加载（近距 25 单位全 SR + 去重变化采样）");
     }
 }
 
 public class SortProbe : MonoBehaviour
 {
     private float _next = 3f;
+    private static readonly HashSet<string> _seen = new();
 
     private void Update()
     {
@@ -81,7 +82,8 @@ public class SortProbe : MonoBehaviour
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
 
-        // 圆盘/近距建筑：Resources.FindObjectsOfTypeAll（含隐藏）→ 以玩家位置 40 单位内过滤 → dump SR 层/order + PadLayerPin 组件存在性
+        // 近距全部 SR（玩家 25 单位内，不论名字——圆盘实例名字形态未知；去掉泛型 GetComponent（IL2CPP interop 崩溃））
+        // 去重：root+sr 名+layer+order 组合变化才打（动态排序证据直接现形）
         bool found = false;
         try
         {
@@ -98,22 +100,25 @@ public class SortProbe : MonoBehaviour
                 if (sr == null) continue;
                 var pos = sr.transform.position;
                 float dx = pos.x - pl.x, dy = pos.y - pl.y;
-                if (dx * dx + dy * dy > 40f * 40f) continue; // 只采玩家附近
-                bool nearPad = false;
-                var cur = sr.transform;
-                int d = 0;
-                while (cur != null && d++ < 16)
+                if (dx * dx + dy * dy > 25f * 25f) continue;
+                // 根名字（最顶层）
+                string root = "?";
+                try
                 {
-                    if (cur.name != null && (cur.name.Contains("TS_TeleportPad") || cur.name.Contains("TerrainObject") || cur.name.Contains("90010"))) { nearPad = true; break; }
-                    cur = cur.parent;
+                    var r = sr.transform;
+                    while (r.parent != null) r = r.parent;
+                    root = r.name ?? "?";
                 }
-                if (!nearPad) continue;
+                catch { }
+                string layer = sr.sortingLayerName + "(" + sr.sortingLayerID + ")";
+                string key = root + "|" + (sr.transform.name ?? "?") + "|" + layer + "|" + sr.sortingOrder;
+                if (_seen.Contains(key)) continue;
+                _seen.Add(key);
                 found = true;
-                bool hasPin = sr.GetComponentInParent<PadLayerPin>() != null;
-                Plugin.L.LogInfo($"[PSP] 近距SR '{sr.transform.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1}) PadLayerPin={(hasPin ? "YES" : "no")} active={sr.gameObject.activeInHierarchy}");
+                Plugin.L.LogInfo($"[PSP] SR '{sr.transform.name}' root='{root}' layer={layer} order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1})");
             }
         }
         catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 近距采集异常: {e2.Message.Split('\n')[0]}"); }
-        Plugin.L.LogInfo(found ? "[PSP] === 近距采集完成 ===" : "[PSP] 近距无候选（含 TerrainObject/90010x/TS_TeleportPad 名字）（玩家可能未在圆盘上）");
+        Plugin.L.LogInfo(found ? "[PSP] === 近距变化采样 ===" : "[PSP] 近距无新组合（玩家附近 25 单位无 SR 或全静态）");
     }
 }
