@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.34（源头图标定案：GetTerrainObjectIconSprite 唯一源头，零写路径；图标缓存提前）。
+/// 远距离传送站台 MOD v0.6.35（Cache 兜底重载：图标源头实时自愈，防模板图标 fallback；零写路径）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.34")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.35")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -117,7 +117,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.34 图标缓存提前（源头图标定案，零写路径）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.35 Cache 兜底重载（图标源头实时自愈，防模板图标 fallback）");
     }
 }
 
@@ -315,11 +315,12 @@ public class SpriteInjector
     }
 
     /// <summary>注册时缓存贴图 Sprite（从 textures/ 目录加载）。</summary>
-    internal static void CacheSprite(BuildingDef def)
+    internal static void CacheSprite(BuildingDef def, bool force = false)
     {
         try
         {
-            if (Cache.ContainsKey(def.Id)) return; // v0.6.34 幂等：提前缓存与注册期重复调用安全
+            if (!force && Cache.ContainsKey(def.Id)) return; // v0.6.34 幂等：提前缓存与注册期重复调用安全
+            if (Cache.ContainsKey(def.Id)) Cache.Remove(def.Id); // v0.6.35 force 重载先清旧键
             string p = Path.Combine(Path.Combine(Plugin.PluginDir, "textures"), def.IconFile);
             if (!File.Exists(p)) { Plugin.L.LogWarning($"[TS] 贴图不存在: {p}"); return; }
             var bytes = File.ReadAllBytes(p);
@@ -478,7 +479,8 @@ public static class BuildTimeSourceFix
     }
 }
 
-/// <summary>v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) → Cache[id]，卡片+详情一次解决（public 源头，零轮询）。</summary>
+/// <summary>v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) → Cache[id]，卡片+详情一次解决（public 源头，零轮询）。
+/// v0.6.35：Cache miss 时实时强制重载（源头自愈，防模板图标 fallback）。</summary>
 public static class IconSourceFix
 {
     public static void Postfix(int __0, ref Sprite __result)
@@ -486,13 +488,26 @@ public static class IconSourceFix
         try
         {
             if (__0 < 900101 || __0 > 900103) return;
-            if (SpriteInjector.Cache.TryGetValue(__0, out var sp) && sp != null)
+            SpriteInjector.Cache.TryGetValue(__0, out var sp);
+            if (sp == null || string.IsNullOrEmpty(sp.name))
+            {
+                // v0.6.35 源头兜底：Cache 异常时实时重载（每次菜单/详情调用都自愈）
+                var def = Buildings.ById(__0);
+                if (def != null)
+                {
+                    Plugin.L.LogWarning($"[TS] 图标源头兜底重载: id={__0}");
+                    SpriteInjector.CacheSprite(def, force: true);
+                    SpriteInjector.Cache.TryGetValue(__0, out sp);
+                }
+            }
+            if (sp != null && !string.IsNullOrEmpty(sp.name))
             {
                 __result = sp;
                 Plugin.L.LogInfo($"[TS] 图标源头: id={__0} → {sp.name}");
             }
+            else Plugin.L.LogWarning($"[TS] 图标源头兜底失败: id={__0}");
         }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标源头异常: {e.Message.Split('\n')[0]}"); }
     }
 }
 
@@ -793,14 +808,28 @@ internal static class RegistrarLogic
         Reflect.Set(attr, "recipeData", recipe);
 
         RegistrationStore.Attrs[def.Id] = attr;
-        SpriteInjector.CacheSprite(def); // v0.5.3：图标缓存（Image.set_sprite 兜底用）
+        SpriteInjector.CacheSprite(def); // v0.5.3：图标缓存（幂等）
         // v0.6.31 源头图标：让 BuildGridArea 天然拿到正确图（不碰 ConstructionPanel/Build 实例层）
         if (SpriteInjector.Cache.TryGetValue(def.Id, out var spCached) && spCached != null && !string.IsNullOrEmpty(spCached.name))
         {
             try { Reflect.Set(attr, "spriteName", spCached.name); Plugin.L.LogInfo($"[TS] spriteName 源头: id={def.Id} → {spCached.name}"); }
             catch (Exception e) { Plugin.L.LogWarning($"[TS] spriteName 设置异常: {e.Message.Split('\n')[0]}"); }
         }
-        else Plugin.L.LogWarning($"[TS] spriteName 源头跳过: id={def.Id} Cache miss/empty name");
+        else
+        {
+            // v0.6.35 诊断 + 兜底：Cache miss/异常时打印状态并强制重载一次
+            var diag = new System.Text.StringBuilder($"[TS] spriteName 源头跳过: id={def.Id} Cache.Count={SpriteInjector.Cache.Count}");
+            foreach (var kv in SpriteInjector.Cache) diag.Append($" [{kv.Key}={(kv.Value == null ? "null" : (kv.Value.name ?? "<unnamed>"))}]");
+            Plugin.L.LogWarning(diag.ToString());
+            Plugin.L.LogWarning($"[TS] spriteName 兜底重载: id={def.Id}");
+            SpriteInjector.CacheSprite(def, force: true);
+            if (SpriteInjector.Cache.TryGetValue(def.Id, out var sp2) && sp2 != null && !string.IsNullOrEmpty(sp2.name))
+            {
+                try { Reflect.Set(attr, "spriteName", sp2.name); Plugin.L.LogInfo($"[TS] spriteName 兜底成功: id={def.Id} → {sp2.name}"); }
+                catch (Exception e) { Plugin.L.LogWarning($"[TS] spriteName 设置异常2: {e.Message.Split('\n')[0]}"); }
+            }
+            else Plugin.L.LogWarning($"[TS] spriteName 兜底失败: id={def.Id}");
+        }
         // v0.5.2：ModSpriteRegistry 注册建筑贴图（贴图在 textures/ 子目录，官方字典源头，双保险）
         try
         {

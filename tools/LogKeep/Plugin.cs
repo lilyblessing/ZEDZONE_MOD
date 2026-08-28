@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Text.RegularExpressions;
+using System.Text;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
@@ -10,19 +10,16 @@ using UnityEngine;
 namespace LogKeep;
 
 /// <summary>
-/// LogKeep v0.2.0 —— BepInEx 日志「启动轮转」方案（配合 BepInEx.cfg [Logging.Disk] AppendLog=true）。
-/// 机制：
-///  1) 游戏启动（插件 Load）：
-///     a. 读 LogOutput.log：若非空则说明是上一轮运行残留；
-///     b. 尾部提取 [LogKeep] END &lt;ts&gt;（正常退出标记）；崩溃无 END 则取 RUN &lt;ts&gt;（上轮开始），再退而取文件 mtime；
-///     c. 整份复制到 BepInEx\log-archive\LogOutput-&lt;ts&gt;.log（保留最近 60 份自动裁剪）；
-///     d. 截断清空主文件（BepInEx DiskLogListener 为 FileMode.Append+FileShare.ReadWrite，截断后追加仍写 EOF，安全）；
-///     e. 打 [LogKeep] RUN &lt;ts&gt; 横幅。
-///  2) 游戏退出（OnApplicationQuit）：打 [LogKeep] END &lt;ts&gt; 行 —— 下次启动据此命名归档。
-/// 效果：主日志永远约单轮大小（读日志 token 成本恒定）；每轮完整日志按日期时间独立存档于 log-archive/。
-/// 失败兜底：截断被拒（句柄共享异常）→ 告警 + 主日志继续累积、下次启动重试，绝不丢日志。
+/// LogKeep v0.3.0 —— BepInEx 日志双写归档（tee 方案）。
+/// 背景：v0.2.0 的「启动轮转」实测失败——BepInEx 打开 LogOutput.log 时不共享读权限（FileShare 不含 Read），
+///       任何插件内读主日志文件都会 AccessDenied；故 v0.2.0 已回滚并放弃读文件思路。
+/// 机制：Load() 时找到 DiskLogListener（BepInEx 写盘监听器），把它的 LogWriter 替换为 TeeWriter：
+///   - 原 writer（主文件 LogOutput.log）继续正常写（由 BepInEx 管理，AppendLog=false 启动自清，主文件恒单轮）；
+///   - 并行写一份完整副本到 BepInEx\log-archive\LogOutput-&lt;本轮启动时间&gt;.log —— 每轮一份独立完整日志，
+///     崩溃时也完整（log 每行实时双写）。归档目录由本插件裁剪（保留最近 60 份）。
+/// cfg 配套：BepInEx.cfg [Logging.Disk] AppendLog = false（主文件每轮覆写，token 成本恒定）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.logkeep", "LogKeep", "0.2.0")]
+[BepInPlugin("com.zedzone.tool.logkeep", "LogKeep", "0.3.0")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -31,72 +28,94 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<LogKeepComponent>();
-        LogKeepComponent.RotateOnce(); // 启动轮转：归档旧轮 → 清空主文件
-        Plugin.L.LogInfo($"[LogKeep] RUN {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        Log.LogInfo("[LogKeep] v0.2.0 已加载（启动轮转：旧轮归档到 log-archive/，主日志保持单轮）");
+        LogKeepComponent.Install();
+        Log.LogInfo($"[LogKeep] ==================== 本轮运行开始 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====================");
+        Log.LogInfo("[LogKeep] v0.3.0 已加载（tee 双写：主日志单轮 + log-archive 每轮时间戳归档）");
     }
 }
 
 public class LogKeepComponent : MonoBehaviour
 {
-    private static readonly string LogDir = Path.Combine(Environment.CurrentDirectory, "BepInEx");
-    private static readonly string LogFile = Path.Combine(LogDir, "LogOutput.log");
-    private static readonly string ArchiveDir = Path.Combine(LogDir, "log-archive");
+    private static bool _installed;
+    private static string _lastCleanup = "";
 
-    private void Update() { } // v0.2.0 纯轮转，无周期任务
-
-    /// <summary>Unity 退出回调：写 END 时间戳（供下次启动归档命名）；崩溃时缺失则退化用 RUN/mtime。</summary>
-    private void OnApplicationQuit()
+    private void Update()
     {
-        try { Plugin.L.LogInfo($"[LogKeep] END {DateTime.Now:yyyy-MM-dd HH:mm:ss}"); }
-        catch { }
-    }
-
-    public static void RotateOnce()
-    {
+        // 轻量维护：归档目录 60 份上限（每轮启动 Install 后清一次即可；这里兜底定期）
         try
         {
-            string full = File.Exists(LogFile) ? File.ReadAllText(LogFile) : "";
-            if (string.IsNullOrWhiteSpace(full)) return; // 首次/已由上一轮清空
-
-            string ts = ExtractTime(full) ?? File.GetLastWriteTime(LogFile).ToString("yyyyMMdd-HHmmss");
-            Directory.CreateDirectory(ArchiveDir);
-            string dst = Path.Combine(ArchiveDir, $"LogOutput-{ts}.log");
-            if (!File.Exists(dst)) File.WriteAllText(dst, full); // 去重：同名已归档则跳过
-
-            // 只保留最近 60 份（按文件名时间戳排序）
-            var olds = Directory.GetFiles(ArchiveDir, "LogOutput-*.log")
+            string now = DateTime.Now.ToString("yyyyMMddHH");
+            if (_lastCleanup == now) return;
+            _lastCleanup = now;
+            string dir = ArchiveDir;
+            if (!Directory.Exists(dir)) return;
+            var olds = Directory.GetFiles(dir, "LogOutput-*.log")
                 .OrderByDescending(f => f).Skip(60).ToArray();
             foreach (var f in olds)
             {
                 try { File.Delete(f); } catch { }
             }
-
-            // 截断主文件：BepInEx 用 FileMode.Append+FileShare.ReadWrite，截断后其追加仍写 EOF，安全
-            try
-            {
-                using (var fs = new FileStream(LogFile, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) { }
-                Plugin.L.LogInfo($"[LogKeep] 轮转完成: 旧日志({full.Length} B) → {Path.GetFileName(dst)}，主日志已清空");
-            }
-            catch (Exception e)
-            {
-                Plugin.L.LogWarning($"[LogKeep] 截断失败（句柄共享限制）: {e.Message.Split('\n')[0]}；主日志继续累积，下次启动重试");
-            }
         }
-        catch (Exception e) { Plugin.L.LogWarning($"[LogKeep] 轮转异常: {e.Message.Split('\n')[0]}"); }
+        catch { }
     }
 
-    /// <summary>优先取最近的 END（正常退出）；全无 END 取最后一个 RUN（崩溃轮开始时间）；都无则 null（调用方退用 mtime）。</summary>
-    private static string ExtractTime(string content)
+    private static string ArchiveDir => Path.Combine(Environment.CurrentDirectory, "BepInEx", "log-archive");
+
+    internal static void Install()
     {
-        var m = Regex.Matches(content, @"\[LogKeep\] (END|RUN) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})");
-        string lastRun = null;
-        foreach (Match x in m)
+        if (_installed) return;
+        try
         {
-            string t = x.Groups[2].Value.Replace("-", "").Replace(":", "").Replace(" ", "-");
-            if (x.Groups[1].Value == "END") return t;
-            lastRun = t;
+            foreach (var l in BepInEx.Logging.Logger.Listeners) // 全限定避免与 UnityEngine.Logger 歧义
+            {
+                if (l is DiskLogListener d && d.LogWriter != null)
+                {
+                    string ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
+                    Directory.CreateDirectory(ArchiveDir);
+                    string ark = Path.Combine(ArchiveDir, $"LogOutput-{ts}.log");
+                    var fw = new StreamWriter(ark, true, Encoding.UTF8) { AutoFlush = true };
+                    var tee = new TeeWriter(d.LogWriter, fw);
+                    // LogWriter setter 非公开（ildump Public 显示有误），走反射设置
+                    var prop = typeof(DiskLogListener).GetProperty("LogWriter", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (prop != null && prop.CanWrite) prop.SetValue(d, tee);
+                    else
+                    {
+                        var m = typeof(DiskLogListener).GetMethod("set_LogWriter", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        if (m == null) { Plugin.L.LogWarning("[LogKeep] set_LogWriter 反射失败，双写未装"); fw.Dispose(); return; }
+                        m.Invoke(d, new object[] { tee });
+                    }
+                    _installed = true;
+                    Plugin.L.LogInfo($"[LogKeep] tee 双写已装: 本轮归档 → {Path.GetFileName(ark)}");
+                    return;
+                }
+            }
+            Plugin.L.LogWarning("[LogKeep] 未找到 DiskLogListener，双写未装");
         }
-        return lastRun;
+        catch (Exception e) { Plugin.L.LogWarning($"[LogKeep] 安装异常: {e.Message.Split('\n')[0]}"); }
+    }
+}
+
+/// <summary>双写 TextWriter：同一内容同时写主日志与归档文件。Dispose 只关归档 writer（主 writer 归 BepInEx 管）。</summary>
+public class TeeWriter : TextWriter
+{
+    private readonly TextWriter _main;
+    private readonly TextWriter _archive;
+
+    public TeeWriter(TextWriter main, TextWriter archive) { _main = main; _archive = archive; }
+
+    public override Encoding Encoding => _main.Encoding;
+
+    public override void Write(char value) { _main.Write(value); _archive.Write(value); }
+    public override void Write(string value) { _main.Write(value); _archive.Write(value); }
+    public override void WriteLine(string value) { _main.WriteLine(value); _archive.WriteLine(value); }
+    public override void Flush() { _main.Flush(); _archive.Flush(); }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+        {
+            try { _archive.Flush(); _archive.Dispose(); } catch { }
+        }
+        base.Dispose(disposing);
     }
 }
