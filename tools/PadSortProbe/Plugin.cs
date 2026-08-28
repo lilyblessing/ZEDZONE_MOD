@@ -16,7 +16,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.8")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.9")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -25,7 +25,7 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.8 已加载（MapController 建筑登记列表 + 字典直取）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.9 已加载（+睡袋放置物参照取证）");
     }
 }
 
@@ -81,6 +81,25 @@ public class SortProbe : MonoBehaviour
             }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
+
+        // 睡袋（放置物参照）取证：名字含 Sleeping/Bag/Mattress/Deployable -> SR 层/order/贴图
+        try
+        {
+            foreach (var sr in Resources.FindObjectsOfTypeAll<SpriteRenderer>())
+            {
+                if (sr == null) continue;
+                string sn4 = "";
+                try { sn4 = sr.sprite == null ? "" : (sr.sprite.name ?? ""); } catch { }
+                if (!sn4.Contains("Sleeping") && !sn4.Contains("Bag") && !sn4.Contains("Matt") && !sn4.Contains("Deploy")) continue;
+                var r2 = sr.transform;
+                while (r2.parent != null) r2 = r2.parent;
+                string k3 = "SLEEP|" + r2.name + "|" + sr.sortingLayerName + "|" + sr.sortingOrder;
+                if (_seen.Contains(k3)) continue;
+                _seen.Add(k3);
+                Plugin.L.LogInfo($"[PSP] ★睡袋类 SR root='{r2.name}' SR='{sr.transform.name}' sprite={sn4} layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({sr.transform.position.x:F1},{sr.transform.position.y:F1}) active={sr.gameObject.activeInHierarchy}");
+            }
+        }
+        catch (Exception e7) { }
 
         // MapController/GameController 建筑登记列表（反射字段，不受 IL2CPP stripping 影响）——找 TerrainObject 列表并 dump 每建筑 SR 层/贴图
         try
