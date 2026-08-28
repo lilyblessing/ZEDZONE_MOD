@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.38（实体尺寸放大 + 圆盘无碰撞/FX_BG 图层特殊化）。
+/// 远距离传送站台 MOD v0.6.39（圆盘 2 倍 + 层守卫：拦截建筑 Y 排序对圆盘层的改写）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.38")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.39")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -105,6 +105,21 @@ public class Plugin : BasePlugin
                 Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectIconSprite（图标源头）");
             }
             else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
+            // v0.6.39：圆盘渲染层守卫——拦截游戏「建筑 Y 排序」对圆盘实例 sortingLayer 的改写（恒守 FX_BG，防圆盘盖玩家/车）
+            var setLayerName = AccessTools.Method(typeof(SpriteRenderer), "set_sortingLayerName");
+            if (setLayerName != null)
+            {
+                h.Patch(setLayerName, prefix: new HarmonyMethod(typeof(PadLayerGuard).GetMethod(
+                    nameof(PadLayerGuard.LayerNamePrefix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 SpriteRenderer.set_sortingLayerName（圆盘层守卫）");
+            }
+            var setLayerId = AccessTools.Method(typeof(SpriteRenderer), "set_sortingLayerID");
+            if (setLayerId != null)
+            {
+                h.Patch(setLayerId, prefix: new HarmonyMethod(typeof(PadLayerGuard).GetMethod(
+                    nameof(PadLayerGuard.LayerIdPrefix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 SpriteRenderer.set_sortingLayerID（圆盘层守卫）");
+            }
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
@@ -117,7 +132,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.38 实体尺寸放大 + 圆盘无碰撞/FX_BG（新贴图 64x74/64x83/120x86）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.39 圆盘 2 倍（3.5→7.0）+ 层守卫（PadLayerGuard）");
     }
 }
 
@@ -479,6 +494,44 @@ public static class BuildTimeSourceFix
     }
 }
 
+/// <summary>v0.6.39：圆盘层守卫——游戏建筑 Y 排序会把圆盘 sortingLayer 抬到角色之上（圆盘盖玩家），拦截其对 TS_TeleportPad 实例的层改写，恒守 FX_BG。</summary>
+public static class PadLayerGuard
+{
+    private static bool IsPad(Transform t)
+    {
+        int d = 0;
+        while (t != null && d++ < 16)
+        {
+            string n = t.name;
+            if (n != null && n.Contains("TS_TeleportPad")) return true;
+            t = t.parent;
+        }
+        return false;
+    }
+
+    public static bool LayerNamePrefix(SpriteRenderer __instance, string value)
+    {
+        try
+        {
+            if (value != "FX_BG" && __instance != null && IsPad(__instance.transform))
+                return false; // 拒绝非 FX_BG 写入（建筑 Y 排序），圆盘层恒守地板之上/角色之下
+        }
+        catch { }
+        return true;
+    }
+
+    public static bool LayerIdPrefix(SpriteRenderer __instance, int value)
+    {
+        try
+        {
+            int fxbg = SortingLayer.NameToID("FX_BG");
+            if (value != fxbg && __instance != null && IsPad(__instance.transform))
+                return false;
+        }
+        catch { }
+        return true;
+    }
+}
 /// <summary>v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) → Cache[id]，卡片+详情一次解决（public 源头，零轮询）。
 /// v0.6.35：Cache miss 时实时强制重载（源头自愈，防模板图标 fallback）。</summary>
 public static class IconSourceFix
@@ -567,7 +620,7 @@ internal static class Buildings
 
     public static readonly BuildingDef PadDef = new()
     { Id = 900102, NameZh = "传送台圆盘", NameEn = "Teleport Pad", SpriteKey = "TeleportPad", IconFile = "pad.png",
-      EntityWorldH = 3.5f, NoCollision = true, LayerOverride = "FX_BG", // v0.6.38：停车盘——无碰撞可站立、层在地板(Surface)上玩家(Character)下
+      EntityWorldH = 7.0f, NoCollision = true, LayerOverride = "FX_BG", // v0.6.39：2 倍盘（4.9→约 9.8 单位宽）；无碰撞可站立、层守卫 FX_BG
       DescZh = "传送台圆盘，配合控制台实现人员与物资的远距离定点传送。",
       Recipe = new[] { (66, 24f), (64, 20f), (61, 24f), (29, 12f), (86, 1f), (1082, 1f) } };
 
@@ -959,7 +1012,7 @@ internal static class RegistrarLogic
                     try { sr.sortingLayerName = def.LayerOverride; } catch { }
                 }
             }
-            Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} mainDone={mainDone}");
+            Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} 圆盘={(def.NoCollision ? "无碰撞" : "-")} 层={def.LayerOverride ?? "-"}");
             return clone;
         }
         catch (Exception e)
