@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.37（实体贴图 ppu 自适应：贴图高度对齐模板世界尺寸，换任意尺寸贴图免调代码）。
+/// 远距离传送站台 MOD v0.6.38（实体尺寸放大 + 圆盘无碰撞/FX_BG 图层特殊化）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.37")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.38")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -117,7 +117,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.37 实体贴图 ppu 自适应（贴图高度对齐模板世界尺寸）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.38 实体尺寸放大 + 圆盘无碰撞/FX_BG（新贴图 64x74/64x83/120x86）");
     }
 }
 
@@ -551,6 +551,9 @@ internal sealed class BuildingDef
 {
     public int Id;
     public string NameZh, NameEn, SpriteKey, IconFile, DescZh;
+    public float EntityWorldH;      // v0.6.38 目标实体世界高度（>0 覆盖模板高；用于放大贴图像素匹配世界尺寸）
+    public bool NoCollision;        // v0.6.38 无碰撞（圆盘：禁全部 Collider2D，容纳玩家站立/车辆停泊）
+    public string LayerOverride;    // v0.6.38 排序层覆盖（圆盘：FX_BG——比地板高、比玩家/车辆低）
     public (int id, float num)[] Recipe;
 }
 
@@ -558,16 +561,19 @@ internal static class Buildings
 {
     public static readonly BuildingDef ConsoleDef = new()
     { Id = 900101, NameZh = "传送站控制台", NameEn = "Teleport Console", SpriteKey = "TeleportConsole", IconFile = "console.png",
+      EntityWorldH = 2.5f, // v0.6.38：比通讯终端模板(2.0)稍大，匹配 64x83 贴图
       DescZh = "传送站主控台，负责远程传送站台的启动控制与目标设定。",
       Recipe = new[] { (28, 12f), (34, 48f), (61, 8f), (29, 24f), (1070, 1f), (84, 2f) } };
 
     public static readonly BuildingDef PadDef = new()
     { Id = 900102, NameZh = "传送台圆盘", NameEn = "Teleport Pad", SpriteKey = "TeleportPad", IconFile = "pad.png",
+      EntityWorldH = 3.5f, NoCollision = true, LayerOverride = "FX_BG", // v0.6.38：停车盘——无碰撞可站立、层在地板(Surface)上玩家(Character)下
       DescZh = "传送台圆盘，配合控制台实现人员与物资的远距离定点传送。",
       Recipe = new[] { (66, 24f), (64, 20f), (61, 24f), (29, 12f), (86, 1f), (1082, 1f) } };
 
     public static readonly BuildingDef BioGenDef = new()
     { Id = 900103, NameZh = "生物质发电机", NameEn = "Biomass Generator", SpriteKey = "BiomassGenerator", IconFile = "biogen.png",
+      EntityWorldH = 3.0f, // v0.6.38：比斯特林模板(2.67)略大，匹配 64x74 贴图
       DescZh = "生物质发电机，焚烧腐肉与过期食品为基地供给电力。",
       Recipe = new[] { (8, 20f), (61, 16f), (29, 12f), (13, 30f), (41, 1f) } };
 
@@ -894,23 +900,26 @@ internal static class RegistrarLogic
             if (iconSp == null || iconSp.texture == null) { Plugin.L.LogWarning($"[TS] prefab 克隆无贴图: id={def.Id} 退回模板"); return template; }
             var tex = iconSp.texture;
             // v0.6.37 ppu 自适应：贴图世界尺寸对齐模板主 SR 世界高度（像素密度自动匹配原版风格，换任意尺寸贴图无需改代码）
-            float worldH = 2f;
-            try
+            float worldH = def.EntityWorldH > 0f ? def.EntityWorldH : 2f;
+            if (def.EntityWorldH <= 0f)
             {
-                var tSrs = template.GetComponentsInChildren<SpriteRenderer>(true);
-                foreach (var s in tSrs)
+                try
                 {
-                    if (s != null && s.sprite != null && s.sprite.texture != null)
+                    var tSrs = template.GetComponentsInChildren<SpriteRenderer>(true);
+                    foreach (var s in tSrs)
                     {
-                        var t = s.sprite;
-                        float ppuT = t.pixelsPerUnit > 0f ? t.pixelsPerUnit : 24f;
-                        worldH = t.rect.height / ppuT;
-                        break;
+                        if (s != null && s.sprite != null && s.sprite.texture != null)
+                        {
+                            var t = s.sprite;
+                            float ppuT = t.pixelsPerUnit > 0f ? t.pixelsPerUnit : 24f;
+                            worldH = t.rect.height / ppuT;
+                            break;
+                        }
                     }
                 }
+                catch { }
+                if (worldH <= 0f) worldH = 2f;
             }
-            catch { }
-            if (worldH <= 0f) worldH = 2f;
             float ppu = tex.height / worldH;
             var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), ppu);
             sp.name = def.SpriteKey + "_Body";
@@ -931,6 +940,24 @@ internal static class RegistrarLogic
                 }
                 if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
                     sr.enabled = false; // 零件贴图禁用（整机贴图已含细节）
+            }
+            // v0.6.38 圆盘特殊化：无碰撞（禁全部 Collider2D）+ 排序层覆盖（FX_BG：地板之上、玩家/车辆之下）
+            if (def.NoCollision)
+            {
+                var cols = clone.GetComponentsInChildren<Collider2D>(true);
+                foreach (var col in cols)
+                {
+                    if (col == null) continue;
+                    col.enabled = false;
+                }
+            }
+            if (!string.IsNullOrEmpty(def.LayerOverride))
+            {
+                foreach (var sr in srs)
+                {
+                    if (sr == null) continue;
+                    try { sr.sortingLayerName = def.LayerOverride; } catch { }
+                }
             }
             Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} mainDone={mainDone}");
             return clone;
