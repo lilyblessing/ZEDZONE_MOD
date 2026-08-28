@@ -15,7 +15,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.0")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.1")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -24,7 +24,7 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.0 已加载（每 2s 采集圆盘/玩家/载具 SR 排序）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.1 已加载（Resources 全量采集含隐藏对象）");
     }
 }
 
@@ -43,24 +43,7 @@ public class SortProbe : MonoBehaviour
 
     private static void Collect()
     {
-        // 找圆盘实例
-        var pads = UnityEngine.Object.FindObjectsOfType<Transform>(true);
-        bool found = false;
-        foreach (var t in pads)
-        {
-            if (t == null || t.name == null || !t.name.Contains("TS_TeleportPad")) continue;
-            found = true;
-            // 根对象
-            var srs = t.GetComponentsInChildren<SpriteRenderer>(true);
-            foreach (var sr in srs)
-            {
-                if (sr == null) continue;
-                var pos = t.position;
-                Plugin.L.LogInfo($"[PSP] 圆盘 '{t.name}' SR '{sr.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1})");
-            }
-        }
-        if (!found) return;
-        // 玩家
+        // 玩家 + 载具（无条件采集，无论圆盘是否可见）
         try
         {
             var pc = typeof(GameController).GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)?.GetValue(null);
@@ -70,20 +53,19 @@ public class SortProbe : MonoBehaviour
                 if (player != null)
                 {
                     var psrs = player.GetComponentsInChildren<SpriteRenderer>(true);
-                    Plugin.L.LogInfo($"[PSP] 玩家 '{player.name}' 位置=({player.transform.position.x:F1},{player.transform.position.y:F1}) SR数={psrs.Length}");
+                    Plugin.L.LogInfo($"[PSP] 玩家 '{player.name}' 位置=({player.transform.position.x:F1},{player.transform.position.y:F1}) SR数={psrs.Length} hideFlags={player.gameObject.hideFlags}");
                     foreach (var sr in psrs)
                     {
                         if (sr == null) continue;
                         Plugin.L.LogInfo($"[PSP]   玩家SR '{sr.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder}");
                     }
-                    // 载具
                     try
                     {
                         var vehicle = Reflect.Get(player, "drivingVehicle") as Component;
                         if (vehicle != null)
                         {
                             var vsrs = vehicle.GetComponentsInChildren<SpriteRenderer>(true);
-                            Plugin.L.LogInfo($"[PSP] 载具 '{vehicle.name}' SR数={vsrs.Length}");
+                            Plugin.L.LogInfo($"[PSP] 载具 '{vehicle.name}' 位置=({vehicle.transform.position.x:F1},{vehicle.transform.position.y:F1}) SR数={vsrs.Length}");
                             foreach (var sr in vsrs)
                             {
                                 if (sr == null) continue;
@@ -97,5 +79,28 @@ public class SortProbe : MonoBehaviour
             }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
+
+        // 圆盘：Resources.FindObjectsOfTypeAll（含隐藏对象——克隆 prefab 的 HideAndDontSave 可能被实例继承，FindObjectsOfType 看不到）
+        bool found = false;
+        try
+        {
+            foreach (var sr in Resources.FindObjectsOfTypeAll<SpriteRenderer>())
+            {
+                if (sr == null) continue;
+                bool isPad = false;
+                var cur = sr.transform;
+                int d = 0;
+                while (cur != null && d++ < 16)
+                {
+                    if (cur.name != null && cur.name.Contains("TS_TeleportPad")) { isPad = true; break; }
+                    cur = cur.parent;
+                }
+                if (!isPad) continue;
+                found = true;
+                Plugin.L.LogInfo($"[PSP] 圆盘SR '{sr.transform.name}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({sr.transform.position.x:F1},{sr.transform.position.y:F1}) activeInHierarchy={sr.gameObject.activeInHierarchy} hideFlags={sr.gameObject.hideFlags}");
+            }
+        }
+        catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 圆盘采集异常: {e2.Message.Split('\n')[0]}"); }
+        Plugin.L.LogInfo(found ? "[PSP] === 圆盘采集完成 ===" : "[PSP] 圆盘未找到（Resources 全量亦无，排查克隆/实例化）");
     }
 }
