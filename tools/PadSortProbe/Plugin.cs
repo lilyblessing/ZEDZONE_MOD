@@ -16,7 +16,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.3")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.4")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -25,7 +25,7 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.3 已加载（近距 25 单位全 SR + 去重变化采样）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.4 已加载（最近 6 个 SR 采样，无名字假定）");
     }
 }
 
@@ -82,9 +82,7 @@ public class SortProbe : MonoBehaviour
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
 
-        // 近距全部 SR（玩家 25 单位内，不论名字——圆盘实例名字形态未知；去掉泛型 GetComponent（IL2CPP interop 崩溃））
-        // 去重：root+sr 名+layer+order 组合变化才打（动态排序证据直接现形）
-        bool found = false;
+        // 最近 6 个 SR（按与玩家距离）——玩家站盘上时盘的 SR 必然在最近列表，无论名字形态（弃位置过滤与名字假定）
         try
         {
             Vector2 pl = Vector2.zero;
@@ -95,30 +93,49 @@ public class SortProbe : MonoBehaviour
                 if (player0 != null) { pl.x = player0.transform.position.x; pl.y = player0.transform.position.y; }
             }
             catch { }
-            foreach (var sr in Resources.FindObjectsOfTypeAll<SpriteRenderer>())
+            var all = Resources.FindObjectsOfTypeAll<SpriteRenderer>();
+            // 按距离排序取最近 6
+            string[] lines = new string[6];
+            float[] dists = new float[6];
+            for (int i = 0; i < 6; i++) dists[i] = float.MaxValue;
+            string rootOf = "";
+            foreach (var sr in all)
             {
                 if (sr == null) continue;
                 var pos = sr.transform.position;
                 float dx = pos.x - pl.x, dy = pos.y - pl.y;
-                if (dx * dx + dy * dy > 25f * 25f) continue;
-                // 根名字（最顶层）
-                string root = "?";
-                try
+                float d = dx * dx + dy * dy;
+                // 插入排序维护最近 6
+                for (int j = 0; j < 6; j++)
                 {
-                    var r = sr.transform;
-                    while (r.parent != null) r = r.parent;
-                    root = r.name ?? "?";
+                    if (d < dists[j])
+                    {
+                        for (int k = 5; k > j; k--) { dists[k] = dists[k - 1]; lines[k] = lines[k - 1]; }
+                        dists[j] = d;
+                        try
+                        {
+                            var r = sr.transform;
+                            var parent = r.parent == null ? "" : r.parent.name;
+                            while (r.parent != null) r = r.parent;
+                            lines[j] = $"{r.name}>{parent}>{sr.transform.name}|{sr.sortingLayerName}({sr.sortingLayerID})|{sr.sortingOrder}|({pos.x:F1},{pos.y:F1})";
+                        }
+                        catch { lines[j] = "?|?|?|?|?"; }
+                        break;
+                    }
                 }
-                catch { }
-                string layer = sr.sortingLayerName + "(" + sr.sortingLayerID + ")";
-                string key = root + "|" + (sr.transform.name ?? "?") + "|" + layer + "|" + sr.sortingOrder;
+            }
+            bool printedAny = false;
+            for (int i = 0; i < 6; i++)
+            {
+                if (dists[i] >= float.MaxValue) break;
+                string key = "NEAR|" + lines[i];
                 if (_seen.Contains(key)) continue;
                 _seen.Add(key);
-                found = true;
-                Plugin.L.LogInfo($"[PSP] SR '{sr.transform.name}' root='{root}' layer={layer} order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1})");
+                printedAny = true;
+                Plugin.L.LogInfo($"[PSP] 最近{i + 1}. {lines[i]}");
             }
+            if (printedAny) Plugin.L.LogInfo($"[PSP] === 最近采样（玩家 {pl.x:F1},{pl.y:F1}）===");
         }
-        catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 近距采集异常: {e2.Message.Split('\n')[0]}"); }
-        Plugin.L.LogInfo(found ? "[PSP] === 近距变化采样 ===" : "[PSP] 近距无新组合（玩家附近 25 单位无 SR 或全静态）");
+        catch (Exception e2) { Plugin.L.LogWarning($"[PSP] 最近采样异常: {e2.Message.Split('\n')[0]}"); }
     }
 }
