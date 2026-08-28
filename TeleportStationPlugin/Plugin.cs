@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.33（纯源头实验：移除全部卡片图标写路径，防建造流程卡住）。
+/// 远距离传送站台 MOD v0.6.34（源头图标定案：GetTerrainObjectIconSprite 唯一源头，零写路径；图标缓存提前）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.33")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.34")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -108,8 +108,16 @@ public class Plugin : BasePlugin
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
+        // v0.6.34：图标缓存提前到 Load（不等 20s 注册定时器），消除图标源头时序依赖
+        try
+        {
+            foreach (var def in new[] { Buildings.ConsoleDef, Buildings.PadDef, Buildings.BioGenDef })
+                SpriteInjector.CacheSprite(def);
+        }
+        catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
+
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.33 纯源头实验（卡片写路径全移除）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.34 图标缓存提前（源头图标定案，零写路径）");
     }
 }
 
@@ -311,6 +319,7 @@ public class SpriteInjector
     {
         try
         {
+            if (Cache.ContainsKey(def.Id)) return; // v0.6.34 幂等：提前缓存与注册期重复调用安全
             string p = Path.Combine(Path.Combine(Plugin.PluginDir, "textures"), def.IconFile);
             if (!File.Exists(p)) { Plugin.L.LogWarning($"[TS] 贴图不存在: {p}"); return; }
             var bytes = File.ReadAllBytes(p);
