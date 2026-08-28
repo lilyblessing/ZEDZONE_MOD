@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.32（修复空名空白，源头 spriteName + 源头 3s，零轮询）。
+/// 远距离传送站台 MOD v0.6.33（纯源头实验：移除全部卡片图标写路径，防建造流程卡住）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.32")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.33")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -69,14 +69,8 @@ public class Plugin : BasePlugin
             }
             else Log.LogWarning("[TS] GetTerrainObjectAttrById 挂钩失败");
 
-            // v0.5.8：LoadConstructionMenu 后置图标一次性注入（无轮询；sprite+enabled/alpha 修复）
-            var loadCm = AccessTools.Method(typeof(ConstructionPanel), "LoadConstructionMenu");
-            if (loadCm != null)
-            {
-                h.Patch(loadCm, postfix: new HarmonyMethod(typeof(IconPostfix).GetMethod(
-                    nameof(IconPostfix.Postfix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 ConstructionPanel.LoadConstructionMenu（卡片图标后置）");
-            }
+            // v0.6.33：LoadConstructionMenu 后置图标注入已移除——无条件写卡片 sprite/enabled/alpha，疑与建造流程 UI 状态机冲突（卡住：放下虚影/建造完成），纯源头实验
+            // v0.5.8 旧逻辑：LoadConstructionMenu postfix → IconPostfix 一次性注入（回退时从这里恢复）
             // v0.6.3：详情相关 patch 全部移除（未命中渲染路径；SelectItem 破坏点击流程）
             // v0.6.7：保持干净——仅源头注入 + 卡片图标后置；点击/详情 hooks 全部不挂（v0.6.3 为唯一稳定可点击基线）
             // v0.6.1：OnCardClicked 后置——详情图标注入
@@ -115,7 +109,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.32 修复空名空白（spriteName 命名+校验）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.33 纯源头实验（卡片写路径全移除）");
     }
 }
 
@@ -142,8 +136,7 @@ public static class SourceInjector
                 __result.Add(kv.Value);
             }
             Plugin.L.LogInfo($"[TS] 源头注入: Electricity 建造列表追加 {RegistrationStore.Attrs.Count} 建筑");
-            // v0.6.16：图标修复调度挂在源头注入链（唯一 100% 可靠 hook）——一次性延迟修复，不依赖 GetById/Load postfix
-            SpriteInjector.ScheduleCardIconFix();
+            // v0.6.33：卡片图标修复调度已移除（纯源头实验——spriteName+ModSpriteRegistry+IconSourceFix 已双保险）
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] Avail postfix 异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -158,9 +151,7 @@ public static class SourceInjector
             if (RegistrationStore.Attrs.TryGetValue(id, out var attr))
             {
                 __result = attr;
-                // v0.6.15：仅卡片图标一次性修复（幂等）——详情大图标方案已放弃（写入 detailIcon 触发游戏状态异常）
-                try { SpriteInjector.InjectCardIconOnce(id); }
-                catch (Exception e) { Plugin.L.LogWarning($"[TS] 卡片图标修复异常: {e.Message.Split('\n')[0]}"); }
+                // v0.6.33：卡片图标修复移除（纯源头实验）；v0.6.15 旧逻辑 InjectCardIconOnce(id) 回退时恢复
             }
         }
         catch { }
@@ -512,9 +503,7 @@ public class RegistrationProbe : MonoBehaviour
 
     private void Update()
     {
-        // v0.6.16：延迟图标修复（一次性，仅浮点比较）—— 1.5s 延迟 + 1s 节流 + 全好即停，零高频污染
-        try { SpriteInjector.TickCardIconFix(); }
-        catch { }
+        // v0.6.33：周期图标修复移除（纯源头实验）；v0.6.16 旧逻辑 TickCardIconFix 回退时恢复
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
