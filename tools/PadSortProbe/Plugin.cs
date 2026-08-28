@@ -16,7 +16,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.5")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.6")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -25,7 +25,7 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.5 已加载（特征必杀扫描：贴图 ID + 对象名 + 组件）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.6 已加载（枚举计数自证 + 字典直取克隆状态）");
     }
 }
 
@@ -82,54 +82,59 @@ public class SortProbe : MonoBehaviour
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
 
-        // 必杀：全场景无条件找 ①实体贴图唯一标识的 SR ②root 名含 900102/TS_/Teleport 的对象 ③组件清单
+        // 必杀 0：FindObjectsOfTypeAll 枚举计数自证 + 直取 prefab 字典 9001xx 克隆状态（不依赖全局枚举）
         try
         {
-            bool any = false;
-            // ① 贴图搜索
-            foreach (var sr in Resources.FindObjectsOfTypeAll<SpriteRenderer>())
+            int srCnt = 0, trCnt = 0;
+            try
             {
-                if (sr == null) continue;
-                string sname = "";
-                try { sname = sr.sprite == null ? "" : (sr.sprite.name ?? ""); } catch { }
-                if (sname.Contains("TeleportPad") || sname.Contains("TeleportConsole") || sname.Contains("Biomass") || sname.Contains("Teleport\u56de"))
-                {
-                    var pos = sr.transform.position;
-                    string root = "?";
-                    try { var r = sr.transform; while (r.parent != null) r = r.parent; root = r.name ?? "?"; } catch { }
-                    string k = "SPR|" + sname + "|" + root + "|" + sr.sortingLayerName + "|" + sr.sortingOrder;
-                    if (_seen.Contains(k)) continue;
-                    _seen.Add(k);
-                    any = true;
-                    Plugin.L.LogInfo($"[PSP] ★贴图SR sprite='{sname}' root='{root}' layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({pos.x:F1},{pos.y:F1}) active={sr.gameObject.activeInHierarchy}");
-                }
+                var a = Resources.FindObjectsOfTypeAll<SpriteRenderer>();
+                if (a != null) srCnt = a.Length;
             }
-            // ② 对象名搜索（name 含特征）
-            foreach (var t in Resources.FindObjectsOfTypeAll<Transform>())
+            catch (Exception ex1) { Plugin.L.LogWarning($"[PSP] SR 枚举异常: {ex1.Message.Split('\n')[0]}"); }
+            try
             {
-                if (t == null || t.name == null) continue;
-                string n = t.name;
-                if (!n.Contains("900102") && !n.Contains("TS_") && !n.Contains("Teleport") && !n.Contains("传输")) continue;
-                string k = "OBJ|" + n;
-                if (_seen.Contains(k)) continue;
-                _seen.Add(k);
-                any = true;
-                var comps = "";
-                try
+                var b = Resources.FindObjectsOfTypeAll<Transform>();
+                if (b != null) trCnt = b.Length;
+            }
+            catch (Exception ex2) { Plugin.L.LogWarning($"[PSP] Transform 枚举异常: {ex2.Message.Split('\n')[0]}"); }
+            Plugin.L.LogInfo($"[PSP] 枚举计数: SR={srCnt} Transform={trCnt}");
+
+            // 反射直取 GameController 含 900102 键的字典 → 克隆状态（真实存在性铁证）
+            var gcObj = typeof(GameController).GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)?.GetValue(null);
+            if (gcObj != null)
+            {
+                foreach (var p in gcObj.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
                 {
-                    foreach (var c in t.GetComponents<Component>())
+                    try
                     {
-                        if (c == null) continue;
-                        comps += c.GetType().Name + ",";
-                        if (comps.Length > 200) break;
+                        var v = p.GetValue(gcObj);
+                        if (v == null) continue;
+                        string vt = v.GetType().Name;
+                        if (!vt.Contains("Dictionary")) continue;
+                        bool has = (bool)v.GetType().GetMethod("ContainsKey").Invoke(v, new object[] { 900102 });
+                        if (!has) continue;
+                        object val = v.GetType().GetProperty("Item").GetValue(v, new object[] { 900102 });
+                        bool isGo = val is GameObject;
+                        Plugin.L.LogInfo($"[PSP] ★字典 {vt} [900102] → {(val == null ? "null" : val.GetType().FullName)} isGameObject={isGo}");
+                        if (isGo)
+                        {
+                            var go = (GameObject)val;
+                            Plugin.L.LogInfo($"[PSP]   克隆 '{go.name}' pos=({go.transform.position.x:F1},{go.transform.position.y:F1}) active={go.activeInHierarchy} hideFlags={go.hideFlags}");
+                            foreach (var sr in go.GetComponentsInChildren<SpriteRenderer>(true))
+                            {
+                                if (sr == null) continue;
+                                string sn = "";
+                                try { sn = sr.sprite == null ? "<null>" : (sr.sprite.name ?? "<unnamed>"); } catch { sn = "<读异常>"; }
+                                Plugin.L.LogInfo($"[PSP]     克隆SR '{sr.name}' sprite={sn} layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder}");
+                            }
+                        }
                     }
+                    catch (Exception ex3) { }
                 }
-                catch { }
-                Plugin.L.LogInfo($"[PSP] ★对象 '{n}' pos=({t.position.x:F1},{t.position.y:F1}) active={t.gameObject.activeInHierarchy} 组件=[{comps}]");
             }
-            if (any) Plugin.L.LogInfo("[PSP] === 特征扫描命中 ===");
-            else Plugin.L.LogInfo("[PSP] 特征扫描零命中（无 TeleportPad_Body 贴图 SR/无 900102/TS_/Teleport 对象名）");
+            else Plugin.L.LogInfo("[PSP] GC.instance=null（未进存档）");
         }
-        catch (Exception e3) { Plugin.L.LogWarning($"[PSP] 特征扫描异常: {e3.Message.Split('\n')[0]}"); }
+        catch (Exception e4) { Plugin.L.LogWarning($"[PSP] 字典直取异常: {e4.Message.Split('\n')[0]}"); }
     }
 }
