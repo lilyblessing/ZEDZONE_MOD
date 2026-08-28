@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
@@ -9,11 +10,19 @@ using UnityEngine;
 namespace LogKeep;
 
 /// <summary>
-/// LogKeep v0.1.0 —— BepInEx 日志自动归档（配合 BepInEx.cfg [Logging.Disk] AppendLog=true）。
-/// 无 Harmony、无 detour、纯文件 IO：每 60s 把 LogOutput.log 快照到 BepInEx\log-archive\LogOutput-<时间戳>.log，保留最近 30 份。
-/// 目的：每次游戏启动都会覆写/追加 LogOutput.log，留多份时间戳日志便于多轮问题的对比取证（崩溃前也有近况）。
+/// LogKeep v0.2.0 —— BepInEx 日志「启动轮转」方案（配合 BepInEx.cfg [Logging.Disk] AppendLog=true）。
+/// 机制：
+///  1) 游戏启动（插件 Load）：
+///     a. 读 LogOutput.log：若非空则说明是上一轮运行残留；
+///     b. 尾部提取 [LogKeep] END &lt;ts&gt;（正常退出标记）；崩溃无 END 则取 RUN &lt;ts&gt;（上轮开始），再退而取文件 mtime；
+///     c. 整份复制到 BepInEx\log-archive\LogOutput-&lt;ts&gt;.log（保留最近 60 份自动裁剪）；
+///     d. 截断清空主文件（BepInEx DiskLogListener 为 FileMode.Append+FileShare.ReadWrite，截断后追加仍写 EOF，安全）；
+///     e. 打 [LogKeep] RUN &lt;ts&gt; 横幅。
+///  2) 游戏退出（OnApplicationQuit）：打 [LogKeep] END &lt;ts&gt; 行 —— 下次启动据此命名归档。
+/// 效果：主日志永远约单轮大小（读日志 token 成本恒定）；每轮完整日志按日期时间独立存档于 log-archive/。
+/// 失败兜底：截断被拒（句柄共享异常）→ 告警 + 主日志继续累积、下次启动重试，绝不丢日志。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.logkeep", "LogKeep", "0.1.0")]
+[BepInPlugin("com.zedzone.tool.logkeep", "LogKeep", "0.2.0")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -21,10 +30,10 @@ public class Plugin : BasePlugin
     public override void Load()
     {
         L = Log;
-        // 醒目分隔横幅：多轮日志共存时可辨识本轮起点（与 [LogKeep] ===== 对应）
-        Log.LogInfo($"[LogKeep] ==================== 本轮运行开始 {DateTime.Now:yyyy-MM-dd HH:mm:ss} ====================");
         AddComponent<LogKeepComponent>();
-        Log.LogInfo("[LogKeep] v0.1.0 已加载（每 60s 归档 LogOutput.log 快照，保留最近 30 份）");
+        LogKeepComponent.RotateOnce(); // 启动轮转：归档旧轮 → 清空主文件
+        Plugin.L.LogInfo($"[LogKeep] RUN {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        Log.LogInfo("[LogKeep] v0.2.0 已加载（启动轮转：旧轮归档到 log-archive/，主日志保持单轮）");
     }
 }
 
@@ -33,32 +42,61 @@ public class LogKeepComponent : MonoBehaviour
     private static readonly string LogDir = Path.Combine(Environment.CurrentDirectory, "BepInEx");
     private static readonly string LogFile = Path.Combine(LogDir, "LogOutput.log");
     private static readonly string ArchiveDir = Path.Combine(LogDir, "log-archive");
-    private float _next = 30f; // 启动 30s 后首次归档
 
-    private void Update()
+    private void Update() { } // v0.2.0 纯轮转，无周期任务
+
+    /// <summary>Unity 退出回调：写 END 时间戳（供下次启动归档命名）；崩溃时缺失则退化用 RUN/mtime。</summary>
+    private void OnApplicationQuit()
     {
-        _next -= Time.unscaledDeltaTime;
-        if (_next > 0f) return;
-        _next = 60f;
-        try { ArchiveOnce(); }
-        catch (Exception e) { Plugin.L.LogWarning($"[LogKeep] 归档异常: {e.Message.Split('\n')[0]}"); }
+        try { Plugin.L.LogInfo($"[LogKeep] END {DateTime.Now:yyyy-MM-dd HH:mm:ss}"); }
+        catch { }
     }
 
-    private void ArchiveOnce()
+    public static void RotateOnce()
     {
-        if (!File.Exists(LogFile)) return;
-        Directory.CreateDirectory(ArchiveDir);
-        string ts = DateTime.Now.ToString("yyyyMMdd-HHmmss");
-        string dst = Path.Combine(ArchiveDir, $"LogOutput-{ts}.log");
-        File.Copy(LogFile, dst, true);
-        // 只保留最近 30 份（按文件名时间戳排序）
-        var olds = Directory.GetFiles(ArchiveDir, "LogOutput-*.log")
-            .OrderByDescending(f => f).Skip(30).ToArray();
-        foreach (var f in olds)
+        try
         {
-            try { File.Delete(f); } catch { }
+            string full = File.Exists(LogFile) ? File.ReadAllText(LogFile) : "";
+            if (string.IsNullOrWhiteSpace(full)) return; // 首次/已由上一轮清空
+
+            string ts = ExtractTime(full) ?? File.GetLastWriteTime(LogFile).ToString("yyyyMMdd-HHmmss");
+            Directory.CreateDirectory(ArchiveDir);
+            string dst = Path.Combine(ArchiveDir, $"LogOutput-{ts}.log");
+            if (!File.Exists(dst)) File.WriteAllText(dst, full); // 去重：同名已归档则跳过
+
+            // 只保留最近 60 份（按文件名时间戳排序）
+            var olds = Directory.GetFiles(ArchiveDir, "LogOutput-*.log")
+                .OrderByDescending(f => f).Skip(60).ToArray();
+            foreach (var f in olds)
+            {
+                try { File.Delete(f); } catch { }
+            }
+
+            // 截断主文件：BepInEx 用 FileMode.Append+FileShare.ReadWrite，截断后其追加仍写 EOF，安全
+            try
+            {
+                using (var fs = new FileStream(LogFile, FileMode.Create, FileAccess.Write, FileShare.ReadWrite)) { }
+                Plugin.L.LogInfo($"[LogKeep] 轮转完成: 旧日志({full.Length} B) → {Path.GetFileName(dst)}，主日志已清空");
+            }
+            catch (Exception e)
+            {
+                Plugin.L.LogWarning($"[LogKeep] 截断失败（句柄共享限制）: {e.Message.Split('\n')[0]}；主日志继续累积，下次启动重试");
+            }
         }
-        int total = Directory.GetFiles(ArchiveDir, "LogOutput-*.log").Length;
-        Plugin.L.LogInfo($"[LogKeep] 已归档: {Path.GetFileName(dst)}（共 {total} 份）");
+        catch (Exception e) { Plugin.L.LogWarning($"[LogKeep] 轮转异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    /// <summary>优先取最近的 END（正常退出）；全无 END 取最后一个 RUN（崩溃轮开始时间）；都无则 null（调用方退用 mtime）。</summary>
+    private static string ExtractTime(string content)
+    {
+        var m = Regex.Matches(content, @"\[LogKeep\] (END|RUN) (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})");
+        string lastRun = null;
+        foreach (Match x in m)
+        {
+            string t = x.Groups[2].Value.Replace("-", "").Replace(":", "").Replace(" ", "-");
+            if (x.Groups[1].Value == "END") return t;
+            lastRun = t;
+        }
+        return lastRun;
     }
 }
