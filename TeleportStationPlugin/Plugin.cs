@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.35（Cache 兜底重载：图标源头实时自愈，防模板图标 fallback；零写路径）。
+/// 远距离传送站台 MOD v0.6.36（P2 实体 prefab 源头化：字典镜像泛化 + 克隆换贴图，修 900101 KeyNotFound）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.35")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.36")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -117,7 +117,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.35 Cache 兜底重载（图标源头实时自愈，防模板图标 fallback）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.36 字典镜像泛化 + prefab 克隆换贴图（P2 实体源头化）");
     }
 }
 
@@ -654,7 +654,8 @@ internal static class RegistrarLogic
                     catch (Exception e2) { gdInfo = "读取异常:" + e2.Message.Split('\n')[0]; }
                 }
                 sb.AppendLine($"  techGenreDic: {gdInfo}");
-                // ── 5. v0.6.23 字典镜像：扫描含参照 id(120) 的字典成员，把我们的 id 镜像补入（prefab 字典等，绕开不稳定 hook）──
+                // ── 5. v0.6.36 字典镜像 + P2 实体 prefab 源头化：扫描含参照键(108/120)的字典，补入 9001xx；
+                //    prefab 字典 → 克隆模板 + 换我们的实体贴图（源头一次性，零轮询，原版不动）；其它字典 → 引用复制 ──
                 try
                 {
                     int mirrored = 0;
@@ -684,24 +685,54 @@ internal static class RegistrarLogic
                         {
                             var contains = mem.GetType().GetMethod("ContainsKey");
                             if (contains == null) continue;
-                            bool has120 = (bool)contains.Invoke(mem, new object[] { 120 });
-                            if (!has120) continue;
-                            bool has900 = (bool)contains.Invoke(mem, new object[] { 900103 });
-                            if (has900) continue;
                             var itemProp = mem.GetType().GetProperty("Item");
-                            object srcVal = null;
-                            if (itemProp != null) srcVal = itemProp.GetValue(mem, new object[] { 120 });
+                            var gim = mem.GetType().GetMethod("get_Item");
+                            if (itemProp == null && gim == null) continue;
+                            object GetVal(int id) => itemProp != null
+                                ? itemProp.GetValue(mem, new object[] { id })
+                                : gim.Invoke(mem, new object[] { id });
+                            var add = mem.GetType().GetMethod("Add");
+                            if (add == null) continue;
+                            bool has108 = (bool)contains.Invoke(mem, new object[] { 108 });
+                            bool has120 = (bool)contains.Invoke(mem, new object[] { 120 });
+                            object src108 = has108 ? GetVal(108) : null;
+                            object src120 = has120 ? GetVal(120) : null;
+                            bool isPrefabDic = (src108 is GameObject) || (src120 is GameObject);
+                            if (isPrefabDic)
+                            {
+                                if (has108 && src108 is GameObject g108 && !(bool)contains.Invoke(mem, new object[] { 900101 }))
+                                {
+                                    var clone = BuildPrefabClone(g108, Buildings.ConsoleDef);
+                                    if (clone != null) { add.Invoke(mem, new object[] { 900101, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900101←108(克隆贴图)"); }
+                                }
+                                if (has120 && src120 is GameObject g120)
+                                {
+                                    if (!(bool)contains.Invoke(mem, new object[] { 900102 }))
+                                    {
+                                        var clone = BuildPrefabClone(g120, Buildings.PadDef);
+                                        if (clone != null) { add.Invoke(mem, new object[] { 900102, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900102←120(克隆贴图)"); }
+                                    }
+                                    if (!(bool)contains.Invoke(mem, new object[] { 900103 }))
+                                    {
+                                        var clone = BuildPrefabClone(g120, Buildings.BioGenDef);
+                                        if (clone != null) { add.Invoke(mem, new object[] { 900103, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900103←120(克隆贴图)"); }
+                                    }
+                                }
+                            }
                             else
                             {
-                                var gim = mem.GetType().GetMethod("get_Item");
-                                if (gim != null) srcVal = gim.Invoke(mem, new object[] { 120 });
-                            }
-                            var add = mem.GetType().GetMethod("Add");
-                            if (srcVal != null && add != null)
-                            {
-                                add.Invoke(mem, new object[] { 900103, srcVal });
-                                mirrored++;
-                                sb.AppendLine($"  字典镜像: {tn} 900103←120");
+                                // 非 prefab 字典：引用复制（与旧 900103←120 行为一致，泛化到全部模板键）
+                                if (has108 && src108 != null && !(bool)contains.Invoke(mem, new object[] { 900101 }))
+                                {
+                                    add.Invoke(mem, new object[] { 900101, src108 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900101←108");
+                                }
+                                if (has120 && src120 != null)
+                                {
+                                    if (!(bool)contains.Invoke(mem, new object[] { 900102 }))
+                                    { add.Invoke(mem, new object[] { 900102, src120 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900102←120"); }
+                                    if (!(bool)contains.Invoke(mem, new object[] { 900103 }))
+                                    { add.Invoke(mem, new object[] { 900103, src120 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900103←120"); }
+                                }
                             }
                         }
                         catch { }
@@ -849,8 +880,48 @@ internal static class RegistrarLogic
         Plugin.L.LogInfo($"[TS] ✅ 建筑克隆注册: id={def.Id} '{def.NameZh}' sprite={def.SpriteKey} genre=Electricity 配方{def.Recipe.Length}项");
     }
 
-    // ── v0.5.0：卡片层不再操作（源头注入后游戏原版建卡流程，引用/名字/交互全由游戏处理）。
-    //    图标先沿用模板 spriteName（建筑贴图表注册排后）。
+    /// <summary>v0.6.36 P2：克隆模板 prefab → 主 SpriteRenderer 换为我们的实体贴图（ppu=256 → 512px≈2 世界单位）。
+    /// 零件贴图（Cylinder/Parts/Fire）禁用防叠加；Cache 异常时强制重载（与图标同源自愈）；任何失败退回模板不阻塞建造。</summary>
+    private static GameObject BuildPrefabClone(GameObject template, BuildingDef def)
+    {
+        try
+        {
+            if (!SpriteInjector.Cache.TryGetValue(def.Id, out var iconSp) || iconSp == null || iconSp.texture == null)
+            {
+                SpriteInjector.CacheSprite(def, force: true);
+                SpriteInjector.Cache.TryGetValue(def.Id, out iconSp);
+            }
+            if (iconSp == null || iconSp.texture == null) { Plugin.L.LogWarning($"[TS] prefab 克隆无贴图: id={def.Id} 退回模板"); return template; }
+            var tex = iconSp.texture;
+            var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 256f);
+            sp.name = def.SpriteKey + "_Body";
+            var clone = UnityEngine.Object.Instantiate(template);
+            clone.name = "TS_" + def.SpriteKey;
+            try { clone.hideFlags = HideFlags.HideAndDontSave; } catch { }
+            bool mainDone = false;
+            var srs = clone.GetComponentsInChildren<SpriteRenderer>(true);
+            foreach (var sr in srs)
+            {
+                if (sr == null) continue;
+                string sn = sr.name ?? "";
+                if (!mainDone && (sn == "Sprite" || sn.StartsWith("Sprite") || sr.sprite == null))
+                {
+                    sr.sprite = sp; // 主贴图替换
+                    mainDone = true;
+                    continue;
+                }
+                if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
+                    sr.enabled = false; // 零件贴图禁用（整机贴图已含细节）
+            }
+            Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} mainDone={mainDone}");
+            return clone;
+        }
+        catch (Exception e)
+        {
+            Plugin.L.LogWarning($"[TS] prefab 克隆异常: {e.Message.Split('\n')[0]}");
+            return template;
+        }
+    }
 
     // ── v0.6.24 辅助：il2cpp List 反射读元素 / attr id ──
     private static object ListItemReflect(object list, int i)
