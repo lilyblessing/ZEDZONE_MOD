@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.39（圆盘 2 倍 + 层守卫：拦截建筑 Y 排序对圆盘层的改写）。
+/// 远距离传送站台 MOD v0.6.40（圆盘层钉 PadLayerPin：LateUpdate+OnWillRenderObject 双时点钉死 FX_BG，随实例复制）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.39")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.40")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -132,7 +132,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.39 圆盘 2 倍（3.5→7.0）+ 层守卫（PadLayerGuard）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.40 圆盘层钉（PadLayerPin 双时点钉层）");
     }
 }
 
@@ -494,7 +494,36 @@ public static class BuildTimeSourceFix
     }
 }
 
-/// <summary>v0.6.39：圆盘层守卫——游戏建筑 Y 排序会把圆盘 sortingLayer 抬到角色之上（圆盘盖玩家），拦截其对 TS_TeleportPad 实例的层改写，恒守 FX_BG。</summary>
+/// <summary>v0.6.40：圆盘层钉——物理随实例复制的组件（挂在克隆 prefab 根，游戏 Instantiate 自动带出）。
+/// 建筑 Y 排序若在 LateUpdate 之后/渲染管线内写层，detour 拦截与 LateUpdate 都可能输；
+/// 双时点写：LateUpdate（常规帧末）+ OnWillRenderObject（渲染管线内、绘制排序前），保证渲染采用 FX_BG。</summary>
+public class PadLayerPin : MonoBehaviour
+{
+    private SpriteRenderer[] _srs;
+
+    private void Awake()
+    {
+        try { _srs = GetComponentsInChildren<SpriteRenderer>(true); } catch { _srs = new SpriteRenderer[0]; }
+    }
+
+    private void LateUpdate() { Pin(); }
+    private void OnWillRenderObject() { Pin(); }
+
+    private void Pin()
+    {
+        try
+        {
+            if (_srs == null) return;
+            for (int i = 0; i < _srs.Length; i++)
+            {
+                if (_srs[i] == null) continue;
+                _srs[i].sortingLayerName = "FX_BG";
+            }
+        }
+        catch { }
+    }
+}
+/// <summary>v0.6.39：圆盘层守卫（detour 层）——拦截游戏对 TS_TeleportPad 实例 sortingLayer 的改写，恒守 FX_BG（v0.6.40 起与 PadLayerPin 物理钉双保险）。</summary>
 public static class PadLayerGuard
 {
     private static bool IsPad(Transform t)
@@ -1011,6 +1040,8 @@ internal static class RegistrarLogic
                     if (sr == null) continue;
                     try { sr.sortingLayerName = def.LayerOverride; } catch { }
                 }
+                // v0.6.40：挂载 PadLayerPin——游戏 Instantiate 克隆时组件随实例复制，每帧 LateUpdate+OnWillRenderObject 双时点钉死层
+                try { clone.AddComponent<PadLayerPin>(); } catch (Exception e5) { Plugin.L.LogWarning($"[TS] PadLayerPin 挂载异常: {e5.Message.Split('\n')[0]}"); }
             }
             Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} 圆盘={(def.NoCollision ? "无碰撞" : "-")} 层={def.LayerOverride ?? "-"}");
             return clone;
