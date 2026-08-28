@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.30（源头图标 + 源头 3s，零轮询）。
+/// 远距离传送站台 MOD v0.6.31（源头 spriteName + 源头 3s，零轮询）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -23,14 +23,14 @@ namespace TeleportStationPlugin;
 ///   - hook GetAvailableTerrainObjectAttrsByTechGenre postfix：Electricity 列表追加三建筑（游戏原版建卡流程）；
 ///   - hook GetTerrainObjectAttrById postfix：900101-3 查询兜底；
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
-/// v0.6.30：
+/// v0.6.31：
+///   - RegisterBuilding 阶段 Reflect.Set(attr,"spriteName", Cache[id].name) + ModSpriteRegistry.Register 源头字典双保险；
 ///   - BuildInfoPanel.GetTotalMaterialNumber(RecipeData) postfix →6（=3s），纯源头不碰 UI；
-///   - GameController.GetTerrainObjectIconSprite(int) postfix → Cache[id]（public 源头，不碰 ConstructionPanel/Build）；
-///   - TickCardIconFix 保留为零高频幂等保障，仅在已验证窗口内生效。
-/// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯 public static/源头字典安全。
+///   - GameController.GetTerrainObjectIconSprite 保留为世界渲染源头，TickCardIconFix 仅作幂等兜底。
+/// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.30")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.31")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -115,7 +115,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.30 源头图标 + 源头 3s（零轮询）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.31 源头 spriteName + 源头 3s（零轮询）");
     }
 }
 
@@ -795,10 +795,26 @@ internal static class RegistrarLogic
 
         RegistrationStore.Attrs[def.Id] = attr;
         SpriteInjector.CacheSprite(def); // v0.5.3：图标缓存（Image.set_sprite 兜底用）
-        // v0.5.2：ModSpriteRegistry 注册建筑贴图（贴图在 textures/ 子目录）
+        // v0.6.31 源头图标：让 BuildGridArea 天然拿到正确图（不碰 ConstructionPanel/Build 实例层）
+        if (SpriteInjector.Cache.TryGetValue(def.Id, out var spCached) && spCached != null)
+        {
+            try { Reflect.Set(attr, "spriteName", spCached.name); }
+            catch { }
+            Plugin.L.LogInfo($"[TS] spriteName 源头: id={def.Id} → {spCached.name}");
+        }
+        // v0.5.2：ModSpriteRegistry 注册建筑贴图（贴图在 textures/ 子目录，官方字典源头，双保险）
         try
         {
             ItemRegistryHelper.RegisterSprite(Plugin.PluginDir, "textures/" + def.IconFile, def.Id, "Main", 128, 96);
+            // 反向验证是否已进入官方字典
+            try
+            {
+                var isMod = ModSpriteRegistry.IsModItem(def.Id);
+                var got = ModSpriteRegistry.GetMain(def.Id);
+                string gName = got != null ? got.name : "null";
+                Plugin.L.LogInfo($"[TS] ModSpriteRegistry 校验: id={def.Id} IsModItem={isMod} GetMain={gName}");
+            }
+            catch (Exception e2) { Plugin.L.LogInfo($"[TS] ModSpriteRegistry 校验异常: {e2.Message.Split('\n')[0]}"); }
         }
         catch (Exception e) { Plugin.L.LogInfo($"  贴图注册异常: {e.Message.Split('\n')[0]}"); }
         Plugin.L.LogInfo($"[TS] ✅ 建筑克隆注册: id={def.Id} '{def.NameZh}' sprite={def.SpriteKey} genre=Electricity 配方{def.Recipe.Length}项");
