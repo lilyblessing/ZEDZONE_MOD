@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.40（圆盘层钉 PadLayerPin：LateUpdate+OnWillRenderObject 双时点钉死 FX_BG，随实例复制）。
+/// 远距离传送站台 MOD v0.6.41（圆盘层钉动态收集：0.5s 重采 SR，防游戏实例化重建 SR 后失效）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.40")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.41")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -132,7 +132,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.40 圆盘层钉（PadLayerPin 双时点钉层）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.41 圆盘层钉动态收集（防实例重建 SR 失效）");
     }
 }
 
@@ -495,13 +495,14 @@ public static class BuildTimeSourceFix
 }
 
 /// <summary>v0.6.40：圆盘层钉——物理随实例复制的组件（挂在克隆 prefab 根，游戏 Instantiate 自动带出）。
-/// 建筑 Y 排序若在 LateUpdate 之后/渲染管线内写层，detour 拦截与 LateUpdate 都可能输；
-/// 双时点写：LateUpdate（常规帧末）+ OnWillRenderObject（渲染管线内、绘制排序前），保证渲染采用 FX_BG。</summary>
+/// v0.6.41：改为 0.5s 动态收集 SR——游戏实例化时会重建/重设 SpriteRenderer（层被重置回建筑默认），
+/// Awake 缓存旧列表会失效；动态收集 + LateUpdate/OnWillRenderObject 双时点写 FX_BG，并重申零件禁用。</summary>
 public class PadLayerPin : MonoBehaviour
 {
-    private SpriteRenderer[] _srs;
+    private float _nextCollect = -1f;
+    private SpriteRenderer[] _srs = new SpriteRenderer[0];
 
-    private void Awake()
+    private void Collect()
     {
         try { _srs = GetComponentsInChildren<SpriteRenderer>(true); } catch { _srs = new SpriteRenderer[0]; }
     }
@@ -513,11 +514,18 @@ public class PadLayerPin : MonoBehaviour
     {
         try
         {
-            if (_srs == null) return;
+            if (Time.unscaledTime >= _nextCollect)
+            {
+                _nextCollect = Time.unscaledTime + 0.5f;
+                Collect();
+            }
             for (int i = 0; i < _srs.Length; i++)
             {
                 if (_srs[i] == null) continue;
                 _srs[i].sortingLayerName = "FX_BG";
+                string n = _srs[i].name ?? "";
+                if (n.Contains("Cylinder") || n.Contains("Parts") || n.Contains("Fire"))
+                    _srs[i].enabled = false; // 重申零件禁用（游戏重建 SR 时可能恢复）
             }
         }
         catch { }
