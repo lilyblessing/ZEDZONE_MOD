@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.36（P2 实体 prefab 源头化：字典镜像泛化 + 克隆换贴图，修 900101 KeyNotFound）。
+/// 远距离传送站台 MOD v0.6.37（实体贴图 ppu 自适应：贴图高度对齐模板世界尺寸，换任意尺寸贴图免调代码）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.36")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.37")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -117,7 +117,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogWarning($"[TS] 提前图标缓存异常: {e.Message.Split('\n')[0]}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.36 字典镜像泛化 + prefab 克隆换贴图（P2 实体源头化）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.37 实体贴图 ppu 自适应（贴图高度对齐模板世界尺寸）");
     }
 }
 
@@ -893,7 +893,26 @@ internal static class RegistrarLogic
             }
             if (iconSp == null || iconSp.texture == null) { Plugin.L.LogWarning($"[TS] prefab 克隆无贴图: id={def.Id} 退回模板"); return template; }
             var tex = iconSp.texture;
-            var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 256f);
+            // v0.6.37 ppu 自适应：贴图世界尺寸对齐模板主 SR 世界高度（像素密度自动匹配原版风格，换任意尺寸贴图无需改代码）
+            float worldH = 2f;
+            try
+            {
+                var tSrs = template.GetComponentsInChildren<SpriteRenderer>(true);
+                foreach (var s in tSrs)
+                {
+                    if (s != null && s.sprite != null && s.sprite.texture != null)
+                    {
+                        var t = s.sprite;
+                        float ppuT = t.pixelsPerUnit > 0f ? t.pixelsPerUnit : 24f;
+                        worldH = t.rect.height / ppuT;
+                        break;
+                    }
+                }
+            }
+            catch { }
+            if (worldH <= 0f) worldH = 2f;
+            float ppu = tex.height / worldH;
+            var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), ppu);
             sp.name = def.SpriteKey + "_Body";
             var clone = UnityEngine.Object.Instantiate(template);
             clone.name = "TS_" + def.SpriteKey;
@@ -913,7 +932,7 @@ internal static class RegistrarLogic
                 if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
                     sr.enabled = false; // 零件贴图禁用（整机贴图已含细节）
             }
-            Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} mainDone={mainDone}");
+            Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} mainDone={mainDone}");
             return clone;
         }
         catch (Exception e)
