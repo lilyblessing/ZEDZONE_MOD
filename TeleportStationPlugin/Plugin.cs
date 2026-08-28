@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.5.0（P1：三建筑源头注册）。
+/// 远距离传送站台 MOD v0.6.29（纯源头计费，移除轮询覆盖）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -23,9 +23,14 @@ namespace TeleportStationPlugin;
 ///   - hook GetAvailableTerrainObjectAttrsByTechGenre postfix：Electricity 列表追加三建筑（游戏原版建卡流程）；
 ///   - hook GetTerrainObjectAttrById postfix：900101-3 查询兜底；
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
+/// v0.6.29：
+///   - 保留 BuildInfoPanel.GetTotalMaterialNumber(RecipeData) postfix 强制 6（=3s），纯源头不碰 UI；
+///   - 移除 RegistrationProbe.OverrideStatTime 轮询覆盖（500ms 也会干扰主线程角色控制，已实测卡死）；
+///   - 图标仅保留 TickCardIconFix 零高频保障（已验证无卡死）。
+/// 经验教训：任何对 ConstructionPanel/detailIcon/statTime 的高频动态注入都会抢占主线程输入，卡死角色控制，回归源头。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.25")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.29")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -86,11 +91,21 @@ public class Plugin : BasePlugin
                 Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectPrefabById（prefab 兜底）");
             }
             else Log.LogWarning("[TS] GetTerrainObjectPrefabById 挂钩失败");
+
+            // v0.6.28：建造时间源头——BuildInfoPanel.GetTotalMaterialNumber(RecipeData) → 强制 6（=3s，Σ/2 公式实测）
+            var getTotalMat = AccessTools.Method(typeof(BuildInfoPanel), "GetTotalMaterialNumber");
+            if (getTotalMat != null)
+            {
+                h.Patch(getTotalMat, postfix: new HarmonyMethod(typeof(BuildTimeSourceFix).GetMethod(
+                    nameof(BuildTimeSourceFix.Postfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 BuildInfoPanel.GetTotalMaterialNumber（建造时间 3s 源头）");
+            }
+            else Log.LogWarning("[TS] GetTotalMaterialNumber 挂钩失败（跳过）");
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.5.4 已加载，等待游戏就绪后源头注册");
+        Log.LogInfo("[TeleportStation] P1 v0.6.29 纯源头 3s（GetTotalMaterialNumber=6），已移除轮询覆盖");
     }
 }
 
@@ -428,6 +443,28 @@ public class SpriteInjector
         }
         return -1;
     }
+
+}
+
+/// <summary>v0.6.28：建造时间源头——BuildInfoPanel.GetTotalMaterialNumber(RecipeData) 强制 6（= ceil(6/2)=3s）。</summary>
+public static class BuildTimeSourceFix
+{
+    public static void Postfix(RecipeData __0, ref int __result)
+    {
+        try
+        {
+            if (__0 == null) return;
+            var idObj = Reflect.Get(__0, "itemId");
+            if (idObj == null) return;
+            int id = Convert.ToInt32(idObj);
+            if (id >= 900101 && id <= 900103)
+            {
+                __result = 6;
+                Plugin.L.LogInfo($"[TS] 建造时间源头: id={id} Σ→6 (3s)");
+            }
+        }
+        catch { }
+    }
 }
 
 /// <summary>注入器状态。</summary>
@@ -443,11 +480,10 @@ internal static class RegistrarState
 public class RegistrationProbe : MonoBehaviour
 {
     private float _timer = 20f; // 等 ItemManager/场景就绪
-    
 
     private void Update()
     {
-        // v0.6.16：延迟图标修复（一次性，仅浮点比较）
+        // v0.6.16：延迟图标修复（一次性，仅浮点比较）—— 1.5s 延迟 + 1s 节流 + 全好即停，零高频污染
         try { SpriteInjector.TickCardIconFix(); }
         catch { }
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
@@ -459,7 +495,6 @@ public class RegistrationProbe : MonoBehaviour
         try { RegistrarLogic.Run(); }
         catch (Exception e) { Plugin.L.LogError($"[TS] 探测顶层异常: {e}"); }
     }
-
 
 }
 
@@ -712,6 +747,10 @@ internal static class RegistrarLogic
             {
                 float target = tplT * (3f / 45f); // 45s-ish → 3s
                 Reflect.Set(recipe, "craftTime", target);
+                // v0.6.26：写入验证
+                var verifyObj = Reflect.Get(recipe, "craftTime");
+                float verify = verifyObj != null ? Convert.ToSingle(verifyObj) : -1f;
+                Plugin.L.LogInfo($"[TS] craftTime 写入验证: target={target:F2} verify={verify:F2}");
             }
         }
         catch { }
