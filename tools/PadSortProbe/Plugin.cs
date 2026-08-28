@@ -16,7 +16,7 @@ namespace PadSortProbe;
 /// 目的：定位 v0.6.40 PadLayerPin 是否生效、玩家实际所在层、圆盘与玩家的排序关系（y-sort 或层冲突）。
 /// 日志关键字：[PSP]，仅在存在圆盘实例时打印（节流 2s）。
 /// </summary>
-[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.6")]
+[BepInPlugin("com.zedzone.tool.padsortprobe", "PadSortProbe", "0.1.7")]
 public class Plugin : BasePlugin
 {
     public static ManualLogSource L;
@@ -25,7 +25,7 @@ public class Plugin : BasePlugin
     {
         L = Log;
         AddComponent<SortProbe>();
-        L.LogInfo("[PSP] PadSortProbe v0.1.6 已加载（枚举计数自证 + 字典直取克隆状态）");
+        L.LogInfo("[PSP] PadSortProbe v0.1.7 已加载（场景根遍历：实例 Pin 检测 + SR dump）");
     }
 }
 
@@ -38,7 +38,7 @@ public class SortProbe : MonoBehaviour
     {
         _next -= Time.unscaledDeltaTime;
         if (_next > 0f) return;
-        _next = 2f;
+        _next = 6f;
         try { Collect(); }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 采集异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -82,59 +82,56 @@ public class SortProbe : MonoBehaviour
         }
         catch (Exception e) { Plugin.L.LogWarning($"[PSP] 玩家采集异常: {e.Message.Split('\n')[0]}"); }
 
-        // 必杀 0：FindObjectsOfTypeAll 枚举计数自证 + 直取 prefab 字典 9001xx 克隆状态（不依赖全局枚举）
+        // 场景根遍历：Skips 枚举盲区（HideAndDontSave 不被 FindObjectsOfTypeAll 返回）——
+        // 遍历所有场景（含 DontDestroyOnLoad）的根对象 → PadLayerPin 组件（实例若带组件必中）→ dump SR 层/贴图
         try
         {
-            int srCnt = 0, trCnt = 0;
-            try
+            bool any = false;
+            foreach (var scene in UnityEngine.SceneManagement.SceneManager.GetAllScenes())
             {
-                var a = Resources.FindObjectsOfTypeAll<SpriteRenderer>();
-                if (a != null) srCnt = a.Length;
-            }
-            catch (Exception ex1) { Plugin.L.LogWarning($"[PSP] SR 枚举异常: {ex1.Message.Split('\n')[0]}"); }
-            try
-            {
-                var b = Resources.FindObjectsOfTypeAll<Transform>();
-                if (b != null) trCnt = b.Length;
-            }
-            catch (Exception ex2) { Plugin.L.LogWarning($"[PSP] Transform 枚举异常: {ex2.Message.Split('\n')[0]}"); }
-            Plugin.L.LogInfo($"[PSP] 枚举计数: SR={srCnt} Transform={trCnt}");
-
-            // 反射直取 GameController 含 900102 键的字典 → 克隆状态（真实存在性铁证）
-            var gcObj = typeof(GameController).GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)?.GetValue(null);
-            if (gcObj != null)
-            {
-                foreach (var p in gcObj.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
+                if (!scene.isLoaded) continue;
+                foreach (var root in scene.GetRootGameObjects())
                 {
-                    try
+                    if (root == null) continue;
+                    PadLayerPin[] pins = null;
+                    try { pins = root.GetComponentsInChildren<PadLayerPin>(true); } catch { }
+                    if (pins != null && pins.Length > 0)
                     {
-                        var v = p.GetValue(gcObj);
-                        if (v == null) continue;
-                        string vt = v.GetType().Name;
-                        if (!vt.Contains("Dictionary")) continue;
-                        bool has = (bool)v.GetType().GetMethod("ContainsKey").Invoke(v, new object[] { 900102 });
-                        if (!has) continue;
-                        object val = v.GetType().GetProperty("Item").GetValue(v, new object[] { 900102 });
-                        bool isGo = val is GameObject;
-                        Plugin.L.LogInfo($"[PSP] ★字典 {vt} [900102] → {(val == null ? "null" : val.GetType().FullName)} isGameObject={isGo}");
-                        if (isGo)
+                        foreach (var pin in pins)
                         {
-                            var go = (GameObject)val;
-                            Plugin.L.LogInfo($"[PSP]   克隆 '{go.name}' pos=({go.transform.position.x:F1},{go.transform.position.y:F1}) active={go.activeInHierarchy} hideFlags={go.hideFlags}");
-                            foreach (var sr in go.GetComponentsInChildren<SpriteRenderer>(true))
+                            if (pin == null) continue;
+                            var t = pin.transform;
+                            var r = t;
+                            while (r.parent != null) r = r.parent;
+                            any = true;
+                            Plugin.L.LogInfo($"[PSP] ★实例(PadLayerPin) root='{r.name}' 场景='{scene.name}' pos=({t.position.x:F1},{t.position.y:F1}) active={t.gameObject.activeInHierarchy}");
+                            foreach (var sr in t.GetComponentsInChildren<SpriteRenderer>(true))
                             {
                                 if (sr == null) continue;
                                 string sn = "";
                                 try { sn = sr.sprite == null ? "<null>" : (sr.sprite.name ?? "<unnamed>"); } catch { sn = "<读异常>"; }
-                                Plugin.L.LogInfo($"[PSP]     克隆SR '{sr.name}' sprite={sn} layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder}");
+                                Plugin.L.LogInfo($"[PSP]     SR '{sr.name}' sprite={sn} layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder} pos=({sr.transform.position.x:F1},{sr.transform.position.y:F1})");
                             }
                         }
                     }
-                    catch (Exception ex3) { }
+                    // 名字兜底：root 名含 900102/TS_/Teleport 的对象（可能无 Pin）
+                    string rn = root.name ?? "";
+                    if (rn.Contains("900102") || rn.Contains("TS_") || rn.Contains("Teleport"))
+                    {
+                        any = true;
+                        Plugin.L.LogInfo($"[PSP] 场景根对象 '{rn}'（场景 '{scene.name}'，有名字特征）");
+                        foreach (var sr in root.GetComponentsInChildren<SpriteRenderer>(true))
+                        {
+                            if (sr == null) continue;
+                            string sn2 = "";
+                            try { sn2 = sr.sprite == null ? "<null>" : (sr.sprite.name ?? ""); } catch { }
+                            Plugin.L.LogInfo($"[PSP]     SR '{sr.name}' sprite={sn2} layer={sr.sortingLayerName}({sr.sortingLayerID}) order={sr.sortingOrder}");
+                        }
+                    }
                 }
             }
-            else Plugin.L.LogInfo("[PSP] GC.instance=null（未进存档）");
+            if (!any) Plugin.L.LogInfo("[PSP] 场景根遍历：未找到 PadLayerPin 实例（克隆组件的实例复制可能失败）");
         }
-        catch (Exception e4) { Plugin.L.LogWarning($"[PSP] 字典直取异常: {e4.Message.Split('\n')[0]}"); }
+        catch (Exception e5) { Plugin.L.LogWarning($"[PSP] 场景遍历异常: {e5.Message.Split('\n')[0]}"); }
     }
 }
