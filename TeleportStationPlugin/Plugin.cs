@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.31（源头 spriteName + 源头 3s，零轮询）。
+/// 远距离传送站台 MOD v0.6.32（修复空名空白，源头 spriteName + 源头 3s，零轮询）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.31")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.32")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -115,7 +115,7 @@ public class Plugin : BasePlugin
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.31 源头 spriteName + 源头 3s（零轮询）");
+        Log.LogInfo("[TeleportStation] P1 v0.6.32 修复空名空白（spriteName 命名+校验）");
     }
 }
 
@@ -326,8 +326,9 @@ public class SpriteInjector
             var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
             if (!ImageConversion.LoadImage(tex, bytes)) { Plugin.L.LogWarning($"[TS] LoadImage 失败: {def.IconFile}"); return; }
             var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+            sp.name = Path.GetFileNameWithoutExtension(def.IconFile) + "_" + def.Id;
             Cache[def.Id] = sp;
-            Plugin.L.LogInfo($"[TS] 图标缓存: {def.Id} {def.IconFile} {tex.width}x{tex.height}");
+            Plugin.L.LogInfo($"[TS] 图标缓存: {def.Id} {def.IconFile} {tex.width}x{tex.height} name={sp.name}");
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标缓存异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -796,12 +797,12 @@ internal static class RegistrarLogic
         RegistrationStore.Attrs[def.Id] = attr;
         SpriteInjector.CacheSprite(def); // v0.5.3：图标缓存（Image.set_sprite 兜底用）
         // v0.6.31 源头图标：让 BuildGridArea 天然拿到正确图（不碰 ConstructionPanel/Build 实例层）
-        if (SpriteInjector.Cache.TryGetValue(def.Id, out var spCached) && spCached != null)
+        if (SpriteInjector.Cache.TryGetValue(def.Id, out var spCached) && spCached != null && !string.IsNullOrEmpty(spCached.name))
         {
-            try { Reflect.Set(attr, "spriteName", spCached.name); }
-            catch { }
-            Plugin.L.LogInfo($"[TS] spriteName 源头: id={def.Id} → {spCached.name}");
+            try { Reflect.Set(attr, "spriteName", spCached.name); Plugin.L.LogInfo($"[TS] spriteName 源头: id={def.Id} → {spCached.name}"); }
+            catch (Exception e) { Plugin.L.LogWarning($"[TS] spriteName 设置异常: {e.Message.Split('\n')[0]}"); }
         }
+        else Plugin.L.LogWarning($"[TS] spriteName 源头跳过: id={def.Id} Cache miss/empty name");
         // v0.5.2：ModSpriteRegistry 注册建筑贴图（贴图在 textures/ 子目录，官方字典源头，双保险）
         try
         {
@@ -812,7 +813,8 @@ internal static class RegistrarLogic
                 var isMod = ModSpriteRegistry.IsModItem(def.Id);
                 var got = ModSpriteRegistry.GetMain(def.Id);
                 string gName = got != null ? got.name : "null";
-                Plugin.L.LogInfo($"[TS] ModSpriteRegistry 校验: id={def.Id} IsModItem={isMod} GetMain={gName}");
+                string texInfo = got != null && got.texture != null ? $"{got.texture.width}x{got.texture.height}" : "no-tex";
+                Plugin.L.LogInfo($"[TS] ModSpriteRegistry 校验: id={def.Id} IsModItem={isMod} GetMain={gName} tex={texInfo}");
             }
             catch (Exception e2) { Plugin.L.LogInfo($"[TS] ModSpriteRegistry 校验异常: {e2.Message.Split('\n')[0]}"); }
         }
