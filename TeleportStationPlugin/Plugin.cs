@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.6.29（纯源头计费，移除轮询覆盖）。
+/// 远距离传送站台 MOD v0.6.30（源头图标 + 源头 3s，零轮询）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -23,14 +23,14 @@ namespace TeleportStationPlugin;
 ///   - hook GetAvailableTerrainObjectAttrsByTechGenre postfix：Electricity 列表追加三建筑（游戏原版建卡流程）；
 ///   - hook GetTerrainObjectAttrById postfix：900101-3 查询兜底；
 ///   - 原版建筑完全不动；卡片 UI（名字/图标/点击/详情）由游戏原生渲染。
-/// v0.6.29：
-///   - 保留 BuildInfoPanel.GetTotalMaterialNumber(RecipeData) postfix 强制 6（=3s），纯源头不碰 UI；
-///   - 移除 RegistrationProbe.OverrideStatTime 轮询覆盖（500ms 也会干扰主线程角色控制，已实测卡死）；
-///   - 图标仅保留 TickCardIconFix 零高频保障（已验证无卡死）。
-/// 经验教训：任何对 ConstructionPanel/detailIcon/statTime 的高频动态注入都会抢占主线程输入，卡死角色控制，回归源头。
+/// v0.6.30：
+///   - BuildInfoPanel.GetTotalMaterialNumber(RecipeData) postfix →6（=3s），纯源头不碰 UI；
+///   - GameController.GetTerrainObjectIconSprite(int) postfix → Cache[id]（public 源头，不碰 ConstructionPanel/Build）；
+///   - TickCardIconFix 保留为零高频幂等保障，仅在已验证窗口内生效。
+/// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯 public static/源头字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.29")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.6.30")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -101,11 +101,21 @@ public class Plugin : BasePlugin
                 Log.LogInfo("[TS] 已挂钩 BuildInfoPanel.GetTotalMaterialNumber（建造时间 3s 源头）");
             }
             else Log.LogWarning("[TS] GetTotalMaterialNumber 挂钩失败（跳过）");
+
+            // v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) 纯源头替换（public，非 MonoBehaviour，零卡死）
+            var getIcon = AccessTools.Method(typeof(GameController), "GetTerrainObjectIconSprite");
+            if (getIcon != null)
+            {
+                h.Patch(getIcon, postfix: new HarmonyMethod(typeof(IconSourceFix).GetMethod(
+                    nameof(IconSourceFix.Postfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectIconSprite（图标源头）");
+            }
+            else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
         AddComponent<RegistrationProbe>();
-        Log.LogInfo("[TeleportStation] P1 v0.6.29 纯源头 3s（GetTotalMaterialNumber=6），已移除轮询覆盖");
+        Log.LogInfo("[TeleportStation] P1 v0.6.30 源头图标 + 源头 3s（零轮询）");
     }
 }
 
@@ -461,6 +471,24 @@ public static class BuildTimeSourceFix
             {
                 __result = 6;
                 Plugin.L.LogInfo($"[TS] 建造时间源头: id={id} Σ→6 (3s)");
+            }
+        }
+        catch { }
+    }
+}
+
+/// <summary>v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) → Cache[id]，卡片+详情一次解决（public 源头，零轮询）。</summary>
+public static class IconSourceFix
+{
+    public static void Postfix(int __0, ref Sprite __result)
+    {
+        try
+        {
+            if (__0 < 900101 || __0 > 900103) return;
+            if (SpriteInjector.Cache.TryGetValue(__0, out var sp) && sp != null)
+            {
+                __result = sp;
+                Plugin.L.LogInfo($"[TS] 图标源头: id={__0} → {sp.name}");
             }
         }
         catch { }
