@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.7.3（每帧开销优化：一次性分类缓存，非目标放置物 O(1) 跳过，多站点无压力）。
+/// 远距离传送站台 MOD v0.8.0（P2 生物能电站：燃料准入 Food + 消耗观察）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.7.3")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.0")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -103,6 +103,22 @@ public class Plugin : BasePlugin
                 h.Patch(getIcon, postfix: new HarmonyMethod(typeof(IconSourceFix).GetMethod(
                     nameof(IconSourceFix.Postfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectIconSprite（图标源头）");
+
+            // v0.8.0 P2：生物能电站燃料——OnGeneratorStart/Stop postfix（900103 准入改造 + 消耗观察）
+            var genStart = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "OnGeneratorStart");
+            if (genStart != null)
+            {
+                h.Patch(genStart, postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                    nameof(BioGenFuel.OnGeneratorStartPostfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 StirlingGenerator.OnGeneratorStart（BioGen 准入）");
+            }
+            var genStop = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "OnGeneratorStop");
+            if (genStop != null)
+            {
+                h.Patch(genStop, postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                    nameof(BioGenFuel.OnGeneratorStopPostfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 StirlingGenerator.OnGeneratorStop（BioGen 观察）");
+            }
             }
             else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
             // v0.6.39：圆盘渲染层守卫——拦截游戏「建筑 Y 排序」对圆盘实例 sortingLayer 的改写（恒守 FX_BG，防圆盘盖玩家/车）
@@ -133,7 +149,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.7.3 放置物开销优化（分类缓存）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.0 BioGenFuel（准入 Food + 消耗观察）");
     }
 }
 
@@ -621,6 +637,8 @@ public class RegistrationProbe : MonoBehaviour
         // v0.6.33：周期图标修复移除（纯源头实验）；v0.6.16 旧逻辑 TickCardIconFix 回退时恢复
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
+        // v0.8.0 P2：生物能电站消耗采样/兜底准入（每 10s 低频）
+        try { BioGenFuel.Tick(); } catch { }
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
         if (_timer > 0f) return;
         if (RegistrarState.RetryPending) { _timer = 30f; RegistrarState.RetryPending = false; }
