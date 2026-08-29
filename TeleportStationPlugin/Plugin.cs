@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.7.1（圆盘放置物渲染监控：ActiveDeployableItems 修正贴图 ppu + 每帧钉 order=-5）。
+/// 远距离传送站台 MOD v0.7.2（贴图每帧钉：大小恒 9.8x7；放置物生成机制调查 dump）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.7.1")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.7.2")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -133,7 +133,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.7.1 圆盘放置物渲染监控（ActiveDeployableItems 修正）");
+        Log.LogInfo("[TeleportStation] P1 v0.7.2 贴图每帧钉 + 放置物机制调查");
     }
 }
 

@@ -6,15 +6,14 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// v0.7.1：圆盘放置物渲染监控（DeployableItem.ActiveDeployableItems 遍历——游戏原生放置物全局列表）。
-/// 问题（v0.7.0 实测）：通用放置物生成对象 = 尺寸小（游戏默认 ppu）+ 被游戏 y-sort 抬升 order（盖玩家）。
-/// 修复（睡袋同款机制：Character 层 + 固定负 order）：
-///   - 首次发现（itemId=900110）：主 SR 贴图替换为 ppu 自适应 Sprite（texH/7 → 世界 ≈9.8×7），层=Character，order=-5，零件 SR 禁用；
-///   - 之后每帧钉 order=-5（防游戏 y-sort 抬升——放置物数量少，开销可忽略）。
+/// v0.7.2：①贴图也每帧钉（游戏每帧重设放置物 SR.sprite，只写一次无效）→ 大小恒 9.8×7；
+///        ②未见过放置物一次性 dump（root 名/组件类型/SR 概览）——摸清"放置物→prefab 绑定"（睡袋 vs 通用对比，源头化前置取证）。
+/// 睡袋同款机制：Character 层 + 固定负 order；sprite ppu 自适应（texH/7 → 世界 ≈9.8×7）。
 /// </summary>
 public class PadDeployMonitor : MonoBehaviour
 {
-    private static readonly HashSet<long> FixedPtrs = new();
-    private static readonly HashSet<long> PinnedPtrs = new();
+    private static Sprite _bodySprite;
+    private static bool _bodyInit;
 
     private void Update()
     {
@@ -26,6 +25,16 @@ public class PadDeployMonitor : MonoBehaviour
             {
                 var d = list[i];
                 if (d == null) continue;
+
+                // v0.7.2 调查：未见过放置物一次性 dump（去重）——睡袋/圆盘/通用对比
+                long ptr = 0;
+                try { ptr = (long)d.Pointer; } catch { ptr = d.GetHashCode(); }
+                if (!_seenAny.Contains(ptr))
+                {
+                    _seenAny.Add(ptr);
+                    try { DumpItem(d); } catch { }
+                }
+
                 int itemId = -1;
                 try
                 {
@@ -35,69 +44,88 @@ public class PadDeployMonitor : MonoBehaviour
                 catch { }
                 if (itemId != PadDeployable.ItemId) continue;
 
-                long ptr = 0;
-                try { ptr = (long)d.Pointer; } catch { ptr = d.GetHashCode(); }
-
-                if (!FixedPtrs.Contains(ptr))
+                if (!_fixed.Contains(ptr))
                 {
-                    FixedPtrs.Add(ptr);
-                    try { FixItem(d); } catch (Exception e) { Plugin.L.LogWarning($"[TS] 圆盘放置物修正异常: {e.Message.Split('\n')[0]}"); }
-                    Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: ptr={ptr} itemId={itemId}（贴图/层/order）");
+                    _fixed.Add(ptr);
+                    Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: ptr={ptr} itemId={itemId}（进入每帧钉维护）");
                 }
-                else if (PinnedPtrs.Contains(ptr))
-                {
-                    PinItem(d); // 每帧钉低 order（防 y-sort 抬升，睡袋同款）
-                }
+                Apply(d);
             }
         }
-        catch { } // 静默低频（ActiveDeployableItems 遍历不应中断主循环）
+        catch { } // 静默低频
     }
 
-    private static void FixItem(DeployableItem d)
+    private static readonly HashSet<long> _seenAny = new();
+    private static readonly HashSet<long> _fixed = new();
+
+    /// <summary>每帧钉：层 Character + order -5 + 主贴图（ppu 自适应）+ 零件禁用（游戏每帧重设 sprite/order，我们同样每帧覆盖）。</summary>
+    private static void Apply(DeployableItem d)
     {
+        EnsureBodySprite();
         var srs = d.GetComponentsInChildren<SpriteRenderer>(true);
-        Sprite body = null;
-        if (SpriteInjector.Cache.TryGetValue(900102, out var icon) && icon != null && icon.texture != null)
-        {
-            var tex = icon.texture;
-            body = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), tex.height / 7.0f);
-            body.name = "TeleportPad_Deploy_Body";
-        }
-        bool mainDone = false;
         foreach (var sr in srs)
         {
             if (sr == null) continue;
             string sn = sr.name ?? "";
-            sr.sortingLayerName = "Character";
-            sr.sortingOrder = -5;
-            if (!mainDone && body != null && (sn == "Sprite" || sn.StartsWith("Sprite") || sr.sprite == null))
+            if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
             {
-                sr.sprite = body; // 主贴图替换（ppu 自适应 → 世界 ≈9.8×7）
-                mainDone = true;
+                sr.enabled = false;
                 continue;
             }
-            if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
-                sr.enabled = false;
+            sr.sortingLayerName = "Character";
+            sr.sortingOrder = -5;
+            if (_bodySprite != null) sr.sprite = _bodySprite;
         }
-        if (mainDone) PinnedPtrs.Add(PtrOf(d));
     }
 
-    private static void PinItem(DeployableItem d)
+    private static void EnsureBodySprite()
     {
+        if (_bodyInit) return;
+        _bodyInit = true;
         try
         {
-            var srs = d.GetComponentsInChildren<SpriteRenderer>(true);
-            foreach (var sr in srs)
+            if (SpriteInjector.Cache.TryGetValue(900102, out var icon) && icon != null && icon.texture != null)
             {
-                if (sr == null) continue;
-                sr.sortingOrder = -5; // 每帧低 order：玩家 body order≥0 恒在其上
+                var tex = icon.texture;
+                _bodySprite = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), tex.height / 7.0f);
+                _bodySprite.name = "TeleportPad_Deploy_Body";
             }
         }
         catch { }
     }
 
-    private static long PtrOf(DeployableItem d)
+    /// <summary>一次性 dump：root 名/组件类型/SR 概览（睡袋 vs 圆盘 vs 通用——寻找 prefab 绑定规则）。</summary>
+    private static void DumpItem(DeployableItem d)
     {
-        try { return (long)d.Pointer; } catch { return d.GetHashCode(); }
+        try
+        {
+            var t = d.transform;
+            var r = t;
+            while (r.parent != null) r = r.parent;
+            string comps = "";
+            foreach (var c in r.GetComponents<Component>())
+            {
+                if (c == null) continue;
+                comps += c.GetType().Name + ",";
+                if (comps.Length > 250) break;
+            }
+            string srs = "";
+            foreach (var sr in r.GetComponentsInChildren<SpriteRenderer>(true))
+            {
+                if (sr == null) continue;
+                string sn = "";
+                try { sn = sr.sprite == null ? "<null>" : (sr.sprite.name ?? ""); } catch { }
+                srs += $" [{sr.name}:{sr.sortingLayerName}/{sr.sortingOrder}/{sn}]";
+            }
+            int itId = -1;
+            try
+            {
+                var attr = d.itemAttr;
+                if (attr != null) itId = Convert.ToInt32(Reflect.Get(attr, "itemId"));
+            }
+            catch { }
+            Plugin.L.LogInfo($"[TS] 放置物调查: root='{r.name}' itemId={itId} 组件=[{comps}] SR:{srs}");
+        }
+        catch { }
     }
 }
