@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.5")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.6")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -127,8 +127,29 @@ public class Plugin : BasePlugin
                     nameof(BioGenFuel.GetFuelInventoryPostfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 StirlingGenerator.get_fuelInventoryData（BioGen 燃料仓标记）");
             }
-            // v0.8.5：白名单定案——唯一入口 InventoryData.PassesFeatureLimit（私有非虚，UI 拖放与 Try* 公共判定点）
-            // 备份：AddItem/Try* 仍挂（双保险，成本低）
+            // v0.8.6：启动白名单（GetItemListByFeature 对生物仓返回白名单燃料列表）+ 半速消耗（CostItemDurability ×0.5）
+            try
+            {
+                var gif = AccessTools.Method(typeof(InventoryData), "GetItemListByFeature");
+                if (gif != null)
+                {
+                    h.Patch(gif, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.GetItemListByFeaturePrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 InventoryData.GetItemListByFeature（BioGen 启动白名单）");
+                }
+            }
+            catch (Exception ea) { Log.LogWarning($"[TS] GetItemListByFeature 挂钩异常: {ea.Message.Split('\n')[0]}"); }
+            try
+            {
+                var cid = AccessTools.Method(typeof(InventoryData), "CostItemDurability", new Type[] { typeof(int), typeof(float), typeof(List<InventoryData>) });
+                if (cid != null)
+                {
+                    h.Patch(cid, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.CostItemDurabilityHalfPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 InventoryData.CostItemDurability（BioGen 半速消耗）");
+                }
+            }
+            catch (Exception eb) { Log.LogWarning($"[TS] CostItemDurability 挂钩异常: {eb.Message.Split('\n')[0]}"); }
             var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting", "PassesFeatureLimit" };
             foreach (var tn in tryNames)
             {
@@ -173,7 +194,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.5 BioGenFuel 白名单定案（PassesFeatureLimit）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.6 BioGenFuel 三链白名单（准入+启动+半速）");
     }
 }
 

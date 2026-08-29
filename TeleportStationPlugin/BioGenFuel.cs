@@ -79,6 +79,64 @@ public static class BioGenFuel
         catch { return true; }
     }
 
+    /// <summary>v0.8.6：启动判定白名单化——InventoryData.GetItemListByFeature(Combustible) 对生物燃料仓返回「白名单燃料列表」
+    ///（腐肉 205 / 过期食品）→ ProductionManager.UpdateStirlingGenerator 的「有燃料→OnGeneratorStart」成立；
+    /// 木头/金属等在生物仓视为无燃料（且准入已拒，正常情况下仓内仅白名单）。</summary>
+    public static bool GetItemListByFeaturePrefix(InventoryData __instance, ItemFeatureType m_itemFeatureType, ref Il2CppSystem.Collections.Generic.List<ItemData> __result)
+    {
+        try
+        {
+            if (__instance == null) return true;
+            // Combustible == 1（ItemFeatureType 枚举，dump.cs 校准）；防御性用名字比较
+            bool isCombustible = false;
+            try { isCombustible = m_itemFeatureType.ToString() == "Combustible"; } catch { }
+            try { if ((int)(object)m_itemFeatureType == 1) isCombustible = true; } catch { }
+            if (!isCombustible) return true;
+            if (!IsBioGenContainer(__instance)) return true;
+            var list = new Il2CppSystem.Collections.Generic.List<ItemData>();
+            try
+            {
+                var raw = Reflect.Get(__instance, "itemList") as Il2CppSystem.Collections.Generic.List<ItemData>;
+                if (raw != null)
+                {
+                    for (int i = 0; i < raw.Count; i++)
+                    {
+                        var it = raw[i];
+                        if (it == null) continue;
+                        int id = FuelItemId(it);
+                        if (id == 205 || IsExpiredFood(it)) list.Add(it); // 白名单：腐肉 / 过期食品
+                    }
+                }
+            }
+            catch { }
+            __result = list;
+            return false;
+        }
+        catch { return true; }
+    }
+
+    /// <summary>v0.8.6：半速消耗——InventoryData.CostItemDurability(int, float, List&lt;InventoryData&gt;) prefix（壁炉/斯特林燃烧扣耐路径）：
+    /// 消耗集合含生物燃料仓时 m_costDurability *= 0.5（燃料耐久翻倍 = 速率减半；发电量不变）。</summary>
+    public static bool CostItemDurabilityHalfPrefix(int m_itemId, ref float m_costDurability, Il2CppSystem.Collections.Generic.List<InventoryData> inventorys)
+    {
+        try
+        {
+            if (inventorys == null || m_costDurability <= 0f) return true;
+            for (int i = 0; i < inventorys.Count; i++)
+            {
+                var inv = inventorys[i];
+                if (inv == null) continue;
+                if (IsBioGenContainer(inv))
+                {
+                    m_costDurability *= 0.5f;
+                    return true; // 仅改数量，放行原逻辑
+                }
+            }
+        }
+        catch { }
+        return true;
+    }
+
     /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix（v0.8.4 用 __0 位置绑定——参数名不匹配曾致 patch 失败）。
     /// 实时容器归属判定；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
     public static bool WhitelistPrefix(InventoryData __instance, ItemData __0)
@@ -131,6 +189,24 @@ public static class BioGenFuel
             return Convert.ToInt32(Reflect.Get(attr, "itemId"));
         }
         catch { return -1; }
+    }
+
+    /// <summary>过期食品判定：Food 类且 ItemData.IsFoodExpired()==true（v0.8.6 加入）。</summary>
+    private static bool IsExpiredFood(ItemData it)
+    {
+        try
+        {
+            var attr = Reflect.Get(it, "itemAttr");
+            if (attr == null) return false;
+            var itype = Reflect.Get(attr, "itemType");
+            if (itype == null || !itype.ToString().Contains("Food")) return false;
+            var m = it.GetType().GetMethod("IsFoodExpired");
+            if (m != null) return (bool)m.Invoke(it, null);
+            var p = it.GetType().GetProperty("IsFoodExpired");
+            if (p != null) return (bool)p.GetValue(it);
+            return false;
+        }
+        catch { return false; }
     }
 
     /// <summary>白名单：腐肉 205 或 过期食品（游戏时间 − 生产时间 ≥ 保质期）。</summary>
