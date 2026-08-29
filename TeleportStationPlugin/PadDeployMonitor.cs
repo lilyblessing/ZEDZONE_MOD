@@ -26,14 +26,16 @@ public class PadDeployMonitor : MonoBehaviour
                 var d = list[i];
                 if (d == null) continue;
 
-                // v0.7.2 调查：未见过放置物一次性 dump（去重）——睡袋/圆盘/通用对比
                 long ptr = 0;
                 try { ptr = (long)d.Pointer; } catch { ptr = d.GetHashCode(); }
-                if (!_seenAny.Contains(ptr))
+
+                // v0.7.3：一次性分类缓存——非目标放置物不再每帧反射（每帧仅 O(1) 跳过）
+                if (_classified.Contains(ptr))
                 {
-                    _seenAny.Add(ptr);
-                    try { DumpItem(d); } catch { }
+                    if (_pads.Contains(ptr)) Apply(d); // 每帧钉已知目标
+                    continue;
                 }
+                _classified.Add(ptr);
 
                 int itemId = -1;
                 try
@@ -42,21 +44,19 @@ public class PadDeployMonitor : MonoBehaviour
                     if (attr != null) itemId = Convert.ToInt32(Reflect.Get(attr, "itemId"));
                 }
                 catch { }
-                if (itemId != PadDeployable.ItemId) continue;
 
-                if (!_fixed.Contains(ptr))
-                {
-                    _fixed.Add(ptr);
-                    Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: ptr={ptr} itemId={itemId}（进入每帧钉维护）");
-                }
+                if (itemId != PadDeployable.ItemId) continue;
+                _pads.Add(ptr);
+                try { DumpItem(d); } catch { }
+                Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: ptr={ptr} itemId={itemId}（进入每帧钉维护）");
                 Apply(d);
             }
         }
         catch { } // 静默低频
     }
 
-    private static readonly HashSet<long> _seenAny = new();
-    private static readonly HashSet<long> _fixed = new();
+    private static readonly HashSet<long> _classified = new(); // 已分类（含非目标，避免重复反射）
+    private static readonly HashSet<long> _pads = new();       // 目标盘（每帧钉）
 
     /// <summary>每帧钉：层 Character + order -5 + 主贴图（ppu 自适应）+ 零件禁用（游戏每帧重设 sprite/order，我们同样每帧覆盖）。</summary>
     private static void Apply(DeployableItem d)
