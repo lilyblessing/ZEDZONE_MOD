@@ -15,8 +15,10 @@ public static class BioGenFuel
 {
     private static float _lastSample;
     private static bool _warnedNoAttrField;
-    private static readonly System.Collections.Generic.HashSet<long> _markedContainers = new();
     private static float _lastRejectLog;
+    private static float _lastContainerMissWarn;
+    private static bool _warnedContainerMiss;
+    private static readonly System.Collections.Generic.HashSet<long> _markedContainers = new();
 
     /// <summary>hook get_fuelInventoryData postfix：标记 900103 燃料容器（标题「生物燃料」+ 一次性记录）——白名单识别基准。</summary>
     public static void GetFuelInventoryPostfix(TerrainObject_Production_StirlingGenerator __instance, ref InventoryData __result)
@@ -54,6 +56,7 @@ public static class BioGenFuel
         {
             if (__instance == null || attr == null) return true;
             if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓走原判定
+            // v0.8.8 诊断：多路读取 itemId（主路径反射，辅打印属性/字段/直读差异）
             int id = -1;
             try { id = Convert.ToInt32(Reflect.Get(attr, "itemId")); } catch { }
             bool isFood = false;
@@ -63,6 +66,21 @@ public static class BioGenFuel
                 isFood = itype != null && itype.ToString().Contains("Food");
             }
             catch { }
+            if (id == 0 || id == -1)
+            {
+                // 诊断：打印多路读取结果
+                try
+                {
+                    string diag = $"[TS] PassesFeatureLimit 诊断: attrType={attr.GetType().Name} ";
+                    var p = attr.GetType().GetProperty("itemId");
+                    diag += $"prop={(p == null ? "null" : p.GetValue(attr))} ";
+                    var f = attr.GetType().GetField("itemId");
+                    diag += $"field={(f == null ? "null" : f.GetValue(attr))} ";
+                    diag += $"itemType={Reflect.Get(attr, "itemType")}";
+                    Plugin.L.LogInfo(diag);
+                }
+                catch (Exception de) { Plugin.L.LogWarning($"[TS] 诊断异常: {de.Message.Split('\n')[0]}"); }
+            }
             if (id == 205 || isFood)
             {
                 __result = true; // 白名单通过（腐肉 / 食品类）
@@ -158,7 +176,7 @@ public static class BioGenFuel
         catch { return true; }
     }
 
-    /// <summary>v0.8.2：实时容器归属——遍历斯特林活动实例，找到持有该容器的 900103（不依赖标记）。</summary>
+    /// <summary>v0.8.2：实时容器归属——遍历斯特林活动实例，找到持有该容器的 900103（不依赖标记）。\n    /// v0.8.8：未命中时一次性诊断（ActiveObjects 数量/各实例 fuelInventoryData 状态/attr id）。</summary>
     private static bool IsBioGenContainer(InventoryData fd)
     {
         try
@@ -175,6 +193,24 @@ public static class BioGenFuel
                     if (fuel != null && ReferenceEquals(fuel, fd)) return true;
                 }
                 catch { }
+            }
+            if (!_warnedContainerMiss && Time.unscaledTime - _lastContainerMissWarn > 10f)
+            {
+                _lastContainerMissWarn = Time.unscaledTime;
+                _warnedContainerMiss = true;
+                int bioCnt = 0, fuelNull = 0;
+                try
+                {
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var g = list[i];
+                        if (g == null || !IsBioGen(g)) continue;
+                        bioCnt++;
+                        try { if (g.fuelInventoryData == null) fuelNull++; } catch { fuelNull++; }
+                    }
+                }
+                catch { }
+                Plugin.L.LogInfo($"[TS] 容器归属未命中诊断: ActiveObjects={list.Count} 生物机={bioCnt} fuelNull={fuelNull} 目标容器={fd?.GetType().Name}");
             }
             return false;
         }
