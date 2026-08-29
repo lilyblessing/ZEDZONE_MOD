@@ -46,6 +46,39 @@ public static class BioGenFuel
         catch { }
     }
 
+    /// <summary>v0.8.5：准入判定点 = InventoryData.PassesFeatureLimit(ItemAttr)（private non-virtual，UI 拖放与 TryAddItem 公共入口）。
+    /// 生物燃料仓：白名单 = 腐肉 205 / 食品类（含过期食品，attr 级判定）；其余拒绝。</summary>
+    public static bool PassesFeatureLimitPrefix(InventoryData __instance, ItemAttr attr, ref bool __result)
+    {
+        try
+        {
+            if (__instance == null || attr == null) return true;
+            if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓走原判定
+            int id = -1;
+            try { id = Convert.ToInt32(Reflect.Get(attr, "itemId")); } catch { }
+            bool isFood = false;
+            try
+            {
+                var itype = Reflect.Get(attr, "itemType");
+                isFood = itype != null && itype.ToString().Contains("Food");
+            }
+            catch { }
+            if (id == 205 || isFood)
+            {
+                __result = true; // 白名单通过（腐肉 / 食品类）
+                return false;
+            }
+            __result = false;
+            if (Time.unscaledTime - _lastRejectLog > 3f)
+            {
+                _lastRejectLog = Time.unscaledTime;
+                Plugin.L.LogInfo($"[TS] BioGen 拒绝燃料: id={id}");
+            }
+            return false;
+        }
+        catch { return true; }
+    }
+
     /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix（v0.8.4 用 __0 位置绑定——参数名不匹配曾致 patch 失败）。
     /// 实时容器归属判定；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
     public static bool WhitelistPrefix(InventoryData __instance, ItemData __0)

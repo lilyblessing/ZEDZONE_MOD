@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.4")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.5")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -127,8 +127,9 @@ public class Plugin : BasePlugin
                     nameof(BioGenFuel.GetFuelInventoryPostfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 StirlingGenerator.get_fuelInventoryData（BioGen 燃料仓标记）");
             }
-            // v0.8.3：白名单准入（AddItem 私有漏斗 + 三个 Try* 入口，prefix 实时容器归属判定）
-            var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting" };
+            // v0.8.5：白名单定案——唯一入口 InventoryData.PassesFeatureLimit（私有非虚，UI 拖放与 Try* 公共判定点）
+            // 备份：AddItem/Try* 仍挂（双保险，成本低）
+            var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting", "PassesFeatureLimit" };
             foreach (var tn in tryNames)
             {
                 try
@@ -172,7 +173,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.4 BioGenFuel 白名单修复（__0 绑定 + 接管准入）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.5 BioGenFuel 白名单定案（PassesFeatureLimit）");
     }
 }
 
