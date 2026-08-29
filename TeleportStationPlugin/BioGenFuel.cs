@@ -35,9 +35,9 @@ public static class BioGenFuel
         catch { }
     }
 
-    /// <summary>hook InventoryData.TryAddItem 系列 prefix：实时容器归属判定（反向遍历斯特林活动列表）——
-    /// 不依赖 getter 标记（get_fuelInventoryData detour 间歇失效，v0.8.1 教训）；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
-    public static bool TryAddItemPrefix(InventoryData __instance, ItemData item)
+    /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix：
+    /// 实时容器归属判定（反向遍历斯特林活动列表，不依赖 getter 标记）；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
+    public static bool WhitelistPrefix(InventoryData __instance, ItemData item)
     {
         try
         {
@@ -50,7 +50,7 @@ public static class BioGenFuel
                 _lastRejectLog = Time.unscaledTime;
                 Plugin.L.LogInfo($"[TS] BioGen 拒绝燃料: {(item == null ? "null" : (Reflect.Get(item, "itemName") + " id=" + FuelItemId(item)))}");
             }
-            return false; // 拒绝放入
+            return false; // 拒绝放入（物品将回到原处）
         }
         catch { return true; }
     }
