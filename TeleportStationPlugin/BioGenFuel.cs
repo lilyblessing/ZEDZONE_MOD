@@ -29,20 +29,32 @@ public static class BioGenFuel
             if (_markedContainers.Add(ptr))
             {
                 try { Reflect.Set(__result, "inventoryTitleName", GameLocale.T("生物燃料仓", "Bio Fuel Hopper")); } catch { }
-                Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记（白名单：腐肉 205 + 过期食品）；size=({__result.inventorySizeX}x{__result.inventorySizeY})");
+                // v0.8.4：清空 itemFeatureLimit（接管准入——UI 层不再拦任何物品，唯一白名单 = AddItem hook）
+                try
+                {
+                    var empty = new Il2CppSystem.Collections.Generic.List<ItemFeatureType>();
+                    Reflect.Set(__result, "itemFeatureLimit", empty);
+                    Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记并接管准入（itemFeatureLimit 清空，白名单=AddItem hook）；size=({__result.inventorySizeX}x{__result.inventorySizeY})");
+                }
+                catch (Exception e1)
+                {
+                    Plugin.L.LogWarning($"[TS] itemFeatureLimit 清空异常: {e1.Message.Split('\n')[0]}");
+                    Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记（仅标记，准入接管失败）；size=({__result.inventorySizeX}x{__result.inventorySizeY})");
+                }
             }
         }
         catch { }
     }
 
-    /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix：
-    /// 实时容器归属判定（反向遍历斯特林活动列表，不依赖 getter 标记）；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
-    public static bool WhitelistPrefix(InventoryData __instance, ItemData item)
+    /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix（v0.8.4 用 __0 位置绑定——参数名不匹配曾致 patch 失败）。
+    /// 实时容器归属判定；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
+    public static bool WhitelistPrefix(InventoryData __instance, ItemData __0)
     {
         try
         {
             if (__instance == null) return true;
             if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓放行（原版行为）
+            ItemData item = __0;
             bool ok = item != null && IsAllowedFuel(item);
             if (ok) return true;
             if (Time.unscaledTime - _lastRejectLog > 3f)

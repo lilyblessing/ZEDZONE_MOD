@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.3")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.4")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -131,14 +131,15 @@ public class Plugin : BasePlugin
             var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting" };
             foreach (var tn in tryNames)
             {
-                var tm = AccessTools.Method(typeof(InventoryData), tn);
-                if (tm != null)
+                try
                 {
+                    var tm = AccessTools.Method(typeof(InventoryData), tn);
+                    if (tm == null) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（方法未找到，跳过）"); continue; }
                     h.Patch(tm, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
                         nameof(BioGenFuel.WhitelistPrefix), BindingFlags.Public | BindingFlags.Static)));
                     Log.LogInfo($"[TS] 已挂钩 InventoryData.{tn}（BioGen 白名单准入）");
                 }
-                else Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（跳过）");
+                catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
             }
             }
             }
@@ -171,7 +172,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.3 BioGenFuel 白名单（AddItem 漏斗 + 逆向确认）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.4 BioGenFuel 白名单修复（__0 绑定 + 接管准入）");
     }
 }
 
