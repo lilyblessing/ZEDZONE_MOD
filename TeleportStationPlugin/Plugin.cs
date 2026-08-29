@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.8.1（P2 白名单：生物燃料仓仅允许腐肉 205 + 过期食品）。
+/// 远距离传送站台 MOD v0.8.2（白名单改实时容器归属判定：三 Try* 入口全覆盖，不依赖 getter 标记）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.1")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.2")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -127,12 +127,18 @@ public class Plugin : BasePlugin
                     nameof(BioGenFuel.GetFuelInventoryPostfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 StirlingGenerator.get_fuelInventoryData（BioGen 燃料仓标记）");
             }
-            var tryAdd = AccessTools.Method(typeof(InventoryData), "TryAddItem");
-            if (tryAdd != null)
+            // v0.8.2：白名单准入（三个 Try* 入口全覆盖，prefix 实时容器归属判定——不依赖 getter 标记）
+            var tryNames = new[] { "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting" };
+            foreach (var tn in tryNames)
             {
-                h.Patch(tryAdd, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                    nameof(BioGenFuel.TryAddItemPrefix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 InventoryData.TryAddItem（BioGen 白名单准入）");
+                var tm = AccessTools.Method(typeof(InventoryData), tn);
+                if (tm != null)
+                {
+                    h.Patch(tm, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.TryAddItemPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo($"[TS] 已挂钩 InventoryData.{tn}（BioGen 白名单准入）");
+                }
+                else Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（跳过）");
             }
             }
             }
@@ -165,7 +171,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.1 BioGenFuel 白名单（TryAddItem prefix）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.2 BioGenFuel 白名单（实时归属 + 三入口）");
     }
 }
 

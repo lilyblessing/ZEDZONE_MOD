@@ -35,13 +35,14 @@ public static class BioGenFuel
         catch { }
     }
 
-    /// <summary>hook InventoryData.TryAddItem prefix：生物燃料仓 → 仅允许 腐肉 205 / 过期食品；否则拒绝（白名单限入）。</summary>
+    /// <summary>hook InventoryData.TryAddItem 系列 prefix：实时容器归属判定（反向遍历斯特林活动列表）——
+    /// 不依赖 getter 标记（get_fuelInventoryData detour 间歇失效，v0.8.1 教训）；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
     public static bool TryAddItemPrefix(InventoryData __instance, ItemData item)
     {
         try
         {
             if (__instance == null) return true;
-            if (!IsBioFuelContainer(__instance)) return true; // 非生物燃料仓放行（原版行为）
+            if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓放行（原版行为）
             bool ok = item != null && IsAllowedFuel(item);
             if (ok) return true;
             if (Time.unscaledTime - _lastRejectLog > 3f)
@@ -54,21 +55,24 @@ public static class BioGenFuel
         catch { return true; }
     }
 
-    private static bool IsBioFuelContainer(InventoryData fd)
+    /// <summary>v0.8.2：实时容器归属——遍历斯特林活动实例，找到持有该容器的 900103（不依赖标记）。</summary>
+    private static bool IsBioGenContainer(InventoryData fd)
     {
         try
         {
-            long ptr = 0;
-            try { ptr = (long)fd.Pointer; } catch { ptr = fd.GetHashCode(); }
-            if (_markedContainers.Contains(ptr)) return true;
-            // 未标记兜底：标题已改过
-            object t = null;
-            try
+            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            if (list == null) return false;
+            for (int i = 0; i < list.Count; i++)
             {
-                t = Reflect.Get(fd, "inventoryTitleName");
-                if (t != null && t.ToString() == GameLocale.T("生物燃料仓", "Bio Fuel Hopper")) return true;
+                var g = list[i];
+                if (g == null || !IsBioGen(g)) continue;
+                try
+                {
+                    var fuel = g.fuelInventoryData;
+                    if (fuel != null && ReferenceEquals(fuel, fd)) return true;
+                }
+                catch { }
             }
-            catch { }
             return false;
         }
         catch { return false; }
