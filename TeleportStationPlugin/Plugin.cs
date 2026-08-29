@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.6")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.7")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -150,7 +150,8 @@ public class Plugin : BasePlugin
                 }
             }
             catch (Exception eb) { Log.LogWarning($"[TS] CostItemDurability 挂钩异常: {eb.Message.Split('\n')[0]}"); }
-            var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting", "PassesFeatureLimit" };
+            // v0.8.7：白名单前缀分参数挂——PassesFeatureLimit(ItemAttr) 挂 PassesFeatureLimitPrefix；AddItem/Try*（ItemData）挂 WhitelistPrefix
+            var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting" };
             foreach (var tn in tryNames)
             {
                 try
@@ -163,6 +164,17 @@ public class Plugin : BasePlugin
                 }
                 catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
             }
+            try
+            {
+                var pfl = AccessTools.Method(typeof(InventoryData), "PassesFeatureLimit");
+                if (pfl != null)
+                {
+                    h.Patch(pfl, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.PassesFeatureLimitPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 InventoryData.PassesFeatureLimit（BioGen 准入判定，ItemAttr 版）");
+                }
+            }
+            catch (Exception ec) { Log.LogWarning($"[TS] PassesFeatureLimit 挂钩异常: {ec.Message.Split('\n')[0]}"); }
             }
             }
             else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
@@ -194,7 +206,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.6 BioGenFuel 三链白名单（准入+启动+半速）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.7 BioGenFuel 准入 hook 分参数修复");
     }
 }
 
