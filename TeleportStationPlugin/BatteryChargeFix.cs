@@ -20,7 +20,6 @@ public static class BatteryChargeFix
     private const int PadId = 900102;
     private const int BioGenId = 900103;
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new(); // 实例初始化去重
-    private static readonly System.Collections.Generic.HashSet<long> _bioGens = new();  // 供电源为生物能的 key 缓存（0.5s 复查）
     private static float _lastScan = -1f;
     private static float _lastLog;
     private static float _pendingGameDays; // TimeController hook 累积的未结算游戏天
@@ -97,8 +96,11 @@ public static class BatteryChargeFix
     /// <summary>充电主逻辑（反编译公式实现）。返回本轮充电 Wh。</summary>
     private static float Charge(TerrainObject_Production_StirlingGenerator g, float gameDays)
     {
-        float sufficient = GetPowerSufficient(g);
-        if (sufficient <= 0f) return 0f;
+        // v0.9.3：虚拟供电（范围检测）——盘不是游戏原生消费者，powerInputSufficientFloat 恒 0；
+        // 供电 = 20m 内运行中的发电机（900103 生物能 / 120 原版斯特林），源判×4
+        float sufficient;
+        float mult;
+        if (!FindSupply(g, out sufficient, out mult)) return 0f;
         var inv = g.fuelInventoryData;
         if (inv == null) return 0f;
 
@@ -114,7 +116,6 @@ public static class BatteryChargeFix
         }
         if (slots.Count == 0) return 0f;
 
-        float mult = SupplyMultiplier(g); // 生物能 ×4 else ×1
         float totalWh = sufficient * 24f * mult * gameDays; // = effectiveWatt × 天 × 24 × 倍率
         float each = totalWh / slots.Count;
         if (each <= 0f) return 0f;
@@ -131,57 +132,64 @@ public static class BatteryChargeFix
         return totalWh;
     }
 
-    /// <summary>供电满足度：productionData.powerInputSufficientFloat（0xC8，原版语义）。</summary>
-    private static float GetPowerSufficient(TerrainObject_Production_StirlingGenerator g)
+    /// <summary>虚拟供电检测（v0.9.3）：20m 内运行中的发电机 → (满足度1.0, 倍率)；生物能(900103)优先生效 ×4。
+    /// 替代原 powerInputSufficientFloat/connectedElectricGeneratorList（克隆盘非原生消费者，恒无电）。</summary>
+    private static bool FindSupply(TerrainObject_Production_StirlingGenerator pad, out float sufficient, out float mult)
     {
+        sufficient = 0f;
+        mult = 1f;
         try
         {
-            var pd = GetProductionData(g);
-            if (pd == null) return 0f;
-            var v = Reflect.Get(pd, "powerInputSufficientFloat");
-            if (v == null) return 0f;
-            return Convert.ToSingle(v);
-        }
-        catch { return 0f; }
-    }
-
-    /// <summary>供电倍率：connectedElectricGeneratorList 含生物能（900103）→ ×4 else ×1（0.5s 复查缓存）。</summary>
-    private static float SupplyMultiplier(TerrainObject_Production_StirlingGenerator g)
-    {
-        try
-        {
-            long key = 0;
-            try { key = (long)g.Pointer; } catch { key = g.GetHashCode(); }
-            if (_bioGens.Contains(key)) return 4f;
-            var pd = GetProductionData(g);
-            if (pd == null) return 1f;
-            var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
-            if (list == null) return 1f;
+            var padPos = pad.transform.position;
+            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            if (list == null) return false;
+            bool found = false;
             for (int i = 0; i < list.Count; i++)
             {
-                var gen = list[i];
-                if (gen == null) continue;
-                var attr = gen.terrainObjectAttr;
-                if (attr == null) continue;
-                if (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) { _bioGens.Add(key); return 4f; }
-                int id = -1; try { id = Convert.ToInt32(Reflect.Get(attr, "id")); } catch { }
-                if (id == BioGenId) { _bioGens.Add(key); return 4f; }
+                var g = list[i];
+                if (g == null || ReferenceEquals(g, pad)) continue;
+                int id = GenId(g);
+                if (id != BioGenId && id != 120) continue; // 生物能 900103 / 原版斯特林 120
+                var dp = g.transform.position - padPos;
+                if (dp.x * dp.x + dp.y * dp.y > 20f * 20f) continue; // 虚拟电线距离 20m
+                if (!IsRunning(g)) continue;
+                found = true;
+                if (id == BioGenId) mult = 4f; // 生物能 ×4（若有多个源取优）
             }
-            return 1f;
+            if (!found) return false;
+            sufficient = 1f;
+            return true;
         }
-        catch { return 1f; }
+        catch { return false; }
     }
 
-    private static object GetProductionData(TerrainObject_Production_StirlingGenerator g)
+    private static int GenId(TerrainObject_Production_StirlingGenerator g)
     {
         try
         {
-            var tod = Reflect.Get(g, "objectData");
-            if (tod == null) return null;
-            return Reflect.Get(tod, "productionData");
+            var to = FindTerrainObject(g.transform);
+            if (to == null) return -1;
+            object attr = null;
+            try { attr = Reflect.Get(to, "attr"); } catch { }
+            if (attr == null) return -1;
+            if (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) return BioGenId;
+            return AttrId(attr);
         }
-        catch { return null; }
+        catch { return -1; }
     }
+
+    private static bool IsRunning(TerrainObject_Production_StirlingGenerator g)
+    {
+        try
+        {
+            var v = Reflect.Get(g, "isRunning");
+            return v != null && (bool)v;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>供电倍率（v0.9.3 起由 FindSupply 直接给出，本方法废弃）。</summary>
+    // （已由 FindSupply 统一处理——供电/倍率同源判定，删除原 powerInputSufficientFloat 路径）
 
     private static bool IsPadInstance(TerrainObject_Production_StirlingGenerator g)
     {
