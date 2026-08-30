@@ -215,7 +215,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.9 BioGen 烧录链重做（inventoryData1 标记+半速 ref+假 Combustible 启动门+双环白名单）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.10 BioGen 白名单终版（Food 全放行含未过期，炭6豁免）");
     }
 }
 

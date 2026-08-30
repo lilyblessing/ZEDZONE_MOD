@@ -14,7 +14,7 @@ namespace TeleportStationPlugin;
 ///   A. UpdateStirlingGenerator prefix：900103 判定 → 标记 inventoryData1（真烧录容器）+ ref addedTime×0.5（半速）+ 开扫描窗
 ///   B. ItemManager.GetItemAttrById prefix：扫描窗内对白名单燃料返回木头 attr（自带 Combustible）→ 启动门放行（腐肉也能烧）
 ///   C. PassesFeatureLimit prefix：生物容器 attr 级粗筛（205/炭/Food 放行，木头/金属拒）
-///   D. TryAddItem/AddItem prefix：item 级严格白名单（腐肉205 / 炭6 / 过期食品（Food 且 IsFoodExpired））
+///   D. TryAddItem/AddItem prefix：item 级白名单（Food 类全放行 / 腐肉205 / 炭6 豁免；木头·金属拒）——v0.8.10 终版
 /// 容器识别：指针标记集合（来自 inventoryData1 + get_fuelInventoryData 双来源），不再依赖 ActiveObjects 遍历。
 /// </summary>
 public static class BioGenFuel
@@ -181,20 +181,21 @@ public static class BioGenFuel
         try { return _marked.Contains((long)fd.Pointer); } catch { return false; }
     }
 
-    /// <summary>严格白名单：腐肉 205 / 炭 6（副产品回仓）/ 过期食品（Food 且 IsFoodExpired=true）。
-    /// 注意：ItemData 无 itemAttr 成员（那是 BasicItem 的 protected 字段）——attr 一律经 ItemManager.GetItemAttrById(itemId) 解析（游戏同款路径），
-    /// 这也解释了旧版反射读 id 恒为 0 的根因。</summary>
+    /// <summary>严格白名单（v0.8.10 终版）：Food 类物品全部可入（含腐肉 205、含未过期食品）+ 炭 6（副产品回仓）；木头/金属等非食品拒。
+    /// 过期判定已按用户要求移除——「只要是有新鲜度的食物类都可以放入」。
+    /// 注意：ItemData 无 itemAttr 成员（那是 BasicItem 的 protected 字段）——attr 一律经 ItemManager.GetItemAttrById(itemId) 解析（游戏同款路径）。
+    /// 吞物品教训：D 环（TryAddItem/AddItem prefix）执行时物品可能已从源容器移除，拒绝=物品悬空丢失；
+    /// 因此 D 环只应拒绝 C 环已拦下的非 Food（木头/金属在 C 环 PFL 即被 UI 层挡回，D 环极少触发）。</summary>
     private static bool IsAllowedFuel(ItemData it)
     {
         try
         {
             int id = it.itemId;
-            if (id == 205 || id == 6) return true;                                                     // 腐肉 / 炭（副产品回仓）
-            if (id <= 0) return false;                                                                 // 无法识别的物品一律拒
+            if (id == 205 || id == 6) return true;           // 腐肉 / 炭（副产品回仓）
+            if (id <= 0) return false;                       // 无法识别的物品一律拒
             var attr = ItemManager.instance?.GetItemAttrById(id);
             if (attr == null) return false;
-            if (!attr.itemType.ToString().Contains("Food")) return false;                              // 非食品类拒（木头/金属等）
-            try { return ItemData.IsFoodExpired(it, attr); } catch { return false; }                   // 食品必须已过期
+            return attr.itemType.ToString().Contains("Food"); // 所有食品类放行（含未过期）
         }
         catch { return false; }
     }
