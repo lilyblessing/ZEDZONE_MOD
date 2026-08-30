@@ -204,7 +204,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.10 BioGen 白名单终版（Food 全放行含未过期，炭6豁免）");
+        Log.LogInfo("[TeleportStation] P1 v0.9.0 建筑盘层钉 v2（SortingGroup 定案：ActiveObjects 定位+Fx_BG 层钉）");
     }
 }
 
@@ -421,6 +421,8 @@ public class RegistrationProbe : MonoBehaviour
     {
         // v0.6.33：周期图标修复移除（纯源头实验）；v0.6.16 旧逻辑 TickCardIconFix 回退时恢复
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
+        // v0.9.0：建筑盘层钉 v2（无条件每帧调用，内部 0.5s 节流；须在 Done 早退之前——注册完成后仍要钉）
+        try { BuildingPadFix.Tick(); } catch { }
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
         // P2-B（2026-08-31）：BioGenFuel.Tick 观察采样已随 P2 验收退役（Done 后本就不执行），移除调用
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
