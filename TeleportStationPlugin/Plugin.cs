@@ -189,6 +189,31 @@ public class Plugin : BasePlugin
                 }
                 catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
             }
+            // ═══ v0.9.2 P3：电池仓充电——时间增量源（TimeController.AddTime，PortableFridge 已验证模式）═══
+            try
+            {
+                var ta = AccessTools.Method(typeof(TimeController), "AddTime");
+                if (ta != null)
+                {
+                    h.Patch(ta, postfix: new HarmonyMethod(typeof(BatteryChargeFix).GetMethod(
+                        nameof(BatteryChargeFix.OnGameTimeAdded), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TimeController.AddTime（电池仓充电时间源）");
+                }
+                else Log.LogWarning("[TS] TimeController.AddTime 挂钩失败（方法未找到）");
+            }
+            catch (Exception eh) { Log.LogWarning($"[TS] TimeController.AddTime 挂钩异常: {eh.Message.Split('\n')[0]}"); }
+            try // 睡觉=ChangeTimeTo 绝对跳变（不 hook 则睡觉不充电，PortableFridge 同款协同）
+            {
+                var ct = AccessTools.Method(typeof(TimeController), "ChangeTimeTo");
+                if (ct != null)
+                {
+                    h.Patch(ct, postfix: new HarmonyMethod(typeof(BatteryChargeFix).GetMethod(
+                        nameof(BatteryChargeFix.OnGameTimeChangedTo), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TimeController.ChangeTimeTo（睡觉时间跳变）");
+                }
+                else Log.LogWarning("[TS] TimeController.ChangeTimeTo 挂钩失败（方法未找到）");
+            }
+            catch (Exception ej) { Log.LogWarning($"[TS] TimeController.ChangeTimeTo 挂钩异常: {ej.Message.Split('\n')[0]}"); }
             // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
@@ -204,7 +229,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.9.0 建筑盘层钉 v2（SortingGroup 定案：ActiveObjects 定位+Fx_BG 层钉）");
+        Log.LogInfo("[TeleportStation] P1 v0.9.2 P3 电池仓 4×4+充电（反编译公式：sufficient×24×倍率×天→ChargeBattery 封顶）");
     }
 }
 
@@ -423,6 +448,8 @@ public class RegistrationProbe : MonoBehaviour
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
         // v0.9.0：建筑盘层钉 v2（无条件每帧调用，内部 0.5s 节流；须在 Done 早退之前——注册完成后仍要钉）
         try { BuildingPadFix.Tick(); } catch { }
+        // v0.9.2 P3：电池仓充电（同前——注册完成后仍要充）
+        try { BatteryChargeFix.Tick(); } catch { }
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
         // P2-B（2026-08-31）：BioGenFuel.Tick 观察采样已随 P2 验收退役（Done 后本就不执行），移除调用
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
