@@ -104,7 +104,7 @@ public static class BioGenFuel
             LogReject(FuelItemId(__0));
             return false; // 拒绝放入（物品回到原处）
         }
-        catch { return true; }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] WhitelistPrefix 异常: {e.Message.Split('\n')[0]}"); return true; }
     }
 
     /// <summary>v0.8.1 保留：get_fuelInventoryData postfix——UI 侧容器标记（双来源之一，不接管准入、不清 itemFeatureLimit）。</summary>
@@ -115,7 +115,7 @@ public static class BioGenFuel
             if (__result == null || !IsBioGen(__instance)) return;
             Mark(__result, false);
         }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] GetFuelInventoryPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
 
     public static void OnGeneratorStartPostfix(TerrainObject_Production_StirlingGenerator __instance)
@@ -135,32 +135,7 @@ public static class BioGenFuel
             if (!IsBioGen(__instance)) return;
             Plugin.L.LogInfo("[TS] BioGen 停机");
         }
-        catch { }
-    }
-
-    /// <summary>由 RegistrationProbe.Update 调用：每 10s 采样 900103 燃料库存（消耗观察）。</summary>
-    public static void Tick()
-    {
-        try
-        {
-            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
-            if (list == null) return;
-            float now = Time.unscaledTime;
-            for (int i = 0; i < list.Count; i++)
-            {
-                var g = list[i];
-                if (g == null || !IsBioGen(g)) continue;
-                try
-                {
-                    var fd = g.fuelInventoryData;
-                    string info = fd == null ? "fuelInventoryData=null"
-                        : $"size=({fd.inventorySizeX}x{fd.inventorySizeY}) title={Reflect.Get(fd, "inventoryTitleName")} items={Reflect.Get(fd, "itemList")}";
-                    Plugin.L.LogInfo($"[TS] BioGen 观察: {info}");
-                }
-                catch (Exception e) { Plugin.L.LogWarning($"[TS] BioGen 采样异常: {e.Message.Split('\n')[0]}"); }
-            }
-        }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] BioGen OnStop 异常: {e.Message.Split('\n')[0]}"); }
     }
 
     // ───────────────── 内部工具 ─────────────────

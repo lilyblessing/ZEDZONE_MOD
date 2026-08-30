@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using UnityEngine;
 
@@ -79,7 +78,6 @@ internal static class PadDeployable
         }
 
         var attr = new ItemAttr_Deployable();
-        _ = id;
         Reflect.Set(attr, "itemId", id);
         string zh = "传送站圆盘";
         string en = "Teleport Pad";
@@ -103,13 +101,14 @@ internal static class PadDeployable
         return attr;
     }
 
-    /// <summary>制作配方（工作台；材料沿用原建筑方案）。</summary>
+    /// <summary>制作配方（工作台；材料沿用原建筑方案）。
+    /// L11 修复（2026-08-31）：recipeItems 必须用 Il2Cpp List——BCL List 经 Reflect.Set 类型不匹配会被静默丢弃（配方从未生效，即"材料未校验"根因）。</summary>
     private static RecipeData CreateRecipe(int id)
     {
         var recipe = new RecipeData();
         Reflect.Set(recipe, "itemId", id);
         Reflect.Set(recipe, "outputItemNumber", 1);
-        var list = new List<RecipeItemData>();
+        var list = new Il2CppSystem.Collections.Generic.List<RecipeItemData>();
         list.Add(MakeMat(66, 24f));   // 合金板材
         list.Add(MakeMat(64, 20f));   // 合金零件
         list.Add(MakeMat(61, 24f));   // 机械元件

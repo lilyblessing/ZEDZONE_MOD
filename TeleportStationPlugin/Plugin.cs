@@ -14,7 +14,7 @@ using ZedZoneShared;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// 远距离传送站台 MOD v0.8.2（白名单改实时容器归属判定：三 Try* 入口全覆盖，不依赖 getter 标记）。
+/// 远距离传送站台 MOD v0.8.10（P2 BioGen 白名单终版：Food 全放行+炭6豁免；烧录链 Ghidra 定案四件套）。
 /// 源表定位（2026-08-27 离线侦察）：GameController 为建造源表宿主——
 ///   GetAvailableTerrainObjectAttrsByTechGenre(TechGenre) → List<TerrainObjectAttr>（建造菜单卡片数据源）、
 ///   GetTerrainObjectAttrById(int)（详情/建造查询）、terrainObjectAttrDic（按 id 字典）。
@@ -26,11 +26,11 @@ namespace TeleportStationPlugin;
 /// v0.6.31：
 ///   - RegisterBuilding 阶段 Reflect.Set(attr,"spriteName", Cache[id].name) + ModSpriteRegistry.Register 源头字典双保险；
 ///   - BuildInfoPanel.GetTotalMaterialNumber(RecipeData) postfix →6（=3s），纯源头不碰 UI；
-///   - GameController.GetTerrainObjectIconSprite 保留为世界渲染源头，TickCardIconFix 仅作幂等兜底。
+///   - GameController.GetTerrainObjectIconSprite 唯一源头（P1-A：卡片注入系列已删，图标全由 IconSourceFix 负责）。
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.8")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.10")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -103,6 +103,10 @@ public class Plugin : BasePlugin
                 h.Patch(getIcon, postfix: new HarmonyMethod(typeof(IconSourceFix).GetMethod(
                     nameof(IconSourceFix.Postfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectIconSprite（图标源头）");
+            }
+            else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
+            // P0-A（2026-08-31）：BioGen 钩子链与图标钩子解耦——此前 getFuel 及 A-D 白名单链全嵌套在
+            // 未闭合的 if(genStop) 块内（活动方法存在时无恙，一旦游戏更新删除该方法则白名单/半速/启动门静默失效）
 
             // v0.8.0 P2：生物能电站燃料——OnGeneratorStart/Stop postfix（900103 准入改造 + 消耗观察）
             var genStart = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "OnGeneratorStart");
@@ -118,6 +122,7 @@ public class Plugin : BasePlugin
                 h.Patch(genStop, postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
                     nameof(BioGenFuel.OnGeneratorStopPostfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 StirlingGenerator.OnGeneratorStop（BioGen 观察）");
+            }
 
             // v0.8.1：燃料仓标记（get_fuelInventoryData postfix）+ 白名单准入（TryAddItem prefix）
             var getFuel = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "get_fuelInventoryData");
@@ -184,24 +189,8 @@ public class Plugin : BasePlugin
                 }
                 catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
             }
-            }
-            }
-            else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
-            // v0.6.39：圆盘渲染层守卫——拦截游戏「建筑 Y 排序」对圆盘实例 sortingLayer 的改写（恒守 FX_BG，防圆盘盖玩家/车）
-            var setLayerName = AccessTools.Method(typeof(SpriteRenderer), "set_sortingLayerName");
-            if (setLayerName != null)
-            {
-                h.Patch(setLayerName, prefix: new HarmonyMethod(typeof(PadLayerGuard).GetMethod(
-                    nameof(PadLayerGuard.LayerNamePrefix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 SpriteRenderer.set_sortingLayerName（圆盘层守卫）");
-            }
-            var setLayerId = AccessTools.Method(typeof(SpriteRenderer), "set_sortingLayerID");
-            if (setLayerId != null)
-            {
-                h.Patch(setLayerId, prefix: new HarmonyMethod(typeof(PadLayerGuard).GetMethod(
-                    nameof(PadLayerGuard.LayerIdPrefix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 SpriteRenderer.set_sortingLayerID（圆盘层守卫）");
-            }
+            // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
+            // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
@@ -257,10 +246,9 @@ public static class SourceInjector
             if (RegistrationStore.Attrs.TryGetValue(id, out var attr))
             {
                 __result = attr;
-                // v0.6.33：卡片图标修复移除（纯源头实验）；v0.6.15 旧逻辑 InjectCardIconOnce(id) 回退时恢复
             }
         }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] AtbyIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
 
     /// <summary>v0.6.22：GetTerrainObjectPrefabById 兜底——我们的 id 用参照建筑（120 斯特林）prefab 过渡。</summary>
@@ -280,139 +268,18 @@ public static class SourceInjector
             __result = prefab as GameObject;
             if (__result != null) Plugin.L.LogInfo($"[TS] Prefab 兜底: id={id} → 参照120（斯特林模型过渡）");
         }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] PrefabByIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
 }
 
-/// <summary>v0.5.8：LoadConstructionMenu 后置——我们的卡图标一次性注入（sprite + enabled/alpha 修复）。</summary>
-public static class IconPostfix
-{
-    public static void Postfix()
-    {
-        try { SpriteInjector.InjectCardIcons(); }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标后置异常: {e.Message.Split('\n')[0]}"); }
-    }
-}
-
-/// <summary>v0.5.3：建筑图标缓存与卡片图标注入（v0.6.7 起仅保留卡片路径；详情相关已全部移除）。</summary>
+/// <summary>v0.5.3：建筑图标缓存（P1-A 2026-08-31：移除全部卡片注入死路径——Schedule/Tick/InjectCardIconOnce/
+/// FixIconsOnce/InjectCardIcons/Prefix(Image) 系列；图标现由 IconSourceFix 源头 hook + 本缓存全权负责）。</summary>
 public class SpriteInjector
 {
     internal static readonly Dictionary<int, Sprite> Cache = new();
 
-    // v0.6.17：延迟修复（挂源头注入链）——pending 保持直到全好；1s 节流；全好即停
-    private static bool _iconFixPending;
-    private static float _iconFixAt;
-    private static float _lastTick = -1f;
-
-    internal static void ScheduleCardIconFix()
-    {
-        _iconFixPending = true;
-        _iconFixAt = Time.unscaledTime + 1.5f;
-        Plugin.L.LogInfo($"[TS] 图标修复已调度 at={_iconFixAt:F1}");
-    }
-
-    /// <summary>由 RegistrationProbe.Update 每帧调用；未到时/节流内/菜单关闭零动作。</summary>
-    internal static void TickCardIconFix()
-    {
-        if (!_iconFixPending) return;
-        float now = Time.unscaledTime;
-        if (now < _iconFixAt) return;
-        if (now - _lastTick < 1f) return;
-        _lastTick = now;
-        try
-        {
-            var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return; // 关着→保持 pending
-            var genre = Reflect.Get(inst, "currentGenre");
-            if (genre == null || genre.ToString() != "Electricity") return;
-            int hit = InjectCardIcons();
-            if (hit == 0)
-            {
-                // v0.6.20 深度诊断：单卡组件与字段
-                try
-                {
-                    Plugin.L.LogInfo($"[TS] Tick: Cache={Cache.Count} Attrs={RegistrationStore.Attrs.Count}");
-                    var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-                    if (gc != null)
-                    {
-                        for (int i = 0; i < gc.childCount; i++)
-                        {
-                            var c = gc.GetChild(i);
-                            if (c == null || !c.name.StartsWith("Card_9001")) continue;
-                            var comps = new System.Text.StringBuilder();
-                            try
-                            {
-                                var cs = c.GetComponents<Component>();
-                                foreach (var comp in cs) { if (comp != null) comps.Append(comp.GetType().Name).Append(','); }
-                            }
-                            catch { }
-                            var ui = c.GetComponent<ConstructionItemCardUI>();
-                            string ic = "?";
-                            try { ic = ui == null ? "<UI=null>" : (ui.iconImage == null ? "<icon=null>" : "OK"); }
-                            catch (Exception e3) { ic = "<异常:" + e3.Message.Split('\n')[0] + ">"; }
-                            Plugin.L.LogInfo($"[TS] 诊断 '{c.name}': comps=[{comps}] uiIcon={ic} CacheHas900101={Cache.ContainsKey(900101)}");
-                        }
-                    }
-                }
-                catch (Exception e2) { Plugin.L.LogWarning($"[TS] Tick dump 异常: {e2.Message.Split('\n')[0]}"); }
-            }
-            Plugin.L.LogInfo($"[TS] Tick修复: hit={hit}");
-            if (IconsAllOk(inst)) { _iconFixPending = false; Plugin.L.LogInfo("[TS] 图标全好，修复停止"); }
-        }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS] 延迟图标修复异常: {e.Message.Split('\n')[0]}"); }
-    }
-
-    private static bool IconsAllOk(Component inst)
-    {
-        try
-        {
-            var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-            if (gc == null) return false;
-            for (int i = 0; i < gc.childCount; i++)
-            {
-                var c = gc.GetChild(i);
-                if (c == null) continue;
-                int cid = CardIdFromName(c.name);
-                if (cid <= 0) continue;
-                var ui = c.GetComponent<ConstructionItemCardUI>();
-                if (ui == null || ui.iconImage == null) return false;
-                if (ui.iconImage.sprite == null || !ui.iconImage.enabled) return false;
-            }
-            return true;
-        }
-        catch { return false; }
-    }
-
-    /// <summary>v0.6.10：单卡图标修复（GetById 稳定通道；幂等——已注入跳过）。</summary>
-    internal static void InjectCardIconOnce(int id)
-    {
-        if (!Cache.TryGetValue(id, out var sp) || sp == null) return;
-        var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-        if (inst == null) return;
-        var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-        if (gc == null) return;
-        for (int i = 0; i < gc.childCount; i++)
-        {
-            var c = gc.GetChild(i);
-            if (c == null || CardIdFromName(c.name) != id) continue;
-            var ui = c.GetComponent<ConstructionItemCardUI>();
-            if (ui == null || ui.iconImage == null) continue;
-            bool broken = ui.iconImage.sprite == null || !ui.iconImage.enabled || ui.iconImage.color.a < 0.99f;
-            if (!broken) return; // 已正常
-            ui.iconImage.sprite = sp;
-            if (!ui.iconImage.enabled) ui.iconImage.enabled = true;
-            try
-            {
-                var col = ui.iconImage.color;
-                if (col.a < 0.99f) { col.a = 1f; ui.iconImage.color = col; }
-            }
-            catch { }
-            Plugin.L.LogInfo($"[TS] 卡片图标修复(GetById): {id}");
-            return;
-        }
-    }
-
     /// <summary>注册时缓存贴图 Sprite（从 textures/ 目录加载）。</summary>
+
     internal static void CacheSprite(BuildingDef def, bool force = false)
     {
         try
@@ -431,129 +298,6 @@ public class SpriteInjector
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标缓存异常: {e.Message.Split('\n')[0]}"); }
     }
-
-    public static bool Prefix(Image __instance, Sprite value)
-    {
-        try
-        {
-            if (value != null || __instance == null) return true;
-            if (Cache.Count == 0) return true;
-            // 卡片图标：Image 祖先链上有 Card_9001xx
-            int id = MatchByAncestor(__instance.transform);
-            if (id > 0)
-            {
-                if (Cache.TryGetValue(id, out var sp) && sp != null)
-                {
-                    __instance.sprite = sp; // value 非 null → 不会再进本 prefix
-                    return false; // 跳过原 set(null)
-                }
-            }
-        }
-        catch { }
-        return true;
-    }
-
-    // ── v0.5.4：直接赋值方案（游戏不 set sprite=null 时也生效）──
-
-    // ── v0.5.9：修复即停——只在图片缺失/禁用时修复一次（避免重复赋值触发 UI 反复 dirty）──
-    internal static void FixIconsOnce()
-    {
-        try
-        {
-            if (RegistrationStore.Attrs.Count == 0 || Cache.Count == 0) return;
-            var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-            if (inst == null) return;
-            var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-            if (gc == null) return;
-            int fixedCnt = 0;
-            for (int i = 0; i < gc.childCount; i++)
-            {
-                var c = gc.GetChild(i);
-                if (c == null) continue;
-                int id = CardIdFromName(c.name);
-                if (id <= 0 || !Cache.TryGetValue(id, out var sp) || sp == null) continue;
-                var ui = c.GetComponent<ConstructionItemCardUI>();
-                if (ui == null || ui.iconImage == null) continue;
-                bool broken = (ui.iconImage.sprite == null) || !ui.iconImage.enabled || ui.iconImage.color.a < 0.99f;
-                if (!broken) continue;
-                ui.iconImage.sprite = sp;
-                try
-                {
-                    if (!ui.iconImage.enabled) ui.iconImage.enabled = true;
-                    var col = ui.iconImage.color;
-                    if (col.a < 0.99f) { col.a = 1f; ui.iconImage.color = col; }
-                }
-                catch { }
-                fixedCnt++;
-            }
-            if (fixedCnt > 0) Plugin.L.LogInfo($"[TS] 图标修复: {fixedCnt} 张（修好即停）");
-        }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS] FixIconsOnce 异常: {e.Message.Split('\n')[0]}"); }
-    }
-
-    /// <summary>LoadConstructionMenu 后置 / 延迟修复：对电力栏我们的卡片直接设置图标；返回命中数。</summary>
-    internal static int InjectCardIcons()
-    {
-        try
-        {
-            if (RegistrationStore.Attrs.Count == 0 || Cache.Count == 0) return 0;
-            var inst = typeof(ConstructionPanel).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null) as Component;
-            if (inst == null || inst.gameObject == null || !inst.gameObject.activeInHierarchy) return 0;
-            var gc = Reflect.Get(inst, "gridContent") as RectTransform;
-            if (gc == null) return 0;
-            int hit = 0;
-            for (int i = 0; i < gc.childCount; i++)
-            {
-                var c = gc.GetChild(i);
-                if (c == null) continue;
-                int id = CardIdFromName(c.name);
-                if (id <= 0 || !Cache.TryGetValue(id, out var sp) || sp == null) continue;
-                var ui = c.GetComponent<ConstructionItemCardUI>();
-                if (ui == null) continue;
-                if (ui.iconImage == null) continue;
-                ui.iconImage.sprite = sp;
-                // v0.5.8：修复隐藏状态（游戏可能对无图标卡禁用 Icon）
-                try
-                {
-                    if (!ui.iconImage.enabled) ui.iconImage.enabled = true;
-                    var col = ui.iconImage.color;
-                    if (col.a < 0.99f) { col.a = 1f; ui.iconImage.color = col; }
-                }
-                catch { }
-                hit++;
-            }
-            if (hit > 0) Plugin.L.LogInfo($"[TS] 卡片图标直接注入: {hit} 张");
-            return hit;
-        }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS] 卡片图标注入异常: {e.Message.Split('\n')[0]}"); return 0; }
-    }
-
-    private static int CardIdFromName(string n)
-    {
-        if (n == null) return -1;
-        if (n.StartsWith("Card_900101")) return 900101;
-        if (n.StartsWith("Card_900102")) return 900102;
-        if (n.StartsWith("Card_900103")) return 900103;
-        return -1;
-    }
-
-    private static int MatchByAncestor(Transform t)
-    {
-        while (t != null)
-        {
-            string n = t.name;
-            if (n != null)
-            {
-                if (n.StartsWith("Card_900101")) return 900101;
-                if (n.StartsWith("Card_900102")) return 900102;
-                if (n.StartsWith("Card_900103")) return 900103;
-                if (n.Contains("ConstructionPanel")) return 0; // 到 panel 根
-            }
-            t = t.parent;
-        }
-        return -1;
-    }
-
 }
 
 /// <summary>v0.6.28：建造时间源头——BuildInfoPanel.GetTotalMaterialNumber(RecipeData) 强制 6（= ceil(6/2)=3s）。</summary>
@@ -573,21 +317,35 @@ public static class BuildTimeSourceFix
                 Plugin.L.LogInfo($"[TS] 建造时间源头: id={id} Σ→6 (3s)");
             }
         }
-        catch { }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] 建造时间源头异常: {e.Message.Split('\n')[0]}"); }
     }
 }
 
 /// <summary>v0.6.40：圆盘层钉——物理随实例复制的组件（挂在克隆 prefab 根，游戏 Instantiate 自动带出）。
 /// v0.6.41：改为 0.5s 动态收集 SR——游戏实例化时会重建/重设 SpriteRenderer（层被重置回建筑默认），
-/// Awake 缓存旧列表会失效；动态收集 + LateUpdate/OnWillRenderObject 双时点写 FX_BG，并重申零件禁用。</summary>
+/// Awake 缓存旧列表会失效；动态收集 + LateUpdate/OnWillRenderObject 双时点写 FX_BG，并重申零件禁用。
+/// P2-C（2026-08-31）：每帧改写改 sortingLayerID（int，缓存一次 NameToID）替代字符串赋值；零件禁用降频到收集时（0.5s）。</summary>
 public class PadLayerPin : MonoBehaviour
 {
     private float _nextCollect = -1f;
     private SpriteRenderer[] _srs = new SpriteRenderer[0];
+    private static int _fxBgId = -1;
 
     private void Collect()
     {
-        try { _srs = GetComponentsInChildren<SpriteRenderer>(true); } catch { _srs = new SpriteRenderer[0]; }
+        try
+        {
+            if (_fxBgId < 0) _fxBgId = SortingLayer.NameToID("FX_BG");
+            _srs = GetComponentsInChildren<SpriteRenderer>(true);
+            for (int i = 0; i < _srs.Length; i++) // 零件禁用移入收集（0.5s 一次；游戏重建 SR 时最多半秒恢复后重申）
+            {
+                if (_srs[i] == null) continue;
+                string n = _srs[i].name ?? "";
+                if (n.Contains("Cylinder") || n.Contains("Parts") || n.Contains("Fire"))
+                    _srs[i].enabled = false;
+            }
+        }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] PadLayerPin 收集异常: {e.Message.Split('\n')[0]}"); _srs = new SpriteRenderer[0]; }
     }
 
     private void LateUpdate() { Pin(); }
@@ -602,54 +360,15 @@ public class PadLayerPin : MonoBehaviour
                 _nextCollect = Time.unscaledTime + 0.5f;
                 Collect();
             }
+            int id = _fxBgId > 0 ? _fxBgId : SortingLayer.NameToID("FX_BG");
+            if (id <= 0) return; // FX_BG 未注册时放弃（不写垃圾值）
             for (int i = 0; i < _srs.Length; i++)
             {
                 if (_srs[i] == null) continue;
-                _srs[i].sortingLayerName = "FX_BG";
-                string n = _srs[i].name ?? "";
-                if (n.Contains("Cylinder") || n.Contains("Parts") || n.Contains("Fire"))
-                    _srs[i].enabled = false; // 重申零件禁用（游戏重建 SR 时可能恢复）
+                _srs[i].sortingLayerID = id; // int 直写，避免每帧字符串→ID 转换
             }
         }
-        catch { }
-    }
-}
-/// <summary>v0.6.39：圆盘层守卫（detour 层）——拦截游戏对 TS_TeleportPad 实例 sortingLayer 的改写，恒守 FX_BG（v0.6.40 起与 PadLayerPin 物理钉双保险）。</summary>
-public static class PadLayerGuard
-{
-    private static bool IsPad(Transform t)
-    {
-        int d = 0;
-        while (t != null && d++ < 16)
-        {
-            string n = t.name;
-            if (n != null && n.Contains("TS_TeleportPad")) return true;
-            t = t.parent;
-        }
-        return false;
-    }
-
-    public static bool LayerNamePrefix(SpriteRenderer __instance, string value)
-    {
-        try
-        {
-            if (value != "FX_BG" && __instance != null && IsPad(__instance.transform))
-                return false; // 拒绝非 FX_BG 写入（建筑 Y 排序），圆盘层恒守地板之上/角色之下
-        }
-        catch { }
-        return true;
-    }
-
-    public static bool LayerIdPrefix(SpriteRenderer __instance, int value)
-    {
-        try
-        {
-            int fxbg = SortingLayer.NameToID("FX_BG");
-            if (value != fxbg && __instance != null && IsPad(__instance.transform))
-                return false;
-        }
-        catch { }
-        return true;
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] PadLayerPin 钉层异常: {e.Message.Split('\n')[0]}"); }
     }
 }
 /// <summary>v0.6.30：图标源头——GameController.GetTerrainObjectIconSprite(int) → Cache[id]，卡片+详情一次解决（public 源头，零轮询）。
@@ -703,8 +422,7 @@ public class RegistrationProbe : MonoBehaviour
         // v0.6.33：周期图标修复移除（纯源头实验）；v0.6.16 旧逻辑 TickCardIconFix 回退时恢复
         // v0.6.15：无周期检查（修复窗口/常驻检查全部移除——周期反射与写入会引发游戏异常）
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
-        // v0.8.0 P2：生物能电站消耗采样/兜底准入（每 10s 低频）
-        try { BioGenFuel.Tick(); } catch { }
+        // P2-B（2026-08-31）：BioGenFuel.Tick 观察采样已随 P2 验收退役（Done 后本就不执行），移除调用
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
         if (_timer > 0f) return;
         if (RegistrarState.RetryPending) { _timer = 30f; RegistrarState.RetryPending = false; }

@@ -7,13 +7,22 @@ namespace TeleportStationPlugin;
 /// <summary>
 /// v0.7.1：圆盘放置物渲染监控（DeployableItem.ActiveDeployableItems 遍历——游戏原生放置物全局列表）。
 /// v0.7.2：①贴图也每帧钉（游戏每帧重设放置物 SR.sprite，只写一次无效）→ 大小恒 9.8×7；
-///        ②未见过放置物一次性 dump（root 名/组件类型/SR 概览）——摸清"放置物→prefab 绑定"（睡袋 vs 通用对比，源头化前置取证）。
-/// 睡袋同款机制：Character 层 + 固定负 order；sprite ppu 自适应（texH/7 → 世界 ≈9.8×7）。
+/// v0.7.3：一次性分类缓存——非目标放置物不再每帧反射（每帧仅 O(1) 跳过）。
+/// P0-B（2026-08-31）：分类键由 Pointer 改 GetInstanceID（存活期唯一，防指针地址复用误分类）+ 10s 全量重扫（缓存永不失效兜底）；
+///                    Apply 的 GetComponentsInChildren 降频到 0.5s 一次（SR 缓存），不再每帧分配数组。
 /// </summary>
 public class PadDeployMonitor : MonoBehaviour
 {
     private static Sprite _bodySprite;
     private static bool _bodyInit;
+
+    private static readonly HashSet<int> _classified = new(); // 已分类（含非目标，避免重复反射）
+    private static readonly HashSet<int> _pads = new();       // 目标盘（每帧钉）
+    private static readonly HashSet<int> _dumped = new();     // 已取证盘（DumpItem/首见日志仅一次，W1 修复：10s 重扫不重复取证）
+    private static readonly Dictionary<int, SpriteRenderer[]> _srCache = new();
+    private static float _lastRescan = -1f;
+    private static float _srCacheAt = -1f;
+    private static float _lastWarn = -100f; // W2 修复：启动期 3s 内的首次告警不被吞
 
     private void Update()
     {
@@ -21,21 +30,34 @@ public class PadDeployMonitor : MonoBehaviour
         {
             var list = DeployableItem.ActiveDeployableItems;
             if (list == null || PadDeployable.ItemId < 0) return;
+
+            // P0-B：10s 全量重扫，防实例 ID 复用后误分类（原缓存只增不减是缺陷）
+            float now = Time.unscaledTime;
+            if (_lastRescan < 0f || now - _lastRescan > 10f)
+            {
+                _lastRescan = now;
+                _classified.Clear();
+                _pads.Clear();
+            }
+            // Apply 的 SR 数组每 0.5s 失效一次（替代每帧 GetComponentsInChildren 分配；构建时顺带零件禁用）
+            if (_srCacheAt < 0f || now - _srCacheAt > 0.5f)
+            {
+                _srCacheAt = now;
+                _srCache.Clear();
+            }
+
             for (int i = 0; i < list.Count; i++)
             {
                 var d = list[i];
                 if (d == null) continue;
 
-                long ptr = 0;
-                try { ptr = (long)d.Pointer; } catch { ptr = d.GetHashCode(); }
-
-                // v0.7.3：一次性分类缓存——非目标放置物不再每帧反射（每帧仅 O(1) 跳过）
-                if (_classified.Contains(ptr))
+                int key = d.GetInstanceID(); // 实例 ID：存活期唯一（P0-B 替代 Pointer）
+                if (_classified.Contains(key))
                 {
-                    if (_pads.Contains(ptr)) Apply(d); // 每帧钉已知目标
+                    if (_pads.Contains(key)) Apply(d);
                     continue;
                 }
-                _classified.Add(ptr);
+                _classified.Add(key);
 
                 int itemId = -1;
                 try
@@ -43,39 +65,56 @@ public class PadDeployMonitor : MonoBehaviour
                     var attr = d.itemAttr;
                     if (attr != null) itemId = Convert.ToInt32(Reflect.Get(attr, "itemId"));
                 }
-                catch { }
+                catch (Exception e) { LogWarnOnce($"itemAttr 读取异常: {e.Message.Split('\n')[0]}"); }
 
                 if (itemId != PadDeployable.ItemId) continue;
-                _pads.Add(ptr);
-                try { DumpItem(d); } catch { }
-                Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: ptr={ptr} itemId={itemId}（进入每帧钉维护）");
+                _pads.Add(key);
+                if (_dumped.Add(key)) // W1：取证（DumpItem+首见日志）仅首次执行，10s 重扫不重复
+                {
+                    try { DumpItem(d); }
+                    catch (Exception e) { LogWarnOnce($"Dump 异常: {e.Message.Split('\n')[0]}"); }
+                    Plugin.L.LogInfo($"[TS] 圆盘放置物已修正: key={key} itemId={itemId}（进入每帧钉维护）");
+                }
                 Apply(d);
             }
         }
-        catch { } // 静默低频
+        catch (Exception e) { LogWarnOnce($"Update 异常: {e.Message.Split('\n')[0]}"); }
     }
 
-    private static readonly HashSet<long> _classified = new(); // 已分类（含非目标，避免重复反射）
-    private static readonly HashSet<long> _pads = new();       // 目标盘（每帧钉）
-
-    /// <summary>每帧钉：层 Character + order -5 + 主贴图（ppu 自适应）+ 零件禁用（游戏每帧重设 sprite/order，我们同样每帧覆盖）。</summary>
+    /// <summary>每帧钉：层 Character + order -5 + 主贴图（ppu 自适应）。SR 数组 0.5s 缓存；
+    /// 缓存构建时把零件（Cylinder/Parts/Fire）禁用并剔除——每帧零 name 检查零分配（游戏每帧重设 sprite/order，我们每帧覆盖）。</summary>
     private static void Apply(DeployableItem d)
     {
-        EnsureBodySprite();
-        var srs = d.GetComponentsInChildren<SpriteRenderer>(true);
-        foreach (var sr in srs)
+        try
         {
-            if (sr == null) continue;
-            string sn = sr.name ?? "";
-            if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
+            EnsureBodySprite();
+            if (!_srCache.TryGetValue(d.GetInstanceID(), out var srs))
             {
-                sr.enabled = false;
-                continue;
+                var all = d.GetComponentsInChildren<SpriteRenderer>(true);
+                var keep = new List<SpriteRenderer>();
+                foreach (var sr in all)
+                {
+                    if (sr == null) continue;
+                    string n = sr.name ?? "";
+                    if (n.Contains("Cylinder") || n.Contains("Parts") || n.Contains("Fire"))
+                    {
+                        sr.enabled = false; // 零件禁用（游戏重建 SR 恢复后最多 0.5s 重申）
+                        continue;
+                    }
+                    keep.Add(sr);
+                }
+                srs = keep.ToArray();
+                _srCache[d.GetInstanceID()] = srs;
             }
-            sr.sortingLayerName = "Character";
-            sr.sortingOrder = -5;
-            if (_bodySprite != null) sr.sprite = _bodySprite;
+            foreach (var sr in srs)
+            {
+                if (sr == null) continue;
+                sr.sortingLayerName = "Character";
+                sr.sortingOrder = -5;
+                if (_bodySprite != null) sr.sprite = _bodySprite;
+            }
         }
+        catch (Exception e) { LogWarnOnce($"Apply 异常: {e.Message.Split('\n')[0]}"); }
     }
 
     private static void EnsureBodySprite()
@@ -91,7 +130,14 @@ public class PadDeployMonitor : MonoBehaviour
                 _bodySprite.name = "TeleportPad_Deploy_Body";
             }
         }
-        catch { }
+        catch (Exception e) { LogWarnOnce($"BodySprite 异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    private static void LogWarnOnce(string msg)
+    {
+        if (Time.unscaledTime - _lastWarn < 3f) return;
+        _lastWarn = Time.unscaledTime;
+        Plugin.L.LogWarning($"[TS] PadMonitor {msg}");
     }
 
     /// <summary>一次性 dump：root 名/组件类型/SR 概览（睡袋 vs 圆盘 vs 通用——寻找 prefab 绑定规则）。</summary>
@@ -126,6 +172,6 @@ public class PadDeployMonitor : MonoBehaviour
             catch { }
             Plugin.L.LogInfo($"[TS] 放置物调查: root='{r.name}' itemId={itId} 组件=[{comps}] SR:{srs}");
         }
-        catch { }
+        catch (Exception e) { LogWarnOnce($"Dump 失败: {e.Message.Split('\n')[0]}"); }
     }
 }
