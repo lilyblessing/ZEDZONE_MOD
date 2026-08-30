@@ -4,270 +4,118 @@ using UnityEngine;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// v0.8.0 P2：生物能电站（900103）—— 观察版（不修改游戏数据）。
-/// 目标定位：斯特林燃料机制（烧什么物品/消耗速率/消耗代码点），为「只烧腐肉205+过期食品 + 速率×0.5」奠基。
-/// ItemFeatureType 无 Food 类（已核实：Liquid/Combustible/BBQItem/...）→ 白名单不能靠 feature 粗筛；
-/// 改用「消耗点判定」：准入 = 烧什么——把斯特林默认「可燃物判定」改为「白名单判定」（下轮实现）。
-/// 观察手段：OnGeneratorStart/Stop postfix（public non-virtual 稳定）+ 10s 采样 fuelInventoryData。
-/// 判别：TerrainObject 组件 attr id == 900103（引用/ID 双保险）。
+/// v0.8.9 P2：生物能电站（900103）燃料白名单——烧录链重做（Ghidra 反编译定案版）。
+/// Ghidra 定案（FUN_180930AB0 = ProductionManager.UpdateStirlingGenerator）：
+///   1. 烧录容器 = productionData.inventoryData1（不是 Stirling.fuelInventoryData！读档场景两者是不同对象）
+///   2. 启动门 = 从容器尾扫描首个 attr.itemFeatures.Contains(Combustible) 的物品（腐肉无 Combustible → 永远不启动）
+///   3. 消耗 = item.itemNumberFloat 直减（不走 CostItemDurability → 旧半速 hook 打空）
+///   4. 产出 = TryAddItem(炭 id=6) 回仓（白名单必须豁免 6 号）
+/// 四件套：
+///   A. UpdateStirlingGenerator prefix：900103 判定 → 标记 inventoryData1（真烧录容器）+ ref addedTime×0.5（半速）+ 开扫描窗
+///   B. ItemManager.GetItemAttrById prefix：扫描窗内对白名单燃料返回木头 attr（自带 Combustible）→ 启动门放行（腐肉也能烧）
+///   C. PassesFeatureLimit prefix：生物容器 attr 级粗筛（205/炭/Food 放行，木头/金属拒）
+///   D. TryAddItem/AddItem prefix：item 级严格白名单（腐肉205 / 炭6 / 过期食品（Food 且 IsFoodExpired））
+/// 容器识别：指针标记集合（来自 inventoryData1 + get_fuelInventoryData 双来源），不再依赖 ActiveObjects 遍历。
 /// </summary>
 public static class BioGenFuel
 {
-    private static float _lastSample;
-    private static bool _warnedNoAttrField;
+    private static readonly System.Collections.Generic.HashSet<long> _marked = new();
+    private static bool _inBioScan;          // UpdateStirlingGenerator 窗口（单线程同步，窗口=单次方法调用，安全）
+    private static ItemAttr _woodAttr;       // 假 Combustible：木头 attr（id 0 自带 Combustible）
     private static float _lastRejectLog;
-    private static float _lastContainerMissWarn;
-    private static bool _warnedContainerMiss;
-    private static readonly System.Collections.Generic.HashSet<long> _markedContainers = new();
 
-    /// <summary>hook get_fuelInventoryData postfix：标记 900103 燃料容器（标题「生物燃料」+ 一次性记录）——白名单识别基准。</summary>
-    public static void GetFuelInventoryPostfix(TerrainObject_Production_StirlingGenerator __instance, ref InventoryData __result)
+    /// <summary>v0.8.9 A：UpdateStirlingGenerator prefix——生物仓三件事：标记烧录容器 / 半速 / 开扫描窗。</summary>
+    public static bool StirlingUpdatePrefix(ProductionData generatorData, ref float addedTime)
     {
         try
         {
-            if (__result == null || !IsBioGen(__instance)) return;
-            long ptr = 0;
-            try { ptr = (long)__result.Pointer; } catch { ptr = __result.GetHashCode(); }
-            if (_markedContainers.Add(ptr))
+            if (generatorData == null) return true;
+            if (!IsBioGenProduction(generatorData)) return true; // 非 900103 走原版
+            try
             {
-                try { Reflect.Set(__result, "inventoryTitleName", GameLocale.T("生物燃料仓", "Bio Fuel Hopper")); } catch { }
-                // v0.8.4：清空 itemFeatureLimit（接管准入——UI 层不再拦任何物品，唯一白名单 = AddItem hook）
-                try
-                {
-                    var empty = new Il2CppSystem.Collections.Generic.List<ItemFeatureType>();
-                    Reflect.Set(__result, "itemFeatureLimit", empty);
-                    Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记并接管准入（itemFeatureLimit 清空，白名单=AddItem hook）；size=({__result.inventorySizeX}x{__result.inventorySizeY})");
-                }
-                catch (Exception e1)
-                {
-                    Plugin.L.LogWarning($"[TS] itemFeatureLimit 清空异常: {e1.Message.Split('\n')[0]}");
-                    Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记（仅标记，准入接管失败）；size=({__result.inventorySizeX}x{__result.inventorySizeY})");
-                }
+                var inv = generatorData.inventoryData1;
+                if (inv != null) Mark(inv, true);
             }
+            catch (Exception ea) { Plugin.L.LogWarning($"[TS] BioGen 烧录容器标记异常: {ea.Message.Split('\n')[0]}"); }
+            addedTime *= 0.5f;   // 半速消耗（发电量不变）
+            _inBioScan = true;   // 扫描窗：让 GetItemAttrById 为白名单燃料伪造 Combustible
+            return true;
         }
-        catch { }
+        catch { return true; }
     }
 
-    /// <summary>v0.8.5：准入判定点 = InventoryData.PassesFeatureLimit(ItemAttr)（private non-virtual，UI 拖放与 TryAddItem 公共入口）。
-    /// 生物燃料仓：白名单 = 腐肉 205 / 食品类（含过期食品，attr 级判定）；其余拒绝。</summary>
+    public static void StirlingUpdatePostfix(ProductionData generatorData)
+    {
+        _inBioScan = false; // 窗口必须清除（哪怕原方法异常也由 Harmony 保证 postfix 执行）
+    }
+
+    /// <summary>v0.8.9 B：启动门伪造——扫描窗内 GetItemAttrById 对白名单燃料返回木头 attr（含 Combustible）。
+    /// 炭(6) 放行原版 attr（灰烬注入需要真实炭 attr）；窗口外零开销直通。</summary>
+    public static bool GetAttrByIdPrefix(ItemManager __instance, int itemId, ref ItemAttr __result)
+    {
+        try
+        {
+            if (!_inBioScan) return true;
+            if (itemId == 6) return true;
+            if (_woodAttr == null)
+            {
+                bool save = _inBioScan; _inBioScan = false; // 防递归
+                try { _woodAttr = __instance.GetItemAttrById(0); } catch { }
+                _inBioScan = save;
+            }
+            if (_woodAttr == null) return true; // 取不到就放行（走原逻辑，不阻塞）
+            __result = _woodAttr;
+            return false;
+        }
+        catch { return true; }
+    }
+
+    /// <summary>v0.8.9 C：PassesFeatureLimit prefix——生物燃料仓 attr 级粗筛（205/炭/Food 放行；木头/金属等拒）。
+    /// attr 直传（interop 直接访问，不走反射，杜绝 id=0 误读）。expiry 严格判定在 D 环。</summary>
     public static bool PassesFeatureLimitPrefix(InventoryData __instance, ItemAttr attr, ref bool __result)
     {
         try
         {
             if (__instance == null || attr == null) return true;
-            if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓走原判定
-            // v0.8.8 诊断：多路读取 itemId（主路径反射，辅打印属性/字段/直读差异）
-            int id = -1;
-            try { id = Convert.ToInt32(Reflect.Get(attr, "itemId")); } catch { }
-            bool isFood = false;
-            try
+            if (!IsMarked(__instance)) return true; // 非生物燃料仓走原版
+            int id = -1; try { id = attr.itemId; } catch { }
+            bool isFood = false; try { isFood = attr.itemType.ToString().Contains("Food"); } catch { }
+            if (id == 205 || id == 6 || isFood)
             {
-                var itype = Reflect.Get(attr, "itemType");
-                isFood = itype != null && itype.ToString().Contains("Food");
-            }
-            catch { }
-            if (id == 0 || id == -1)
-            {
-                // 诊断：打印多路读取结果
-                try
-                {
-                    string diag = $"[TS] PassesFeatureLimit 诊断: attrType={attr.GetType().Name} ";
-                    var p = attr.GetType().GetProperty("itemId");
-                    diag += $"prop={(p == null ? "null" : p.GetValue(attr))} ";
-                    var f = attr.GetType().GetField("itemId");
-                    diag += $"field={(f == null ? "null" : f.GetValue(attr))} ";
-                    diag += $"itemType={Reflect.Get(attr, "itemType")}";
-                    Plugin.L.LogInfo(diag);
-                }
-                catch (Exception de) { Plugin.L.LogWarning($"[TS] 诊断异常: {de.Message.Split('\n')[0]}"); }
-            }
-            if (id == 205 || isFood)
-            {
-                __result = true; // 白名单通过（腐肉 / 食品类）
+                __result = true; // 粗筛放行（严格判定交给 WhitelistPrefix）
                 return false;
             }
             __result = false;
-            if (Time.unscaledTime - _lastRejectLog > 3f)
-            {
-                _lastRejectLog = Time.unscaledTime;
-                Plugin.L.LogInfo($"[TS] BioGen 拒绝燃料: id={id}");
-            }
+            LogReject(id);
             return false;
         }
         catch { return true; }
     }
 
-    /// <summary>v0.8.6：启动判定白名单化——InventoryData.GetItemListByFeature(Combustible) 对生物燃料仓返回「白名单燃料列表」
-    ///（腐肉 205 / 过期食品）→ ProductionManager.UpdateStirlingGenerator 的「有燃料→OnGeneratorStart」成立；
-    /// 木头/金属等在生物仓视为无燃料（且准入已拒，正常情况下仓内仅白名单）。</summary>
-    public static bool GetItemListByFeaturePrefix(InventoryData __instance, ItemFeatureType m_itemFeatureType, ref Il2CppSystem.Collections.Generic.List<ItemData> __result)
-    {
-        try
-        {
-            if (__instance == null) return true;
-            // Combustible == 1（ItemFeatureType 枚举，dump.cs 校准）；防御性用名字比较
-            bool isCombustible = false;
-            try { isCombustible = m_itemFeatureType.ToString() == "Combustible"; } catch { }
-            try { if ((int)(object)m_itemFeatureType == 1) isCombustible = true; } catch { }
-            if (!isCombustible) return true;
-            if (!IsBioGenContainer(__instance)) return true;
-            var list = new Il2CppSystem.Collections.Generic.List<ItemData>();
-            try
-            {
-                var raw = Reflect.Get(__instance, "itemList") as Il2CppSystem.Collections.Generic.List<ItemData>;
-                if (raw != null)
-                {
-                    for (int i = 0; i < raw.Count; i++)
-                    {
-                        var it = raw[i];
-                        if (it == null) continue;
-                        int id = FuelItemId(it);
-                        if (id == 205 || IsExpiredFood(it)) list.Add(it); // 白名单：腐肉 / 过期食品
-                    }
-                }
-            }
-            catch { }
-            __result = list;
-            return false;
-        }
-        catch { return true; }
-    }
-
-    /// <summary>v0.8.6：半速消耗——InventoryData.CostItemDurability(int, float, List&lt;InventoryData&gt;) prefix（壁炉/斯特林燃烧扣耐路径）：
-    /// 消耗集合含生物燃料仓时 m_costDurability *= 0.5（燃料耐久翻倍 = 速率减半；发电量不变）。</summary>
-    public static bool CostItemDurabilityHalfPrefix(int m_itemId, ref float m_costDurability, Il2CppSystem.Collections.Generic.List<InventoryData> inventorys)
-    {
-        try
-        {
-            if (inventorys == null || m_costDurability <= 0f) return true;
-            for (int i = 0; i < inventorys.Count; i++)
-            {
-                var inv = inventorys[i];
-                if (inv == null) continue;
-                if (IsBioGenContainer(inv))
-                {
-                    m_costDurability *= 0.5f;
-                    return true; // 仅改数量，放行原逻辑
-                }
-            }
-        }
-        catch { }
-        return true;
-    }
-
-    /// <summary>hook InventoryData 放入入口（AddItem 私有漏斗 + Try* 三入口）prefix（v0.8.4 用 __0 位置绑定——参数名不匹配曾致 patch 失败）。
-    /// 实时容器归属判定；生物燃料仓 → 仅允许腐肉 205 / 过期食品。</summary>
+    /// <summary>v0.8.9 D：TryAddItem/AddItem prefix——item 级严格白名单（腐肉205 / 炭6 / 过期食品）。</summary>
     public static bool WhitelistPrefix(InventoryData __instance, ItemData __0)
     {
         try
         {
             if (__instance == null) return true;
-            if (!IsBioGenContainer(__instance)) return true; // 非生物燃料仓放行（原版行为）
-            ItemData item = __0;
-            bool ok = item != null && IsAllowedFuel(item);
-            if (ok) return true;
-            if (Time.unscaledTime - _lastRejectLog > 3f)
-            {
-                _lastRejectLog = Time.unscaledTime;
-                Plugin.L.LogInfo($"[TS] BioGen 拒绝燃料: {(item == null ? "null" : (Reflect.Get(item, "itemName") + " id=" + FuelItemId(item)))}");
-            }
-            return false; // 拒绝放入（物品将回到原处）
+            if (!IsMarked(__instance)) return true;
+            if (__0 == null) { LogReject(-2); return false; }
+            if (IsAllowedFuel(__0)) return true;
+            LogReject(FuelItemId(__0));
+            return false; // 拒绝放入（物品回到原处）
         }
         catch { return true; }
     }
 
-    /// <summary>v0.8.2：实时容器归属——遍历斯特林活动实例，找到持有该容器的 900103（不依赖标记）。\n    /// v0.8.8：未命中时一次性诊断（ActiveObjects 数量/各实例 fuelInventoryData 状态/attr id）。</summary>
-    private static bool IsBioGenContainer(InventoryData fd)
+    /// <summary>v0.8.1 保留：get_fuelInventoryData postfix——UI 侧容器标记（双来源之一，不接管准入、不清 itemFeatureLimit）。</summary>
+    public static void GetFuelInventoryPostfix(TerrainObject_Production_StirlingGenerator __instance, ref InventoryData __result)
     {
         try
         {
-            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
-            if (list == null) return false;
-            for (int i = 0; i < list.Count; i++)
-            {
-                var g = list[i];
-                if (g == null || !IsBioGen(g)) continue;
-                try
-                {
-                    var fuel = g.fuelInventoryData;
-                    if (fuel != null && ReferenceEquals(fuel, fd)) return true;
-                }
-                catch { }
-            }
-            if (!_warnedContainerMiss && Time.unscaledTime - _lastContainerMissWarn > 10f)
-            {
-                _lastContainerMissWarn = Time.unscaledTime;
-                _warnedContainerMiss = true;
-                int bioCnt = 0, fuelNull = 0;
-                try
-                {
-                    for (int i = 0; i < list.Count; i++)
-                    {
-                        var g = list[i];
-                        if (g == null || !IsBioGen(g)) continue;
-                        bioCnt++;
-                        try { if (g.fuelInventoryData == null) fuelNull++; } catch { fuelNull++; }
-                    }
-                }
-                catch { }
-                Plugin.L.LogInfo($"[TS] 容器归属未命中诊断: ActiveObjects={list.Count} 生物机={bioCnt} fuelNull={fuelNull} 目标容器={fd?.GetType().Name}");
-            }
-            return false;
+            if (__result == null || !IsBioGen(__instance)) return;
+            Mark(__result, false);
         }
-        catch { return false; }
-    }
-
-    private static int FuelItemId(ItemData it)
-    {
-        try
-        {
-            var attr = Reflect.Get(it, "itemAttr");
-            return Convert.ToInt32(Reflect.Get(attr, "itemId"));
-        }
-        catch { return -1; }
-    }
-
-    /// <summary>过期食品判定：Food 类且 ItemData.IsFoodExpired()==true（v0.8.6 加入）。</summary>
-    private static bool IsExpiredFood(ItemData it)
-    {
-        try
-        {
-            var attr = Reflect.Get(it, "itemAttr");
-            if (attr == null) return false;
-            var itype = Reflect.Get(attr, "itemType");
-            if (itype == null || !itype.ToString().Contains("Food")) return false;
-            var m = it.GetType().GetMethod("IsFoodExpired");
-            if (m != null) return (bool)m.Invoke(it, null);
-            var p = it.GetType().GetProperty("IsFoodExpired");
-            if (p != null) return (bool)p.GetValue(it);
-            return false;
-        }
-        catch { return false; }
-    }
-
-    /// <summary>白名单：腐肉 205 或 过期食品（游戏时间 − 生产时间 ≥ 保质期）。</summary>
-    private static bool IsAllowedFuel(ItemData it)
-    {
-        try
-        {
-            int id = FuelItemId(it);
-            if (id == 205) return true; // 腐肉
-            // 过期食品：Food 类且有过期标记
-            try
-            {
-                var attr = Reflect.Get(it, "itemAttr");
-                var itype = Reflect.Get(attr, "itemType");
-                if (itype == null || !itype.ToString().Contains("Food")) return false;
-                var expired = Reflect.Get(it, "IsFoodExpired");
-                if (expired == null) return false;
-                if (expired is bool b) return b;
-                var m = it.GetType().GetMethod("IsFoodExpired");
-                if (m != null) return (bool)m.Invoke(it, null);
-            }
-            catch { }
-            return false;
-        }
-        catch { return false; }
+        catch { }
     }
 
     public static void OnGeneratorStartPostfix(TerrainObject_Production_StirlingGenerator __instance)
@@ -290,7 +138,7 @@ public static class BioGenFuel
         catch { }
     }
 
-    /// <summary>由 RegistrationProbe.Update 调用：每 10s 采样 900103 燃料库存/限制（消耗观察）。</summary>
+    /// <summary>由 RegistrationProbe.Update 调用：每 10s 采样 900103 燃料库存（消耗观察）。</summary>
     public static void Tick()
     {
         try
@@ -298,27 +146,82 @@ public static class BioGenFuel
             var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
             if (list == null) return;
             float now = Time.unscaledTime;
-            bool sampleDue = now - _lastSample > 10f;
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
-                if (g == null) continue;
-                if (!IsBioGen(g)) continue;
-                if (sampleDue)
+                if (g == null || !IsBioGen(g)) continue;
+                try
                 {
-                    _lastSample = now;
-                    try
-                    {
-                        var fd = g.fuelInventoryData;
-                        string info = fd == null ? "fuelInventoryData=null"
-                            : $"size=({fd.inventorySizeX}x{fd.inventorySizeY}) limit={Reflect.Get(fd, "itemFeatureLimit")} title={Reflect.Get(fd, "inventoryTitleName")} items={Reflect.Get(fd, "itemList")}";
-                        Plugin.L.LogInfo($"[TS] BioGen 观察: {info}");
-                    }
-                    catch (Exception e) { Plugin.L.LogWarning($"[TS] BioGen 采样异常: {e.Message.Split('\n')[0]}"); }
+                    var fd = g.fuelInventoryData;
+                    string info = fd == null ? "fuelInventoryData=null"
+                        : $"size=({fd.inventorySizeX}x{fd.inventorySizeY}) title={Reflect.Get(fd, "inventoryTitleName")} items={Reflect.Get(fd, "itemList")}";
+                    Plugin.L.LogInfo($"[TS] BioGen 观察: {info}");
                 }
+                catch (Exception e) { Plugin.L.LogWarning($"[TS] BioGen 采样异常: {e.Message.Split('\n')[0]}"); }
             }
         }
         catch { }
+    }
+
+    // ───────────────── 内部工具 ─────────────────
+
+    private static void Mark(InventoryData fd, bool burnContainer)
+    {
+        long ptr = 0;
+        try { ptr = (long)fd.Pointer; } catch { ptr = fd.GetHashCode(); }
+        if (_marked.Add(ptr))
+        {
+            try { Reflect.Set(fd, "inventoryTitleName", GameLocale.T("生物燃料仓", "Bio Fuel Hopper")); } catch { }
+            Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记 ({(burnContainer ? "烧录容器" : "UI 容器")}) size=({fd.inventorySizeX}x{fd.inventorySizeY}) _marked={_marked.Count}");
+        }
+    }
+
+    private static bool IsMarked(InventoryData fd)
+    {
+        try { return _marked.Contains((long)fd.Pointer); } catch { return false; }
+    }
+
+    /// <summary>严格白名单：腐肉 205 / 炭 6（副产品回仓）/ 过期食品（Food 且 IsFoodExpired=true）。
+    /// 注意：ItemData 无 itemAttr 成员（那是 BasicItem 的 protected 字段）——attr 一律经 ItemManager.GetItemAttrById(itemId) 解析（游戏同款路径），
+    /// 这也解释了旧版反射读 id 恒为 0 的根因。</summary>
+    private static bool IsAllowedFuel(ItemData it)
+    {
+        try
+        {
+            int id = it.itemId;
+            if (id == 205 || id == 6) return true;                                                     // 腐肉 / 炭（副产品回仓）
+            if (id <= 0) return false;                                                                 // 无法识别的物品一律拒
+            var attr = ItemManager.instance?.GetItemAttrById(id);
+            if (attr == null) return false;
+            if (!attr.itemType.ToString().Contains("Food")) return false;                              // 非食品类拒（木头/金属等）
+            try { return ItemData.IsFoodExpired(it, attr); } catch { return false; }                   // 食品必须已过期
+        }
+        catch { return false; }
+    }
+
+    private static int FuelItemId(ItemData it)
+    {
+        try { return it.itemId; } catch { return -1; }
+    }
+
+    private static void LogReject(int id)
+    {
+        if (Time.unscaledTime - _lastRejectLog < 3f) return;
+        _lastRejectLog = Time.unscaledTime;
+        Plugin.L.LogInfo($"[TS] BioGen 拒绝燃料: id={id}");
+    }
+
+    /// <summary>ProductionData → 900103 判定：terrainObjectAttr 引用/ID 双保险。</summary>
+    private static bool IsBioGenProduction(ProductionData pd)
+    {
+        try
+        {
+            var attr = pd.terrainObjectAttr;
+            if (attr == null) return false;
+            if (RegistrationStore.Attrs.TryGetValue(900103, out var ours) && ReferenceEquals(attr, ours)) return true;
+            return AttrId(attr) == 900103;
+        }
+        catch { return false; }
     }
 
     private static bool IsBioGen(TerrainObject_Production_StirlingGenerator g)
@@ -329,31 +232,11 @@ public static class BioGenFuel
             if (to == null) return false;
             object attr = null;
             try { attr = Reflect.Get(to, "attr"); } catch { }
-            if (attr == null)
-            {
-                // 探测：attr 字段名未知——首轮 dump 组件字段线索（诊断）
-                if (!_warnedNoAttrField)
-                {
-                    _warnedNoAttrField = true;
-                    foreach (var f in to.GetType().GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance))
-                    {
-                        if (f.Name.StartsWith("Native") || f.Name is "isWrapped" or "pooledPtr") continue;
-                        Plugin.L.LogInfo($"[TS] BioGen 诊断: {to.GetType().Name}.{f.Name} = {TryRead(f.GetValue(to))}");
-                    }
-                }
-                return false;
-            }
-            // ID/引用双保险
+            if (attr == null) return false;
             if (RegistrationStore.Attrs.TryGetValue(900103, out var our) && ReferenceEquals(attr, our)) return true;
             return AttrId(attr) == 900103;
         }
         catch { return false; }
-    }
-
-    private static string TryRead(object v)
-    {
-        if (v == null) return "null";
-        try { return v.GetType().Name; } catch { return "?"; }
     }
 
     private static int AttrId(object attr)

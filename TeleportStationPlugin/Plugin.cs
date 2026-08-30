@@ -127,43 +127,38 @@ public class Plugin : BasePlugin
                     nameof(BioGenFuel.GetFuelInventoryPostfix), BindingFlags.Public | BindingFlags.Static)));
                 Log.LogInfo("[TS] 已挂钩 StirlingGenerator.get_fuelInventoryData（BioGen 燃料仓标记）");
             }
-            // v0.8.6：启动白名单（GetItemListByFeature 对生物仓返回白名单燃料列表）+ 半速消耗（CostItemDurability ×0.5）
+            // ═══ v0.8.9 生物能电站烧录链（Ghidra 定案重做）═══
+            // A. UpdateStirlingGenerator prefix/postfix：标记烧录容器 inventoryData1 + ref addedTime×0.5 半速 + 扫描窗
             try
             {
-                var gif = AccessTools.Method(typeof(InventoryData), "GetItemListByFeature");
-                if (gif != null)
+                var usg = AccessTools.Method(typeof(ProductionManager), "UpdateStirlingGenerator",
+                    new Type[] { typeof(ProductionData), typeof(float) });
+                if (usg != null)
                 {
-                    h.Patch(gif, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                        nameof(BioGenFuel.GetItemListByFeaturePrefix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 InventoryData.GetItemListByFeature（BioGen 启动白名单）");
+                    h.Patch(usg,
+                        prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                            nameof(BioGenFuel.StirlingUpdatePrefix), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                            nameof(BioGenFuel.StirlingUpdatePostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateStirlingGenerator（BioGen 烧录标记+半速+启动窗）");
                 }
+                else Log.LogWarning("[TS] UpdateStirlingGenerator 挂钩失败（方法未找到）");
             }
-            catch (Exception ea) { Log.LogWarning($"[TS] GetItemListByFeature 挂钩异常: {ea.Message.Split('\n')[0]}"); }
+            catch (Exception eu) { Log.LogWarning($"[TS] UpdateStirlingGenerator 挂钩异常: {eu.Message.Split('\n')[0]}"); }
+            // B. 启动门：GetItemAttrById 扫描窗内为白名单燃料伪造 Combustible（木头 attr 复用）
             try
             {
-                var cid = AccessTools.Method(typeof(InventoryData), "CostItemDurability", new Type[] { typeof(int), typeof(float), typeof(List<InventoryData>) });
-                if (cid != null)
+                var gia = AccessTools.Method(typeof(ItemManager), "GetItemAttrById");
+                if (gia != null)
                 {
-                    h.Patch(cid, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                        nameof(BioGenFuel.CostItemDurabilityHalfPrefix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 InventoryData.CostItemDurability（BioGen 半速消耗）");
+                    h.Patch(gia, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.GetAttrByIdPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ItemManager.GetItemAttrById（BioGen 启动门伪造 Combustible）");
                 }
+                else Log.LogWarning("[TS] GetItemAttrById 挂钩失败（方法未找到）");
             }
-            catch (Exception eb) { Log.LogWarning($"[TS] CostItemDurability 挂钩异常: {eb.Message.Split('\n')[0]}"); }
-            // v0.8.7：白名单前缀分参数挂——PassesFeatureLimit(ItemAttr) 挂 PassesFeatureLimitPrefix；AddItem/Try*（ItemData）挂 WhitelistPrefix
-            var tryNames = new[] { "AddItem", "TryAddItem", "TryAddItemWithoutChangeItem", "TryAddItemWithAutoSorting" };
-            foreach (var tn in tryNames)
-            {
-                try
-                {
-                    var tm = AccessTools.Method(typeof(InventoryData), tn);
-                    if (tm == null) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（方法未找到，跳过）"); continue; }
-                    h.Patch(tm, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                        nameof(BioGenFuel.WhitelistPrefix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo($"[TS] 已挂钩 InventoryData.{tn}（BioGen 白名单准入）");
-                }
-                catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
-            }
+            catch (Exception eg) { Log.LogWarning($"[TS] GetItemAttrById 挂钩异常: {eg.Message.Split('\n')[0]}"); }
+            // C. 准入环1：PassesFeatureLimit prefix（attr 级粗筛：205/炭/Food 放行，木头/金属拒；interop 直读不反射）
             try
             {
                 var pfl = AccessTools.Method(typeof(InventoryData), "PassesFeatureLimit");
@@ -171,10 +166,24 @@ public class Plugin : BasePlugin
                 {
                     h.Patch(pfl, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
                         nameof(BioGenFuel.PassesFeatureLimitPrefix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 InventoryData.PassesFeatureLimit（BioGen 准入判定，ItemAttr 版）");
+                    Log.LogInfo("[TS] 已挂钩 InventoryData.PassesFeatureLimit（BioGen 准入粗筛，ItemAttr 版）");
                 }
+                else Log.LogWarning("[TS] PassesFeatureLimit 挂钩失败（方法未找到）");
             }
             catch (Exception ec) { Log.LogWarning($"[TS] PassesFeatureLimit 挂钩异常: {ec.Message.Split('\n')[0]}"); }
+            // D. 准入环2：TryAddItem/AddItem prefix（item 级严格白名单：黑名单 205/炭6/过期食品）——灰烬注入也走 TryAddItem，6 号必须豁免
+            foreach (var tn in new[] { "TryAddItem", "AddItem" })
+            {
+                try
+                {
+                    var tm = AccessTools.Method(typeof(InventoryData), tn);
+                    if (tm == null) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（方法未找到，跳过）"); continue; }
+                    h.Patch(tm, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
+                        nameof(BioGenFuel.WhitelistPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo($"[TS] 已挂钩 InventoryData.{tn}（BioGen 严格白名单）");
+                }
+                catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
+            }
             }
             }
             else Log.LogWarning("[TS] GetTerrainObjectIconSprite 挂钩失败（跳过）");
@@ -206,7 +215,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.8.8 BioGenFuel 诊断版（itemId/容器归属）");
+        Log.LogInfo("[TeleportStation] P1 v0.8.9 BioGen 烧录链重做（inventoryData1 标记+半速 ref+假 Combustible 启动门+双环白名单）");
     }
 }
 
