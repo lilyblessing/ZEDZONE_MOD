@@ -17,6 +17,10 @@ namespace TeleportStationPlugin;
 ///      "玩家/车在盘中心以北被盖"（同层 y-sort）因层不同而彻底消除。
 ///   4. 0.5s 周期复查：防 factory 模式进出时 RestoreRoot 把层写回建筑默认。
 /// </summary>
+/// <summary>
+/// v0.9.4：实例定位改 ActiveObjects_Production（基类活列表）——900102 克隆源已切充电台 126（TerrainObject_Production_Inventory 系，
+/// 实例在 Production 列表）；旧档斯特林组件盘同样在 Production 列表（Stirling 也是 Production 子类）→ 单一列表全覆盖。
+/// </summary>
 public static class BuildingPadFix
 {
     private const int PadId = 900102;
@@ -34,7 +38,7 @@ public static class BuildingPadFix
             if (_fxBgId < 0) _fxBgId = SortingLayer.NameToID("FX_BG");
             if (_fxBgId <= 0) return; // FX_BG 未注册（内置层，理论不存在）
 
-            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
             for (int i = 0; i < list.Count; i++)
             {
@@ -57,7 +61,7 @@ public static class BuildingPadFix
     }
 
     /// <summary>实例判定：TerrainObject 组件的 attr.id == 900102（引用/ID 双保险）。</summary>
-    private static bool IsPadInstance(TerrainObject_Production_StirlingGenerator g)
+    private static bool IsPadInstance(TerrainObject_Production g)
     {
         try
         {

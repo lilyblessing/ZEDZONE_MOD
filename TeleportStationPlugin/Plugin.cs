@@ -214,6 +214,22 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] TimeController.ChangeTimeTo 挂钩失败（方法未找到）");
             }
             catch (Exception ej) { Log.LogWarning($"[TS] TimeController.ChangeTimeTo 挂钩异常: {ej.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.4 P3 二期：充电台克隆盘的 ×4 倍率（UpdDateBatteryCharger 前后放大 sufficient）═══
+            try
+            {
+                var ubc = AccessTools.Method(typeof(ProductionManager), "UpdateBatteryCharger");
+                if (ubc != null)
+                {
+                    h.Patch(ubc,
+                        prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.ChargerUpdatePrefix), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.ChargerUpdatePostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateBatteryCharger（充电台盘 ×4 倍率）");
+                }
+                else Log.LogWarning("[TS] UpdateBatteryCharger 挂钩失败（方法未找到）");
+            }
+            catch (Exception ek) { Log.LogWarning($"[TS] UpdateBatteryCharger 挂钩异常: {ek.Message.Split('\n')[0]}"); }
             // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
@@ -229,13 +245,15 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.9.2 P3 电池仓 4×4+充电（反编译公式：sufficient×24×倍率×天→ChargeBattery 封顶）");
+        Log.LogInfo("[TeleportStation] P1 v0.9.4 圆盘克隆源切充电台126（消费端：真实电网路由+原生充电；×4 倍率 hook+层钉 Production 列表）");
     }
 }
 
 /// <summary>v0.5.0：源头注入——hook GameController 源表方法，把我们的建筑追加进建造列表/查询。</summary>
 public static class SourceInjector
 {
+    private static bool _snapshotDone; // v0.9.4 临时取证：电力卡源表快照（拿充电台原版 id，切换克隆源用）
+
     public static void AvailPostfix(object __0, ref Il2CppSystem.Collections.Generic.List<TerrainObjectAttr> __result)
     {
         try
@@ -243,6 +261,23 @@ public static class SourceInjector
             if (RegistrationStore.Attrs.Count == 0) return;
             if (__result == null) return;
             if (Convert.ToInt32(__0) != Convert.ToInt32(TechGenre.Electricity)) return; // 三建筑均电力
+            // v0.9.4 临时取证：首次进入电力栏打源表快照（id + 名称）
+            if (!_snapshotDone)
+            {
+                _snapshotDone = true;
+                var sb = new System.Text.StringBuilder("[TS] 电力卡源表快照: ");
+                for (int i = 0; i < __result.Count; i++)
+                {
+                    var a = __result[i];
+                    if (a == null) continue;
+                    var idObj = Reflect.Get(a, "id");
+                    object name = null;
+                    try { name = Reflect.Get(a, "itemName_Runtime"); } catch { }
+                    if (name == null) { try { name = Reflect.Get(a, "itemName"); } catch { } }
+                    sb.Append($" [{idObj}={name}]");
+                }
+                Plugin.L.LogInfo(sb.ToString());
+            }
             // 幂等：已有则跳过
             for (int i = 0; i < __result.Count; i++)
             {
@@ -276,7 +311,7 @@ public static class SourceInjector
         catch (Exception e) { Plugin.L.LogWarning($"[TS] AtbyIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
 
-    /// <summary>v0.6.22：GetTerrainObjectPrefabById 兜底——我们的 id 用参照建筑（120 斯特林）prefab 过渡。</summary>
+    /// <summary>v0.6.22：GetTerrainObjectPrefabById 兜底——我们的 id 用参照建筑 prefab 过渡（v0.9.4：按 id 选参照：900102←126充电台 / 900103←120斯特林）。</summary>
     public static void PrefabByIdPostfix(object __0, ref GameObject __result)
     {
         try
@@ -289,9 +324,10 @@ public static class SourceInjector
             if (gc == null) return;
             var m = typeof(GameController).GetMethod("GetTerrainObjectPrefabById");
             if (m == null) return;
-            var prefab = m.Invoke(gc, new object[] { 120 });
+            int refId = id == 900102 ? 126 : 120;
+            var prefab = m.Invoke(gc, new object[] { refId });
             __result = prefab as GameObject;
-            if (__result != null) Plugin.L.LogInfo($"[TS] Prefab 兜底: id={id} → 参照120（斯特林模型过渡）");
+            if (__result != null) Plugin.L.LogInfo($"[TS] Prefab 兜底: id={id} → 参照{refId}（{(id == 900102 ? "充电台" : "斯特林")}模型过渡）");
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] PrefabByIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -450,6 +486,8 @@ public class RegistrationProbe : MonoBehaviour
         try { BuildingPadFix.Tick(); } catch { }
         // v0.9.2 P3：电池仓充电（同前——注册完成后仍要充）
         try { BatteryChargeFix.Tick(); } catch { }
+        // v0.9.4 P3 二期：充电台克隆盘容器微调（4×4/标题/槽数）
+        try { ChargerPadFix.Tick(); } catch { }
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
         // P2-B（2026-08-31）：BioGenFuel.Tick 观察采样已随 P2 验收退役（Done 后本就不执行），移除调用
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
@@ -511,8 +549,8 @@ internal static class RegistrarLogic
         var sb = new StringBuilder();
         sb.AppendLine("[TS] ===== P1 建筑注册注入 =====");
 
-        // ── 1. 找克隆模板 attr（108 通讯终端 / 120 斯特林）──
-        TerrainObjectAttr commuAttr = null, stirlingAttr = null;
+        // ── 1. 找克隆模板 attr（108 通讯终端 / 120 斯特林 / 126 电池充电台）──
+        TerrainObjectAttr commuAttr = null, stirlingAttr = null, chargerAttr = null;
         try
         {
             var attrs = Resources.FindObjectsOfTypeAll<TerrainObjectAttr>();
@@ -524,12 +562,13 @@ internal static class RegistrarLogic
                 int id = Convert.ToInt32(idObj);
                 if (id == 108 && commuAttr == null) commuAttr = a;
                 if (id == 120 && stirlingAttr == null) stirlingAttr = a;
+                if (id == 126 && chargerAttr == null) chargerAttr = a; // v0.9.4：电池充电台模板（圆盘克隆源切换）
             }
-            sb.AppendLine($"  模板: 通讯终端108={(commuAttr != null ? "OK" : "NULL")} 斯特林120={(stirlingAttr != null ? "OK" : "NULL")}");
+            sb.AppendLine($"  模板: 通讯终端108={(commuAttr != null ? "OK" : "NULL")} 斯特林120={(stirlingAttr != null ? "OK" : "NULL")} 充电台126={(chargerAttr != null ? "OK" : "NULL")}");
         }
         catch (Exception e) { sb.AppendLine($"  模板查找异常: {e.Message.Split('\n')[0]}"); }
 
-        if (commuAttr == null || stirlingAttr == null)
+        if (commuAttr == null || stirlingAttr == null || chargerAttr == null)
         {
             sb.AppendLine("[TS] ⚠ 模板 attr 未找齐，注入中止（可能进主菜单过早，需在存档内触发）");
             Plugin.L.LogInfo(sb.ToString());
@@ -541,7 +580,7 @@ internal static class RegistrarLogic
         try
         {
             RegisterBuilding(Buildings.ConsoleDef, commuAttr);
-            RegisterBuilding(Buildings.PadDef, stirlingAttr);
+            RegisterBuilding(Buildings.PadDef, chargerAttr);   // v0.9.4：圆盘克隆源 斯特林120→充电台126（消费端：原生电网路由+原生充电逻辑）
             RegisterBuilding(Buildings.BioGenDef, stirlingAttr);
         }
         catch (Exception e) { sb.AppendLine($"  注册异常: {e}"); }
@@ -623,9 +662,11 @@ internal static class RegistrarLogic
                             if (add == null) continue;
                             bool has108 = (bool)contains.Invoke(mem, new object[] { 108 });
                             bool has120 = (bool)contains.Invoke(mem, new object[] { 120 });
+                            bool has126 = (bool)contains.Invoke(mem, new object[] { 126 }); // v0.9.4：充电台模板（圆盘源）
                             object src108 = has108 ? GetVal(108) : null;
                             object src120 = has120 ? GetVal(120) : null;
-                            bool isPrefabDic = (src108 is GameObject) || (src120 is GameObject);
+                            object src126 = has126 ? GetVal(126) : null;
+                            bool isPrefabDic = (src108 is GameObject) || (src120 is GameObject) || (src126 is GameObject);
                             if (isPrefabDic)
                             {
                                 if (has108 && src108 is GameObject g108 && !(bool)contains.Invoke(mem, new object[] { 900101 }))
@@ -633,13 +674,13 @@ internal static class RegistrarLogic
                                     var clone = BuildPrefabClone(g108, Buildings.ConsoleDef);
                                     if (clone != null) { add.Invoke(mem, new object[] { 900101, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900101←108(克隆贴图)"); }
                                 }
+                                if (has126 && src126 is GameObject g126 && !(bool)contains.Invoke(mem, new object[] { 900102 }))
+                                {
+                                    var clone = BuildPrefabClone(g126, Buildings.PadDef); // v0.9.4：圆盘源 120→126
+                                    if (clone != null) { add.Invoke(mem, new object[] { 900102, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900102←126充电台(克隆贴图)"); }
+                                }
                                 if (has120 && src120 is GameObject g120)
                                 {
-                                    if (!(bool)contains.Invoke(mem, new object[] { 900102 }))
-                                    {
-                                        var clone = BuildPrefabClone(g120, Buildings.PadDef);
-                                        if (clone != null) { add.Invoke(mem, new object[] { 900102, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900102←120(克隆贴图)"); }
-                                    }
                                     if (!(bool)contains.Invoke(mem, new object[] { 900103 }))
                                     {
                                         var clone = BuildPrefabClone(g120, Buildings.BioGenDef);
@@ -654,13 +695,10 @@ internal static class RegistrarLogic
                                 {
                                     add.Invoke(mem, new object[] { 900101, src108 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900101←108");
                                 }
-                                if (has120 && src120 != null)
-                                {
-                                    if (!(bool)contains.Invoke(mem, new object[] { 900102 }))
-                                    { add.Invoke(mem, new object[] { 900102, src120 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900102←120"); }
-                                    if (!(bool)contains.Invoke(mem, new object[] { 900103 }))
-                                    { add.Invoke(mem, new object[] { 900103, src120 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900103←120"); }
-                                }
+                                if (has126 && src126 != null && !(bool)contains.Invoke(mem, new object[] { 900102 }))
+                                { add.Invoke(mem, new object[] { 900102, src126 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900102←126充电台"); }
+                                if (has120 && src120 != null && !(bool)contains.Invoke(mem, new object[] { 900103 }))
+                                { add.Invoke(mem, new object[] { 900103, src120 }); mirrored++; sb.AppendLine($"  字典镜像: {tn} 900103←120"); }
                             }
                         }
                         catch { }

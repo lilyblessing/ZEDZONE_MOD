@@ -55,7 +55,6 @@ public static class BatteryChargeFix
             if (list == null) return;
             float gameDays = _pendingGameDays;
             if (gameDays > 0f) _pendingGameDays = 0f; // 结算清零（单盘场景；多盘并存各充一轮，可接受）
-            bool any = false;
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
@@ -64,7 +63,6 @@ public static class BatteryChargeFix
                 {
                     EnsureContainer(g);
                     if (gameDays > 0f) Charge(g, gameDays);
-                    any = true;
                 }
                 catch (Exception e) { Plugin.L.LogWarning($"[TS] 电池仓 Tick 异常: {e.Message.Split('\n')[0]}"); }
             }
