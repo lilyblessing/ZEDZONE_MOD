@@ -45,7 +45,9 @@ internal static class PadDeployable
             var attr = CreateItemAttr(id);
             ItemRegistryHelper.DicAdd(dic, id, attr);
             ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "itemList"), attr);
-            ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "allRecipeList"), CreateRecipe(id));
+            // v0.9.1 退役（用户决策 2026-08-31）：放置物圆盘 900110 停止制作——配方不再注册（allRecipeList 不加），
+            // attr 保留注册（旧档物品加载/挂载依赖 itemAttrDic，直接停注册会损坏旧档物品）。
+            // ItemRegistryHelper.AddToCollection(Reflect.Get(mgr, "allRecipeList"), CreateRecipe(id));
             // 物品栏图标（ModSpriteRegistry slot=Main）
             ItemRegistryHelper.RegisterSprite(Plugin.PluginDir, "textures/pad.png", id, "Main", 120, 100);
 
