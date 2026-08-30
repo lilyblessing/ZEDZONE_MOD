@@ -41,7 +41,7 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 游戏内测试物品：按 **`` ` ``** 打开控制台 → `additem <itemId>`（命名牌 = 900000）。
 游戏更新后 BepInEx 会**自动重新生成 interop**（无需手动处理），但类型可能变化需复验。
 
-## 2.5 反编译工具链（2026-09-05 装齐）
+## 2.5 反编译工具链（2026-08-31 装齐）
 
 静态逆向三档（详见 Obsidian `LLM 文档/Reasonix/ZEDZONE/dev/il2cpp-工具链-使用手册.md`）：
 
@@ -57,7 +57,7 @@ Copy-Item bin\Release\net6.0\NoteTagPlugin.dll '<游戏>\BepInEx\plugins\NoteTag
 # L3 运行时探针：CE 7.6（scoop）+ cheatengine MCP 桥；.\tools\CEProbe\ProbeFuel.ps1 -UseCE
 ```
 
-关键 VA（2026-09-05 实测）: UpdateStirlingGenerator=0x180930AB0 / UpdateAllProductionData=0x18092F270 / BatteryCharger.UpdateBatteryCharging=0x1809BC520 / PassesFeatureLimit=0x1806D75B0 / GetItemListByFeature=0x1806D5110 / CostItemDurability=0x1806D3590,0x1806D3610,0x1806D3970
+关键 VA（2026-08-31 实测）: UpdateStirlingGenerator=0x180930AB0 / UpdateAllProductionData=0x18092F270 / BatteryCharger.UpdateBatteryCharging=0x1809BC520 / PassesFeatureLimit=0x1806D75B0 / GetItemListByFeature=0x1806D5110 / CostItemDurability=0x1806D3590,0x1806D3610,0x1806D3970
 
 ## 3. 游戏逆向知识（ildump 已验证）
 
