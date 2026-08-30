@@ -18,3 +18,7 @@ dist/
 
 # 游戏衍生数据（铁律：interop/DummyDll/dump.cs 等绝不入库）
 out/
+
+# 第三方工具本体（il2cpp-refresh.ps1 自动下载；本地保留离线可用）
+tools/Il2CppDumper/
+tools/Il2CppDumper-*.zip
