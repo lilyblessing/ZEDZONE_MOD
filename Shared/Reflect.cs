@@ -66,6 +66,10 @@ public static class Reflect
     {
         if (value == null) return null;
         if (target.IsInstanceOfType(value)) return value;
+        // L 修复（2026-08-31）：Il2Cpp 包装类型（数组/List 等）透传原样——BCL 转换会抛 IConvertible 类异常
+        // （实例：ItemAttr_Deployable.directionSprites = Il2CppReferenceArray<Sprite> 曾静默/异常失败）
+        if (value.GetType() != null && value.GetType().Namespace != null && value.GetType().Namespace.StartsWith("Il2Cpp"))
+            return value;
         if (target.IsEnum) return Enum.ToObject(target, value);
         if (target == typeof(float)) return System.Convert.ToSingle(value);
         if (target == typeof(int)) return System.Convert.ToInt32(value);

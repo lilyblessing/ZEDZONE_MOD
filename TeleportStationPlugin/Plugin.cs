@@ -862,8 +862,10 @@ internal static class RegistrarLogic
                     if (sr == null) continue;
                     try { sr.sortingLayerName = def.LayerOverride; } catch { }
                 }
-                // v0.6.40：挂载 PadLayerPin——游戏 Instantiate 克隆时组件随实例复制，每帧 LateUpdate+OnWillRenderObject 双时点钉死层
-                try { clone.AddComponent<PadLayerPin>(); } catch (Exception e5) { Plugin.L.LogWarning($"[TS] PadLayerPin 挂载异常: {e5.Message.Split('\n')[0]}"); }
+                // v0.6.40：挂载 PadLayerPin——泛型 AddComponent<T>() 对 mod MonoBehaviour 走 Il2Cpp 泛型 methodinfo 缓存抛
+                // MethodInfoStoreGeneric 异常（日志"PadLayerPin 挂载异常"自 v0.8.x 起）；非泛型 AddComponent(Type) 参数又必须是
+                // Il2CppSystem.Type（mod 类型转换不了）→ 组件路线废弃（2026-08-31 定论）。
+                // 建筑盘层钉改走「排序写点 hook」方案（静态取证中：SortingGroup/factory 链+Ghidra 写点定位）
             }
             Plugin.L.LogInfo($"[TS] prefab 克隆: {def.SpriteKey} ← {template.name} sprite={sp.name} tex={tex.width}x{tex.height} ppu={ppu:F1} 世界≈{tex.width / ppu:F2}x{worldH:F2} 圆盘={(def.NoCollision ? "无碰撞" : "-")} 层={def.LayerOverride ?? "-"}");
             return clone;
