@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.8.10")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.22")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -63,9 +63,12 @@ public class Plugin : BasePlugin
             var byId = AccessTools.Method(typeof(GameController), "GetTerrainObjectAttrById");
             if (byId != null)
             {
-                h.Patch(byId, postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
-                    nameof(SourceInjector.ByIdPostfix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectAttrById（查询兜底）");
+                h.Patch(byId,
+                    prefix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
+                        nameof(SourceInjector.AttrByIdPrefix), BindingFlags.Public | BindingFlags.Static)),
+                    postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
+                        nameof(SourceInjector.ByIdPostfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectAttrById（查询短路）");
             }
             else Log.LogWarning("[TS] GetTerrainObjectAttrById 挂钩失败");
 
@@ -80,9 +83,12 @@ public class Plugin : BasePlugin
             var prefabById = AccessTools.Method(typeof(GameController), "GetTerrainObjectPrefabById");
             if (prefabById != null)
             {
-                h.Patch(prefabById, postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
-                    nameof(SourceInjector.PrefabByIdPostfix), BindingFlags.Public | BindingFlags.Static)));
-                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectPrefabById（prefab 兜底）");
+                h.Patch(prefabById,
+                    prefix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
+                        nameof(SourceInjector.PrefabByIdPrefix), BindingFlags.Public | BindingFlags.Static)),
+                    postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(
+                        nameof(SourceInjector.PrefabByIdPostfix), BindingFlags.Public | BindingFlags.Static)));
+                Log.LogInfo("[TS] 已挂钩 GameController.GetTerrainObjectPrefabById（prefab 短路）");
             }
             else Log.LogWarning("[TS] GetTerrainObjectPrefabById 挂钩失败");
 
@@ -247,12 +253,78 @@ public class Plugin : BasePlugin
                 var cgf = AccessTools.Method(typeof(ProductionManager), "ConsumeElectricGridDirtyFlag");
                 if (cgf != null)
                 {
-                    h.Patch(cgf, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
-                        nameof(ChargerPadFix.GridConsumePostfix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 ProductionManager.ConsumeElectricGridDirtyFlag（电网重扫采样）");
+                    h.Patch(cgf,
+                        prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.GridConsumePrefix), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.GridConsumePostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.ConsumeElectricGridDirtyFlag（电网重扫采样+表桶兜底）");
                 }
             }
             catch (Exception en) { Log.LogWarning($"[TS] ConsumeElectricGridDirtyFlag 挂钩异常: {en.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.17 贴图重钉（治本）：GameController 双入口 postfix 用 prefab MOD 贴图覆盖模板贴图 ═══
+            try
+            {
+                var bto = AccessTools.Method(typeof(GameController), "BuildTerrainObject");
+                if (bto != null)
+                {
+                    h.Patch(bto,
+                        prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.BuildTerrainObjectPrefix), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                            nameof(ChargerPadFix.BuildTerrainObjectPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 GameController.BuildTerrainObject（克隆贴图重钉+探针）");
+                }
+                else Log.LogWarning("[TS] BuildTerrainObject 挂钩失败（方法未找到）");
+            }
+            catch (Exception eb) { Log.LogWarning($"[TS] BuildTerrainObject 挂钩异常: {eb.Message.Split('\n')[0]}"); }
+            try
+            {
+                var ato = AccessTools.Method(typeof(GameController), "AddTerrainObject");
+                if (ato != null)
+                {
+                    h.Patch(ato, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                        nameof(ChargerPadFix.AddTerrainObjectPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 GameController.AddTerrainObject（克隆贴图重钉）");
+                }
+                else Log.LogWarning("[TS] AddTerrainObject 挂钩失败（方法未找到）");
+            }
+            catch (Exception ea) { Log.LogWarning($"[TS] AddTerrainObject 挂钩异常: {ea.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.21 R11-1 权威补键：GameController.InitTerrainObjectAttrs postfix 场景加载必走托管路径 ═══
+            try
+            {
+                var ita = typeof(GameController).GetMethod("InitTerrainObjectAttrs", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                if (ita != null)
+                {
+                    h.Patch(ita, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.InitTerrainObjectAttrsPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 GameController.InitTerrainObjectAttrs（权威补键）");
+                }
+                else Log.LogWarning("[TS] InitTerrainObjectAttrs 挂钩失败（方法未找到）");
+            }
+            catch (Exception ei) { Log.LogWarning($"[TS] InitTerrainObjectAttrs 挂钩异常: {ei.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.22 R12-2 克隆实例注册表（hideFlags=HideAndDontSave 下 FindObjectsOfType 不可见，OnEnable 注册不依赖可见性）═══
+            try
+            {
+                var onP = AccessTools.Method(typeof(TerrainObject_Production), "OnEnable");
+                if (onP != null)
+                {
+                    h.Patch(onP, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_P), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TerrainObject_Production.OnEnable（克隆注册表）");
+                }
+                else Log.LogWarning("[TS] TerrainObject_Production.OnEnable 挂钩失败（方法未找到）");
+            }
+            catch (Exception er) { Log.LogWarning($"[TS] TerrainObject_Production.OnEnable 挂钩异常: {er.Message.Split('\n')[0]}"); }
+            try
+            {
+                var onS = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "OnEnable");
+                if (onS != null)
+                {
+                    h.Patch(onS, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_S), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TerrainObject_Production_StirlingGenerator.OnEnable（克隆注册表）");
+                }
+                else Log.LogWarning("[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩失败（方法未找到）");
+            }
+            catch (Exception es) { Log.LogWarning($"[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩异常: {es.Message.Split('\n')[0]}"); }
             // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
@@ -332,6 +404,46 @@ public static class SourceInjector
             }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] AtbyIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    /// <summary>v0.9.18：GetTerrainObjectAttrById prefix 短路——克隆 id 直接返回注册 attr，跳过游戏原方法（字典补键不可靠时的根治）。</summary>
+    public static bool AttrByIdPrefix(object __0, ref TerrainObjectAttr __result, GameController __instance)
+    {
+        if (__instance != null) { try { var d = __instance.terrainObjectAttrDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Attrs.TryGetValue(id, out var attr) && attr != null && !d.ContainsKey(id)) d.Add(id, attr); } } } catch { } }
+        try
+        {
+            int id = Convert.ToInt32(__0);
+            if (id >= 900101 && id <= 900103)
+            {
+                if (RegistrationStore.Attrs.TryGetValue(id, out var attr) && attr != null)
+                {
+                    __result = attr;
+                    return false;
+                }
+            }
+        }
+        catch { }
+        return true;
+    }
+
+    /// <summary>v0.9.18：GetTerrainObjectPrefabById prefix 短路——克隆 id 直接返回注册 prefab，跳过游戏原方法。</summary>
+    public static bool PrefabByIdPrefix(object __0, ref GameObject __result, GameController __instance)
+    {
+        if (__instance != null) { try { var d = __instance.terrainObjectPrefabDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Prefabs.TryGetValue(id, out var clone) && clone != null && !d.ContainsKey(id)) d.Add(id, clone); } } } catch { } }
+        try
+        {
+            int id = Convert.ToInt32(__0);
+            if (id >= 900101 && id <= 900103)
+            {
+                if (RegistrationStore.Prefabs.TryGetValue(id, out var p) && p != null)
+                {
+                    __result = p;
+                    return false;
+                }
+            }
+        }
+        catch { }
+        return true;
     }
 
     /// <summary>v0.6.22：GetTerrainObjectPrefabById 兜底——我们的 id 用参照建筑 prefab 过渡（v0.9.4：按 id 选参照：900102←126充电台 / 900103←120斯特林）。</summary>
@@ -527,6 +639,7 @@ public class RegistrationProbe : MonoBehaviour
 internal static class RegistrationStore
 {
     internal static readonly System.Collections.Generic.Dictionary<int, TerrainObjectAttr> Attrs = new();
+    internal static readonly System.Collections.Generic.Dictionary<int, GameObject> Prefabs = new();
 }
 
 /// <summary>建筑定义。</summary>
@@ -695,19 +808,19 @@ internal static class RegistrarLogic
                                 if (has108 && src108 is GameObject g108 && !(bool)contains.Invoke(mem, new object[] { 900101 }))
                                 {
                                     var clone = BuildPrefabClone(g108, Buildings.ConsoleDef);
-                                    if (clone != null) { add.Invoke(mem, new object[] { 900101, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900101←108(克隆贴图)"); }
+                                    if (clone != null) { add.Invoke(mem, new object[] { 900101, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900101←108(克隆贴图)"); try { RegistrationStore.Prefabs[900101] = clone; } catch { } }
                                 }
                                 if (has126 && src126 is GameObject g126 && !(bool)contains.Invoke(mem, new object[] { 900102 }))
                                 {
                                     var clone = BuildPrefabClone(g126, Buildings.PadDef); // v0.9.4：圆盘源 120→126
-                                    if (clone != null) { add.Invoke(mem, new object[] { 900102, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900102←126充电台(克隆贴图)"); }
+                                    if (clone != null) { add.Invoke(mem, new object[] { 900102, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900102←126充电台(克隆贴图)"); try { RegistrationStore.Prefabs[900102] = clone; } catch { } }
                                 }
                                 if (has120 && src120 is GameObject g120)
                                 {
                                     if (!(bool)contains.Invoke(mem, new object[] { 900103 }))
                                     {
                                         var clone = BuildPrefabClone(g120, Buildings.BioGenDef);
-                                        if (clone != null) { add.Invoke(mem, new object[] { 900103, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900103←120(克隆贴图)"); }
+                                        if (clone != null) { add.Invoke(mem, new object[] { 900103, clone }); mirrored++; sb.AppendLine($"  字典镜像+克隆: {tn} 900103←120(克隆贴图)"); try { RegistrationStore.Prefabs[900103] = clone; } catch { } }
                                     }
                                 }
                             }
