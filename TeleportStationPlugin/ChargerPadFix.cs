@@ -101,35 +101,28 @@ public static class ChargerPadFix
     {
         try
         {
-            string sb = "[TS] 电网重扫完成，克隆建筑连接表:";
+            // v0.9.9 对照实验：采样全部 Production 实例（含原版充电台/冰箱/杆子），对比克隆建筑 vs 原版的连接表
+            string sb = "[TS] 电网重扫完成，全实例连接表:";
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
-            bool found = false;
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
                 if (g == null) continue;
-                int aid = GetClonedAttrId(g);
-                if (aid != 900101 && aid != 900102 && aid != 900103) continue;
-                found = true;
-                // v0.9.8：附 attr 耗电标志实证（重扫过滤依据）
                 try
                 {
-                    var to = FindTerrainObject(g.transform);
-                    object attr = null;
-                    try { if (to != null) attr = Reflect.Get(to, "attr"); } catch { }
-                    if (attr != null) sb += $" [id{aid}电耗={Reflect.Get(attr, "electricConsuming")}]";
-                    else sb += $" [id{aid}无attr]";
+                    object pd = null;
+                    var tod = Reflect.Get(g, "objectData");
+                    if (tod != null) pd = Reflect.Get(tod, "productionData");
+                    if (pd == null) { sb += " [?.PD=null]"; continue; }
+                    int aid = GetClonedAttrId(g);
+                    sb += $" [{aid}:" + CountOf(pd, "inputProductionObjectList") + "/" + CountOf(pd, "outputProductionObjectList") + "/"
+                        + CountOf(pd, "connectedProductionObjectList") + "/" + CountOf(pd, "inputProductionDataList") + "/"
+                        + CountOf(pd, "outputProductionDataList") + "/" + CountOf(pd, "connectedProductionDataList") + "]";
                 }
                 catch { }
-                object pd = null;
-                try { var tod = Reflect.Get(g, "objectData"); if (tod != null) pd = Reflect.Get(tod, "productionData"); } catch { }
-                if (pd == null) { sb += $" [{aid}:PD=null]"; continue; }
-                sb += $" [{aid}:" + CountOf(pd, "inputProductionObjectList") + "/" + CountOf(pd, "outputProductionObjectList") + "/"
-                    + CountOf(pd, "connectedProductionObjectList") + "/" + CountOf(pd, "inputProductionDataList") + "/"
-                    + CountOf(pd, "outputProductionDataList") + "/" + CountOf(pd, "connectedProductionDataList") + "]";
             }
-            if (found) LogThrottled(sb);
+            LogThrottled(sb);
         }
         catch { }
     }
