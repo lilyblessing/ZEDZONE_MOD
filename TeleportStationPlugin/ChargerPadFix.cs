@@ -82,6 +82,7 @@ public static class ChargerPadFix
         }
         catch { }
         if (pd == null) return;
+        EnsurePdTables(pd); // v0.9.6：NRE 防御——电线杆重扫对盘 PD 连接表 Add 时若表 null 即炸（ElectricPole.cs:106）
         var inv = Reflect.Get(pd, "inventoryData1") as InventoryData;
         if (inv == null) return;
         try { Reflect.Set(inv, "inventoryTitleName", GameLocale.T("电池仓", "Battery Cell")); } catch { }
@@ -89,7 +90,42 @@ public static class ChargerPadFix
         try { Reflect.Set(inv, "inventorySizeX", 4); } catch { }
         try { Reflect.Set(inv, "inventorySizeY", 4); } catch { }
         try { Reflect.Set(g, "totalBatterySoltNumber", 4); } catch { }
-        Plugin.L.LogInfo($"[TS] 充电台盘初始化: 4×4 槽数=4 size=({inv.inventorySizeX}x{inv.inventorySizeY})");
+        Plugin.L.LogInfo($"[TS] 充电台盘初始化: 4×4 槽数=4 size=({inv.inventorySizeX}x{inv.inventorySizeY}) PD表={(_pdTablesFixed ? "已重建" : "完整")}");
+    }
+
+    private static bool _pdTablesFixed; // 一次性日志用
+
+    /// <summary>ProductionData 六连接表完整性保障（反编译 ElectricPole.RefreshElectricConnection 0x1809BD350：
+    /// 对 input/output/connected 三组列表做 List.Add 无守卫，任一 null 即 NRE「已隔离」→ 存档重建电网时建筑加载异常）。
+    /// 原版 ctor new 六表；克隆/池化路径可能缺——缺则补 Il2Cpp List（字段名以 dump.cs 为准）。</summary>
+    private static void EnsurePdTables(object pd)
+    {
+        string[] strTables = { "inputProductionObjectList", "outputProductionObjectList", "connectedProductionObjectList" };
+        string[] pdTables = { "inputProductionDataList", "outputProductionDataList", "connectedProductionDataList" };
+        foreach (var f in strTables)
+        {
+            try
+            {
+                if (Reflect.Get(pd, f) == null)
+                {
+                    Reflect.Set(pd, f, new Il2CppSystem.Collections.Generic.List<string>());
+                    _pdTablesFixed = true;
+                }
+            }
+            catch { }
+        }
+        foreach (var f in pdTables)
+        {
+            try
+            {
+                if (Reflect.Get(pd, f) == null)
+                {
+                    Reflect.Set(pd, f, new Il2CppSystem.Collections.Generic.List<ProductionData>());
+                    _pdTablesFixed = true;
+                }
+            }
+            catch { }
+        }
     }
 
     /// <summary>×4 倍率 prefix：pd 是 900102 且供电含生物能 → sufficient ×4（postfix 恢复）。</summary>
