@@ -20,6 +20,8 @@ public static class ChargerPadFix
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
+    private static bool _warnedTypeMiss; // 判定诊断（一次性）
+    private static bool _warnedHit;      // ×4 判定诊断（一次性）
 
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
     public static void Tick()
@@ -42,20 +44,25 @@ public static class ChargerPadFix
         catch { }
     }
 
-    /// <summary>充电台克隆盘判定：组件类型含 BatteryCharger + attr.id == 900102。</summary>
+    /// <summary>充电台克隆盘判定：组件类型含 BatteryCharger + attr.id == 900102。类型名不匹配时一次性诊断（排查 v0.9.4 初始化缺失）。</summary>
     private static bool IsChargerPad(TerrainObject_Production g)
     {
         try
         {
-            if (g.GetType().Name.IndexOf("BatteryCharger", StringComparison.Ordinal) < 0)
-                return false;
+            bool typeOk = g.GetType().Name.IndexOf("BatteryCharger", StringComparison.Ordinal) >= 0;
             var to = FindTerrainObject(g.transform);
             if (to == null) return false;
             object attr = null;
             try { attr = Reflect.Get(to, "attr"); } catch { }
-            if (attr == null) return false;
-            if (RegistrationStore.Attrs.TryGetValue(PadId, out var our) && ReferenceEquals(attr, our)) return true;
-            return AttrId(attr) == PadId;
+            if (attr == null) { if (!_warnedTypeMiss) { _warnedTypeMiss = true; Plugin.L.LogWarning($"[TS] ChargerPad 判定诊断: attr=null type='{g.GetType().Name}'"); } return false; }
+            bool isPad = false;
+            try { isPad = (RegistrationStore.Attrs.TryGetValue(PadId, out var our) && ReferenceEquals(attr, our)) || AttrId(attr) == PadId; } catch { }
+            if (isPad && !typeOk && !_warnedTypeMiss)
+            {
+                _warnedTypeMiss = true;
+                Plugin.L.LogWarning($"[TS] ChargerPad 判定诊断: 是900102但组件类型名不含 BatteryCharger: '{g.GetType().Name}' attrId={AttrId(attr)}");
+            }
+            return isPad && typeOk;
         }
         catch { return false; }
     }
@@ -91,12 +98,21 @@ public static class ChargerPadFix
         try
         {
             if (productionData == null) return true;
-            if (!IsPadPd(productionData)) return true;
-            if (!IsBioGenSupplied(productionData)) return true;
+            if (!IsPadPd(productionData))
+            {
+                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning("[TS] ×4 诊断: UpdateBatteryCharger 触发但 IsPadPd=false（attr 判定未命中）"); }
+                return true;
+            }
+            if (!IsBioGenSupplied(productionData))
+            {
+                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning("[TS] ×4 诊断: IsPadPd=true 但供电判定无生物能（联网列表/距离均未命中）"); }
+                return true;
+            }
             try
             {
                 productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat * 4f;
                 _boosted = true;
+                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogInfo("[TS] ×4 倍率生效: sufficient×4"); }
             }
             catch { }
         }

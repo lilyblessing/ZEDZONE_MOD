@@ -192,7 +192,7 @@ public class Plugin : BasePlugin
             // ═══ v0.9.2 P3：电池仓充电——时间增量源（TimeController.AddTime，PortableFridge 已验证模式）═══
             try
             {
-                var ta = AccessTools.Method(typeof(TimeController), "AddTime");
+                var ta = AccessTools.Method(typeof(TimeController), "AddTime", new Type[] { typeof(float) });
                 if (ta != null)
                 {
                     h.Patch(ta, postfix: new HarmonyMethod(typeof(BatteryChargeFix).GetMethod(
@@ -204,7 +204,7 @@ public class Plugin : BasePlugin
             catch (Exception eh) { Log.LogWarning($"[TS] TimeController.AddTime 挂钩异常: {eh.Message.Split('\n')[0]}"); }
             try // 睡觉=ChangeTimeTo 绝对跳变（不 hook 则睡觉不充电，PortableFridge 同款协同）
             {
-                var ct = AccessTools.Method(typeof(TimeController), "ChangeTimeTo");
+                var ct = AccessTools.Method(typeof(TimeController), "ChangeTimeTo", new Type[] { typeof(float) });
                 if (ct != null)
                 {
                     h.Patch(ct, postfix: new HarmonyMethod(typeof(BatteryChargeFix).GetMethod(

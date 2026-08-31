@@ -26,6 +26,7 @@ public static class BuildingPadFix
     private const int PadId = 900102;
     private static float _lastScan = -1f;
     private static int _fxBgId = -1;
+    private static readonly System.Collections.Generic.HashSet<long> _pinned = new(); // 层钉日志去重（写回重钉不再刷屏）
 
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流——实例级微秒开销）。</summary>
     public static void Tick()
@@ -51,7 +52,9 @@ public static class BuildingPadFix
                     if (sg.sortingLayerID != _fxBgId)
                     {
                         sg.sortingLayerID = _fxBgId;
-                        Plugin.L.LogInfo($"[TS] 建筑盘层钉 v2: SortingGroup→FX_BG（id={_fxBgId}）");
+                        long k = 0;
+                        try { k = (long)sg.Pointer; } catch { k = sg.GetHashCode(); }
+                        if (_pinned.Add(k)) Plugin.L.LogInfo($"[TS] 建筑盘层钉 v2: SortingGroup→FX_BG（id={_fxBgId}）");
                     }
                 }
                 catch (Exception e) { Plugin.L.LogWarning($"[TS] 建筑盘层钉异常: {e.Message.Split('\n')[0]}"); }

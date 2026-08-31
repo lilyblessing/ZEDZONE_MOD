@@ -25,20 +25,20 @@ public static class BatteryChargeFix
     private static float _pendingGameDays; // TimeController hook 累积的未结算游戏天
     private static float _lastAbsTime = float.NaN; // ChangeTimeTo 跟踪（睡觉=绝对跳变）
 
-    /// <summary>TimeController.AddTime postfix 入口：累计游戏天增量（1f = 1 游戏天）。</summary>
-    public static void OnGameTimeAdded(float days)
+    /// <summary>TimeController.AddTime postfix 入口：累计游戏天增量（1f = 1 游戏天）。__0 位置绑定（命名参数曾致 IL Compile Error）。</summary>
+    public static void OnGameTimeAdded(float __0)
     {
-        try { if (days > 0f) _pendingGameDays += days; } catch { }
+        try { if (__0 > 0f) _pendingGameDays += __0; } catch { }
     }
 
-    /// <summary>TimeController.ChangeTimeTo postfix 入口：睡觉等绝对跳变——差值入池（PortableFridge 同款协同）。</summary>
-    public static void OnGameTimeChangedTo(float absoluteDays)
+    /// <summary>TimeController.ChangeTimeTo postfix 入口：睡觉等绝对跳变——差值入池（PortableFridge 同款协同）。__0 位置绑定。</summary>
+    public static void OnGameTimeChangedTo(float __0)
     {
         try
         {
-            if (!float.IsNaN(_lastAbsTime) && absoluteDays > _lastAbsTime)
-                _pendingGameDays += absoluteDays - _lastAbsTime;
-            _lastAbsTime = absoluteDays;
+            if (!float.IsNaN(_lastAbsTime) && __0 > _lastAbsTime)
+                _pendingGameDays += __0 - _lastAbsTime;
+            _lastAbsTime = __0;
         }
         catch { }
     }
