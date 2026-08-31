@@ -801,6 +801,12 @@ internal static class RegistrarLogic
         Reflect.Set(attr, "id", def.Id);
         Reflect.Set(attr, "chineseName", def.NameZh);
         Reflect.Set(attr, "englishName", def.NameEn);
+        // v0.9.8：耗电标志显式化——电网重扫(ElectricPole.RefreshElectricConnection)遍历耗电器表时过滤
+        // attr.electricConsuming(0xA1)==0 跳过；克隆 Instantiate 理论已带模板值，此处双保险（充电台模板=消耗端必须 true）
+        if (def.Id == 900102)
+        {
+            try { Reflect.Set(attr, "electricConsuming", true); } catch (Exception ez) { Plugin.L.LogWarning($"[TS] electricConsuming 设置异常: {ez.Message.Split('\n')[0]}"); }
+        }
         // v0.5.7 试验：spriteName 保持模板原值（验证「spriteName→贴图」查找路径是否通行；图标=参照建筑图）
         if (!string.IsNullOrEmpty(def.DescZh)) Reflect.Set(attr, "chineseDescription", def.DescZh);
         Reflect.Set(attr, "unlockByDefault", true);

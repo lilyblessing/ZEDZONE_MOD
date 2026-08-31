@@ -112,6 +112,16 @@ public static class ChargerPadFix
                 int aid = GetClonedAttrId(g);
                 if (aid != 900101 && aid != 900102 && aid != 900103) continue;
                 found = true;
+                // v0.9.8：附 attr 耗电标志实证（重扫过滤依据）
+                try
+                {
+                    var to = FindTerrainObject(g.transform);
+                    object attr = null;
+                    try { if (to != null) attr = Reflect.Get(to, "attr"); } catch { }
+                    if (attr != null) sb += $" [id{aid}电耗={Reflect.Get(attr, "electricConsuming")}]";
+                    else sb += $" [id{aid}无attr]";
+                }
+                catch { }
                 object pd = null;
                 try { var tod = Reflect.Get(g, "objectData"); if (tod != null) pd = Reflect.Get(tod, "productionData"); } catch { }
                 if (pd == null) { sb += $" [{aid}:PD=null]"; continue; }
