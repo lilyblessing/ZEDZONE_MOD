@@ -230,6 +230,29 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] UpdateBatteryCharger 挂钩失败（方法未找到）");
             }
             catch (Exception ek) { Log.LogWarning($"[TS] UpdateBatteryCharger 挂钩异常: {ek.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.7：电网重扫轨迹探针（定位停机电线不重连）═══
+            try
+            {
+                var mkd = AccessTools.Method(typeof(ProductionManager), "MarkElectricGridDirty");
+                if (mkd != null)
+                {
+                    h.Patch(mkd, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                        nameof(ChargerPadFix.GridDirtyPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.MarkElectricGridDirty（电网脏标探针）");
+                }
+            }
+            catch (Exception em) { Log.LogWarning($"[TS] MarkElectricGridDirty 挂钩异常: {em.Message.Split('\n')[0]}"); }
+            try
+            {
+                var cgf = AccessTools.Method(typeof(ProductionManager), "ConsumeElectricGridDirtyFlag");
+                if (cgf != null)
+                {
+                    h.Patch(cgf, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                        nameof(ChargerPadFix.GridConsumePostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.ConsumeElectricGridDirtyFlag（电网重扫采样）");
+                }
+            }
+            catch (Exception en) { Log.LogWarning($"[TS] ConsumeElectricGridDirtyFlag 挂钩异常: {en.Message.Split('\n')[0]}"); }
             // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }

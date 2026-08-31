@@ -22,6 +22,8 @@ public static class ChargerPadFix
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
+    private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
+    private static float _lastGridLog;
 
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
     public static void Tick()
@@ -36,12 +38,110 @@ public static class ChargerPadFix
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
-                if (g == null || !IsChargerPad(g)) continue;
+                if (g == null) continue;
+                // v0.9.7：PD 六表防御扩展到全部克隆建筑（900101/102/103）——停机→电网重扫对任何克隆建筑建边都可能 Add null 表
+                int aid = GetClonedAttrId(g);
+                if (aid == 900101 || aid == 900102 || aid == 900103)
+                    EnsurePdTablesOnce(g);
+                if (aid != 900102) continue;
+                if (!IsChargerPad(g)) continue;
                 try { EnsureContainer(g); }
                 catch (Exception e) { Plugin.L.LogWarning($"[TS] 充电台盘初始化异常: {e.Message.Split('\n')[0]}"); }
             }
         }
         catch { }
+    }
+
+    private static void EnsurePdTablesOnce(TerrainObject_Production g)
+    {
+        object pd = null;
+        try
+        {
+            var tod = Reflect.Get(g, "objectData");
+            if (tod != null) pd = Reflect.Get(tod, "productionData");
+        }
+        catch { }
+        if (pd == null) return;
+        long k = 0;
+        try { k = (long)pd.GetHashCode(); } catch { k = pd.GetType().GetHashCode(); }
+        if (_pdFixed.Contains(k)) return;
+        EnsurePdTables(pd);
+        _pdFixed.Add(k);
+        if (_pdTablesFixed) Plugin.L.LogInfo($"[TS] PD 六表已重建（克隆建筑 {GetClonedAttrId(g)}）");
+    }
+
+    /// <summary>克隆建筑 attr id（900101/102/103 引用优先，含未知 id 兜底返回）。</summary>
+    private static int GetClonedAttrId(TerrainObject_Production g)
+    {
+        try
+        {
+            var to = FindTerrainObject(g.transform);
+            if (to == null) return -1;
+            object attr = null;
+            try { attr = Reflect.Get(to, "attr"); } catch { }
+            if (attr == null) return -1;
+            if (RegistrationStore.Attrs.TryGetValue(900101, out var a1) && ReferenceEquals(attr, a1)) return 900101;
+            if (RegistrationStore.Attrs.TryGetValue(900102, out var a2) && ReferenceEquals(attr, a2)) return 900102;
+            if (RegistrationStore.Attrs.TryGetValue(900103, out var a3) && ReferenceEquals(attr, a3)) return 900103;
+            return AttrId(attr);
+        }
+        catch { return -1; }
+    }
+
+    // ── v0.9.7 电网重扫轨迹探针（定位"停机→线断→不重连"）──
+
+    /// <summary>ProductionManager.MarkElectricGridDirty postfix：脏标（重扫排队）事件。</summary>
+    public static void GridDirtyPostfix()
+    {
+        LogThrottled("[TS] 电网脏标（重扫排队）");
+    }
+
+    /// <summary>ProductionManager.ConsumeElectricGridDirtyFlag postfix：重扫完成 → 采样三建筑 PD 连接表。</summary>
+    public static void GridConsumePostfix()
+    {
+        try
+        {
+            string sb = "[TS] 电网重扫完成，克隆建筑连接表:";
+            var list = TerrainObject_Production.ActiveObjects_Production;
+            if (list == null) return;
+            bool found = false;
+            for (int i = 0; i < list.Count; i++)
+            {
+                var g = list[i];
+                if (g == null) continue;
+                int aid = GetClonedAttrId(g);
+                if (aid != 900101 && aid != 900102 && aid != 900103) continue;
+                found = true;
+                object pd = null;
+                try { var tod = Reflect.Get(g, "objectData"); if (tod != null) pd = Reflect.Get(tod, "productionData"); } catch { }
+                if (pd == null) { sb += $" [{aid}:PD=null]"; continue; }
+                sb += $" [{aid}:" + CountOf(pd, "inputProductionObjectList") + "/" + CountOf(pd, "outputProductionObjectList") + "/"
+                    + CountOf(pd, "connectedProductionObjectList") + "/" + CountOf(pd, "inputProductionDataList") + "/"
+                    + CountOf(pd, "outputProductionDataList") + "/" + CountOf(pd, "connectedProductionDataList") + "]";
+            }
+            if (found) LogThrottled(sb);
+        }
+        catch { }
+    }
+
+    private static int CountOf(object pd, string field)
+    {
+        try
+        {
+            var v = Reflect.Get(pd, field);
+            if (v == null) return -1; // null 表（将 NRE！）
+            var p = v.GetType().GetProperty("Count");
+            if (p != null) return Convert.ToInt32(p.GetValue(v));
+            return -2;
+        }
+        catch { return -3; }
+    }
+
+    private static void LogThrottled(string msg)
+    {
+        if (Time.unscaledTime - _lastGridLog < 2f) return;
+        _lastGridLog = Time.unscaledTime;
+        Plugin.L.LogInfo(msg);
     }
 
     /// <summary>充电台克隆盘判定：组件类型含 BatteryCharger + attr.id == 900102。类型名不匹配时一次性诊断（排查 v0.9.4 初始化缺失）。</summary>
