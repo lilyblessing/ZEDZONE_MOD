@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.28")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.29")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -367,7 +367,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.28 P4 绑定重申/超距/冲突三态 + liftingTerrainObject + WithoutCheck 修复 + 死键清理");
+        Log.LogInfo("[TeleportStation] v0.9.29 候选全量扫描(控制台非Production)+死键全量+已有绑定冲突修复");
     }
 }
 

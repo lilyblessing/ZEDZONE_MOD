@@ -199,21 +199,8 @@ public static class TeleportBindingManager
                     _consoleToPad.Remove(boundCid);
                 }
             }
-            // 未绑定 pad：寻找最近未绑定控制台尝试绑定
-            var candidates = new List<TerrainObject>();
-            try
-            {
-                var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                var list = f?.GetValue(null) as System.Collections.Generic.List<object>;
-                if (list != null) foreach (var o in list) { var c = o as Component; if (c==null) continue; var t = FindTerrainObject(c.transform) as TerrainObject; if (t!=null && t.attr!=null && t.attr.id==ConsoleId) candidates.Add(t); }
-            }
-            catch { }
-            try
-            {
-                var list2 = TerrainObject_Production.ActiveObjects_Production;
-                if (list2 != null) for (int i=0;i<list2.Count;i++) { var g=list2[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==ConsoleId && !candidates.Contains(t)) candidates.Add(t); }
-            }
-            catch { }
+            // 未绑定 pad：寻找最近未绑定控制台尝试绑定（全量扫描，含非 Production 控制台）
+            var candidates = FindAllTerrainObjectsById(ConsoleId);
             TerrainObject nearestUnbound = null; float bestUnbound= float.MaxValue;
             bool hasBoundWithinRange = false;
             var pPos = pad.transform.position;
@@ -275,20 +262,7 @@ public static class TeleportBindingManager
             float bestUnboundD2 = float.MaxValue;
             long bestUnboundKey = 0;
             bool hasBoundWithinRange = false;
-            var candidates = new List<TerrainObject>();
-            try
-            {
-                var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                var list = f?.GetValue(null) as System.Collections.Generic.List<object>;
-                if (list != null) foreach (var o in list) { var c = o as Component; if (c==null) continue; var t = FindTerrainObject(c.transform) as TerrainObject; if (t!=null && t.attr!=null && t.attr.id==PadId) candidates.Add(t); }
-            }
-            catch { }
-            try
-            {
-                var list2 = TerrainObject_Production.ActiveObjects_Production;
-                if (list2 != null) for (int i=0;i<list2.Count;i++) { var g=list2[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==PadId && !candidates.Contains(t)) candidates.Add(t); }
-            }
-            catch { }
+            var candidates = FindAllTerrainObjectsById(PadId);
 
             foreach (var pad in candidates)
             {
@@ -486,9 +460,47 @@ public static class TeleportBindingManager
                     if (t != null && GetInstanceKey(t) == key) return t;
                 }
             }
+            // 兜底：全量扫描（含非 Production 的控制台）
+            try
+            {
+                var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
+                if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
+            } catch {}
         }
         catch { }
         return null;
+    }
+
+    private static List<TerrainObject> FindAllTerrainObjectsById(int attrId)
+    {
+        var result = new List<TerrainObject>();
+        var seen = new HashSet<long>();
+        try
+        {
+            // 1. _knownClones（含 H&D）
+            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var list = f?.GetValue(null) as System.Collections.Generic.List<object>;
+            if (list != null) foreach (var o in list) { var c = o as Component; if (c==null) continue; var t = FindTerrainObject(c.transform) as TerrainObject; if (t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
+        } catch {}
+        try
+        {
+            // 2. ActiveObjects_Production（消费端/充电台等）
+            var list2 = TerrainObject_Production.ActiveObjects_Production;
+            if (list2 != null) for (int i=0;i<list2.Count;i++) { var g=list2[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
+        } catch {}
+        try
+        {
+            // 3. 全量扫描（覆盖 900101 控制台等非 Production 类型）
+            var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
+            if (all != null) foreach (var t in all) if (t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); }
+        } catch {}
+        try
+        {
+            // 4. ActiveObjects_StirlingGenerator 也可能包含克隆
+            var list3 = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            if (list3 != null) for (int i=0;i<list3.Count;i++) { var g=list3[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
+        } catch {}
+        return result;
     }
 
     private static void SaveForInstance(TerrainObject console, TerrainObject pad)
@@ -560,17 +572,12 @@ public static class TeleportBindingManager
                 }
             }
             Plugin.L.LogInfo($"[TS][Bind] 载入 JSON {_consoleToPad.Count} 对");
-            // 死键清理：仅保留近期（本轮可寻回）的活体键，避免跨会话 ID 碰撞导致误判已有绑定
+            // 死键清理：仅保留当前场景活体（全量扫描，含非 Production 控制台）
             try
             {
                 var alive = new HashSet<long>();
-                try
-                {
-                    var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                    var lst = f?.GetValue(null) as System.Collections.Generic.List<object>;
-                    if (lst != null) foreach (var o in lst) { var c = o as Component; if (c==null) continue; var t = FindTerrainObject(c.transform) as TerrainObject; if (t!=null) alive.Add(GetInstanceKey(t)); }
-                } catch {}
-                try { var list = TerrainObject_Production.ActiveObjects_Production; if (list!=null) for(int i=0;i<list.Count;i++){ var g=list[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null) alive.Add(GetInstanceKey(t)); } } catch {}
+                foreach(var t in FindAllTerrainObjectsById(ConsoleId)) alive.Add(GetInstanceKey(t));
+                foreach(var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
                 if (alive.Count>0)
                 {
                     var dead = new List<long>();
@@ -588,8 +595,8 @@ public static class TeleportBindingManager
         try
         {
             var alive = new HashSet<long>();
-            try { var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static); var lst = f?.GetValue(null) as System.Collections.Generic.List<object>; if (lst != null) foreach (var o in lst) { var c=o as Component; if(c==null) continue; var t=FindTerrainObject(c.transform) as TerrainObject; if(t!=null) alive.Add(GetInstanceKey(t)); } } catch {}
-            try { var list=TerrainObject_Production.ActiveObjects_Production; if(list!=null) for(int i=0;i<list.Count;i++){ var g=list[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null) alive.Add(GetInstanceKey(t)); } } catch {}
+            foreach(var t in FindAllTerrainObjectsById(ConsoleId)) alive.Add(GetInstanceKey(t));
+            foreach(var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
             if(alive.Count==0) return;
             var dead=new List<long>();
             foreach(var kv in _consoleToPad) if(!alive.Contains(kv.Key) || !alive.Contains(kv.Value)) dead.Add(kv.Key);
@@ -683,6 +690,11 @@ public class TeleportBindingController : MonoBehaviour
                 }
             }
             catch { }
+            try
+            {
+                var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
+                if (all != null) foreach (var t in all) if (t!=null && t.attr!=null && t.attr.id==900101) { var d = t.transform.position - pos; float d2 = d.x*d.x+d.y*d.y; if (d2 < best) { best=d2; bestObj=t; } }
+            } catch {}
             return bestObj;
         }
         catch { return null; }
