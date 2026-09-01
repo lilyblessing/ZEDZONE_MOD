@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.38")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.39")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -375,7 +375,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.38 P5 修复 供电AND+直访objectData");
+        Log.LogInfo("[TeleportStation] v0.9.39 P5 修复 电池 SetProperty RemainingBattery 负值无效已正");
     }
 }
 

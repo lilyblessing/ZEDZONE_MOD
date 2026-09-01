@@ -196,21 +196,44 @@ public static class TeleportBatteryManager
 
     private static void SetCharge(object itemData, float newCharge)
     {
+        newCharge = Math.Max(0f, newCharge);
+        string newStr = newCharge.ToString("F2");
         try
         {
-            float cur = GetCharge(itemData);
-            float delta = newCharge - cur;
-            var m = typeof(ItemFeature_Battery).GetMethod("ChargeBattery", BindingFlags.Public | BindingFlags.Static);
+            // 原生正确路径：直接写 itemPropertyPairs["RemainingBattery"]，ChargeBattery 负值无效（if wh<=0 return 0）
+            var m = typeof(ItemData).GetMethod("SetProperty", new Type[]{ typeof(string), typeof(string) });
             if (m != null)
             {
-                m.Invoke(null, new object[]{ (ItemData)itemData, delta });
+                m.Invoke(itemData, new object[]{ "RemainingBattery", newStr });
+                return;
+            }
+        } catch {}
+        try
+        {
+            // 反射兜底：直接操纵 itemPropertyPairs
+            var list = Reflect.Get(itemData, "itemPropertyPairs") as System.Collections.Generic.List<KeyValueDataPair>;
+            if (list == null)
+            {
+                var ilist = Reflect.Get(itemData, "itemPropertyPairs") as Il2CppSystem.Collections.Generic.List<KeyValueDataPair>;
+                if (ilist != null)
+                {
+                    bool found=false;
+                    for(int i=0;i<ilist.Count;i++) if(ilist[i].key=="RemainingBattery"){ var kv=ilist[i]; kv.value=newStr; ilist[i]=kv; found=true; break; }
+                    if(!found) ilist.Add(new KeyValueDataPair{ key="RemainingBattery", value=newStr });
+                    return;
+                }
+            }
+            if (list != null)
+            {
+                bool found=false;
+                for(int i=0;i<list.Count;i++) if(list[i].key=="RemainingBattery"){ var kv=list[i]; kv.value=newStr; list[i]=kv; found=true; break; }
+                if(!found) list.Add(new KeyValueDataPair{ key="RemainingBattery", value=newStr });
                 return;
             }
         } catch {}
         try
         {
             if (Reflect.Get(itemData, "currentCharge")!=null) { Reflect.Set(itemData, "currentCharge", newCharge); return; }
-            if (Reflect.Get(itemData, "charge")!=null) { Reflect.Set(itemData, "charge", newCharge); return; }
         } catch {}
     }
 
