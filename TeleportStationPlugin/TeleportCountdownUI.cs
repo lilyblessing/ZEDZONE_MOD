@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using UnityEngine.UI;
+using Il2CppInterop.Runtime.Attributes;
 
 namespace TeleportStationPlugin;
 
@@ -159,6 +160,7 @@ public class TeleportCountdownUI : MonoBehaviour
     // ========== 对外 API：Show / Cancel / 脱离通知 ==========
 
     /// <summary>主入口：玩家/载具进入圆盘触发 5s 倒计时。</summary>
+    [HideFromIl2Cpp]
     public void ShowCountdown(Transform pad, Transform entrant, Action onComplete)
     {
         if (pad == null || entrant == null)
@@ -186,12 +188,14 @@ public class TeleportCountdownUI : MonoBehaviour
     }
 
     /// <summary>GameObject 重载（方便 TeleportPadTrigger 直接传 gameObject）。</summary>
+    [HideFromIl2Cpp]
     public void ShowCountdown(GameObject pad, GameObject entrant, Action onComplete)
     {
         ShowCountdown(pad != null ? pad.transform : null, entrant != null ? entrant.transform : null, onComplete);
     }
 
     /// <summary>TerrainObject 重载（圆盘为 TerrainObject 时，entrant 可为任意 Transform/GameObject）。</summary>
+    [HideFromIl2Cpp]
     public void ShowCountdown(Transform pad, GameObject entrant, Action onComplete)
     {
         ShowCountdown(pad, entrant != null ? entrant.transform : null, onComplete);

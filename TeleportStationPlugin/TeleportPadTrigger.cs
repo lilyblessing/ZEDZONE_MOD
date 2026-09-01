@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using HarmonyLib;
+using Il2CppInterop.Runtime.Attributes;
 
 namespace TeleportStationPlugin;
 
@@ -15,7 +16,7 @@ public class TeleportPadTrigger : MonoBehaviour
     private const float PadRadiusSqr = 5f * 5f;
     private float _nextScan = -1f;
     private TerrainObject _activePad = null;
-    private object _activeEntrant = null; // HumanCharacterController or BasicVehicle
+    private Component _activeEntrant = null; // HumanCharacterController or BasicVehicle
     private Transform _activeEntrantTr = null;
 
     private static TeleportPadTrigger _instance;
@@ -28,6 +29,11 @@ public class TeleportPadTrigger : MonoBehaviour
         return _instance;
     }
 
+    void Awake()
+    {
+        Plugin.L?.LogInfo("[TS][Teleport] PadTrigger Awake");
+    }
+
     void Update()
     {
         try
@@ -35,6 +41,12 @@ public class TeleportPadTrigger : MonoBehaviour
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
             _nextScan = now + 0.2f;
+            // 诊断：每 5s 打印一次扫描
+            if ((int)(now) % 5 == 0 && now - _nextScan < 0.3f)
+            {
+                var diagPads = FindAllPads();
+                Plugin.L?.LogInfo($"[TS][Teleport] 扫描 pads={diagPads.Count} player={(GetPlayer()!=null?"ok":"null")}");
+            }
 
             // 若倒计时进行中，跳过新触发，让 CountdownUI 处理脱离取消
             if (TeleportCountdownUI.Instance != null && TeleportCountdownUI.Instance.IsCounting) return;
@@ -48,7 +60,7 @@ public class TeleportPadTrigger : MonoBehaviour
             BasicVehicle vehicle = null;
             try { vehicle = Reflect.Get(player, "drivingVehicle") as BasicVehicle; } catch {}
             Transform entrantTr = playerTr;
-            object entrant = player;
+            Component entrant = player as Component;
             bool inVehicle = false;
             if (vehicle != null)
             {
@@ -95,7 +107,8 @@ public class TeleportPadTrigger : MonoBehaviour
         catch {}
     }
 
-    private void TryStartTeleport(TerrainObject pad, object entrant, Transform entrantTr, bool inVehicle)
+    [HideFromIl2Cpp]
+    private void TryStartTeleport(TerrainObject pad, Component entrantComp, Transform entrantTr, bool inVehicle)
     {
         try
         {
@@ -166,7 +179,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 bool ok = false;
                 try
                 {
-                    GameObject go = (entrant as Component)?.gameObject ?? entrantTr?.gameObject;
+                    GameObject go = entrantComp?.gameObject ?? entrantTr?.gameObject;
                     if (go != null) ok = TeleportExecutionManager.TryTeleport(go, targetPos);
                 } catch {}
                 Plugin.L?.LogInfo($"[TS][Teleport] 传送 {(ok?"成功":"失败")} entrant={(inVehicle?"vehicle":"player")} target={targetPos.x:F1},{targetPos.y:F1}");
