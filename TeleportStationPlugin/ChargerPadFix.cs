@@ -84,6 +84,7 @@ public static class ChargerPadFix
             try { ProbeOnce(); } catch { }
             try { EnsureGameDictionaries(); } catch { }
             try { EnsurePadSprites(); } catch { }
+            try { EnsureScales(); } catch { }
             try { EnsureConsumingFlag(); } catch { }
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
@@ -196,7 +197,7 @@ public static class ChargerPadFix
         catch { }
     }
 
-    // ── v0.9.21 R11-3 巡检改为 Cache 内存 Sprite 比对（实例 SR 与 SpriteInjector.Cache[id] 引用比对）──
+    // ── v0.9.24 Fix: 巡检回钉改用 BodyCache（ppu=worldH 正确），Icon 缓存 ppu100 会导致 3.13x2.24 缩小，禁用于实体 ──
     private static void EnsurePadSprites()
     {
         try
@@ -214,20 +215,85 @@ public static class ChargerPadFix
                 if (to == null || to.attr == null) continue;
                 int aid = to.attr.id;
                 if (aid != 900101 && aid != 900102 && aid != 900103) continue;
-                if (!SpriteInjector.Cache.TryGetValue(aid, out var cacheSp) || cacheSp == null) continue;
+                // 诊断：900102 每轮 dump 全部 SR 详情（定位绿叠加层，限 5s 一次，首实例）
+                if (aid == 900102 && i == 0)
+                {
+                    try
+                    {
+                        var allSrs = g.GetComponentsInChildren<SpriteRenderer>(true);
+                        var sb = new System.Text.StringBuilder($"[TS][PadSRDump] id={aid} go={to.name} n={allSrs.Length} t={now:F1}s | ");
+                        for (int di = 0; di < allSrs.Length && di < 10; di++)
+                        {
+                            var sr = allSrs[di];
+                            if (sr == null) continue;
+                            string sn = sr.name ?? "?";
+                            string spn = sr.sprite != null ? sr.sprite.name : "null";
+                            string col = $"{sr.color.r:F2},{sr.color.g:F2},{sr.color.b:F2},{sr.color.a:F2}";
+                            string mat = sr.sharedMaterial != null ? sr.sharedMaterial.name : (sr.material != null ? sr.material.name : "null");
+                            sb.Append($"[{di}:{sn} sp={spn} ppu={(sr.sprite!=null?sr.sprite.pixelsPerUnit:0):F1} col={col} mat={mat} en={sr.enabled} layer={sr.sortingLayerName}:{sr.sortingOrder} pos={sr.transform.localPosition.x:F2},{sr.transform.localPosition.y:F2}] ");
+                        }
+                        // 额外 dump TerrainObject 专用 SR 字段
+                        try
+                        {
+                            var sh = Reflect.Get(to, "shadowSR") as SpriteRenderer;
+                            var refl = Reflect.Get(to, "reflectedSpriteRenderer") as SpriteRenderer;
+                            var mcol = Reflect.Get(to, "m_collider");
+                            sb.Append($"| shadowSR={(sh!=null?sh.name+":"+(sh.sprite!=null?sh.sprite.name:"null"):"null")} refl={(refl!=null?refl.name+":"+(refl.sprite!=null?refl.sprite.name:"null"):"null")}");
+                        }
+                        catch { }
+                        Plugin.L.LogInfo(sb.ToString());
+                    }
+                    catch { }
+                }
+                // 优先 BodyCache（实体正确 ppu），回退 Cache（图标）仅防空
+                Sprite cacheSp = null;
+                bool hasBody = SpriteInjector.BodyCache.TryGetValue(aid, out cacheSp) && cacheSp != null;
+                if (!hasBody && (!SpriteInjector.Cache.TryGetValue(aid, out cacheSp) || cacheSp == null)) continue;
                 SpriteRenderer[] instSrs = null;
                 try { instSrs = g.GetComponentsInChildren<SpriteRenderer>(true); } catch { continue; }
                 if (instSrs == null || instSrs.Length == 0) continue;
                 int n = instSrs.Length;
                 bool changed = false;
+                // 900102 绿叠加层即时屏蔽（ChargingStateSprite 11 个，通电后绿覆盖，需禁用；历史存量每 5s 清一次）
+                if (aid == 900102)
+                {
+                    try
+                    {
+                        for (int kk = 0; kk < instSrs.Length; kk++)
+                        {
+                            var s2 = instSrs[kk];
+                            if (s2 == null) continue;
+                            string sn2 = s2.name ?? "";
+                            if (sn2.Contains("ChargingState") && s2.enabled)
+                            {
+                                s2.enabled = false;
+                                changed = true;
+                            }
+                        }
+                    }
+                    catch { }
+                }
                 int limit = n > 8 ? 8 : n;
                 for (int k = 0; k < limit; k++)
                 {
                     var sr = instSrs[k];
                     if (sr == null) continue;
-                    try { if (sr.sprite != null && !ReferenceEquals(sr.sprite, cacheSp)) { sr.sprite = cacheSp; changed = true; } } catch { }
+                    try
+                    {
+                        // 只有主 SR 需要 Body，非主保持禁用逻辑已在别处；此处仅当 sprite 与 Body 不一致且不是空时回钉
+                        if (sr.sprite != null && !ReferenceEquals(sr.sprite, cacheSp))
+                        {
+                            // 兼容：若当前已是 Body（name 含 _Body 且 ppu 与 Body 一致）则跳过，避免 icon↔body 乒乓
+                            bool curIsBody = sr.sprite.name != null && sr.sprite.name.EndsWith("_Body");
+                            bool cacheIsBody = cacheSp.name != null && cacheSp.name.EndsWith("_Body");
+                            if (curIsBody && cacheIsBody) { /* 都是 Body，引用不同但 ppu 一致则不强制 */ if (Math.Abs(sr.sprite.pixelsPerUnit - cacheSp.pixelsPerUnit) < 0.1f) continue; }
+                            if (curIsBody && !cacheIsBody) continue; // 当前已是 Body，缓存是 Icon 时绝不覆写（防缩小）
+                            sr.sprite = cacheSp; changed = true;
+                        }
+                    }
+                    catch { }
                 }
-                if (changed) Plugin.L.LogInfo($"[TS] 巡检贴图重钉: id={aid} srs={n}");
+                if (changed) Plugin.L.LogInfo($"[TS] 巡检贴图重钉: id={aid} srs={n} ppu={cacheSp.pixelsPerUnit:F1}");
             }
         }
         catch { }
@@ -1299,7 +1365,7 @@ public static class ChargerPadFix
         catch { return false; }
     }
 
-    /// <summary>供电含生物能（900103）：真实路由联网列表优先，兜底 20m 距离检测。</summary>
+    /// <summary>供电含生物能（900103）：真实路由联网列表优先，兜底 50m 距离检测。</summary>
     private static bool IsBioGenSupplied(ProductionData pd)
     {
         try
@@ -1336,7 +1402,7 @@ public static class ChargerPadFix
                 try { isBio = (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) || AttrId(attr) == BioGenId; } catch { }
                 if (!isBio) continue;
                 var dp = g.transform.position - pos;
-                if (dp.x * dp.x + dp.y * dp.y <= 20f * 20f) return true;
+                if (dp.x * dp.x + dp.y * dp.y <= 50f * 50f) return true;
             }
             return false;
         }
@@ -1387,8 +1453,94 @@ public static class ChargerPadFix
         try { if (d == null) return false; var m = d.GetType().GetMethod("ContainsKey"); if (m == null) return false; return (bool)m.Invoke(d, new object[] { id }); } catch { return false; }
     }
 
-    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); } catch { } }
-    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); } catch { } }
+    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); ScaleDiagLog(__result, "Build"); } catch { } }
+    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); ScaleDiagLog(__result, "Add"); } catch { } }
+
+    // ═══ v0.9.23 诊断：缩放追踪（不改值，只日志，定位几秒后缩小真凶）═══
+    public static void ScaleGuardPostfix(TerrainObject __instance) { try { ScaleDiagLog(__instance, "Init"); } catch { } }
+    private static int _diagCount = 0;
+    private static void ScaleDiagLog(TerrainObject t, string tag)
+    {
+        if (t == null) return;
+        try
+        {
+            var attr = t.attr;
+            if (attr == null) return;
+            int id = 0;
+            try
+            {
+                if (RegistrationStore.Attrs.TryGetValue(900101, out var a1) && ReferenceEquals(attr, a1)) id = 900101;
+                else if (RegistrationStore.Attrs.TryGetValue(900102, out var a2) && ReferenceEquals(attr, a2)) id = 900102;
+                else if (RegistrationStore.Attrs.TryGetValue(900103, out var a3) && ReferenceEquals(attr, a3)) id = 900103;
+                else { int r = attr.id; if (r == 900101 || r == 900102 || r == 900103) id = r; }
+            }
+            catch { }
+            if (id == 0) return;
+            if (_diagCount > 200) return; // 限流 200 条
+            _diagCount++;
+            var tr = t.transform;
+            Vector3 ls = tr != null ? tr.localScale : new Vector3(-1, -1, -1);
+            float sf = -1f; Vector3 lst = new Vector3(-1, -1, -1);
+            try { var o = Reflect.Get(t, "scalefloat"); if (o != null) sf = System.Convert.ToSingle(o); } catch { }
+            try { var o2 = Reflect.Get(t, "localScaleTemp"); if (o2 is Vector3 v) lst = v; } catch { }
+            string spInfo = "noSR";
+            try
+            {
+                var sr = t.GetComponentInChildren<SpriteRenderer>(true);
+                if (sr != null && sr.sprite != null) spInfo = $"{sr.sprite.name} {sr.sprite.rect.width}x{sr.sprite.rect.height} ppu={sr.sprite.pixelsPerUnit:F1} bounds={sr.bounds.size.x:F2}x{sr.bounds.size.y:F2}";
+                else if (sr != null) spInfo = "srNoSprite";
+            }
+            catch { }
+            Plugin.L.LogInfo($"[TS][ScaleDiag][{tag}#{_diagCount}] id={id} go={t.name} scale={ls.x:F3},{ls.y:F3},{ls.z:F3} sf={sf:F3} lst={lst.x:F3},{lst.y:F3},{lst.z:F3} sp={spInfo} t={UnityEngine.Time.unscaledTime:F1}s");
+        }
+        catch { }
+    }
+    private static float _lastScaleFix = -999f;
+    private static void EnsureScales()
+    {
+        try
+        {
+            float now = Time.unscaledTime;
+            if (now - _lastScaleFix < 1.0f) return; // 1s 诊断节流
+            _lastScaleFix = now;
+            // 诊断：每秒对 _knownClones + ActiveObjects 各扫一次，只日志不修复
+            try
+            {
+                for (int i = 0; i < _knownClones.Count; i++)
+                {
+                    var o = _knownClones[i] as Component;
+                    if (o == null) continue;
+                    var t = FindTerrainObject(o.transform) as TerrainObject;
+                    if (t == null) continue;
+                    var a = t.attr; if (a == null) continue;
+                    int aid = a.id; if (aid != 900101 && aid != 900102 && aid != 900103) continue;
+                    ScaleDiagLog(t, "TickKnown");
+                    if (_diagCount > 200) break;
+                }
+            }
+            catch { }
+            try
+            {
+                var list = TerrainObject_Production.ActiveObjects_Production;
+                if (list != null)
+                {
+                    int logged = 0;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        var g = list[i]; if (g == null) continue;
+                        var to = FindTerrainObject(g.transform) as TerrainObject;
+                        if (to == null) continue;
+                        var a = to.attr; if (a == null) continue;
+                        int aid = a.id; if (aid != 900101 && aid != 900102 && aid != 900103) continue;
+                        // 限每轮最多2条，避免刷屏
+                        if (logged < 2) { ScaleDiagLog(to, "TickActive"); logged++; }
+                    }
+                }
+            }
+            catch { }
+        }
+        catch { }
+    }
     private static void FixCloneSprites(TerrainObject t)
     {
         if (t == null) return;
@@ -1404,19 +1556,48 @@ public static class ChargerPadFix
         }
         catch { }
         if (id == 0) return;
-        if (!SpriteInjector.Cache.TryGetValue(id, out var cacheSp) || cacheSp == null) return;
+        // 优先 BodyCache（正确 ppu），回退 Icon Cache 仅防空
+        Sprite cacheSp = null;
+        bool hasBody = SpriteInjector.BodyCache.TryGetValue(id, out cacheSp) && cacheSp != null;
+        if (!hasBody && (!SpriteInjector.Cache.TryGetValue(id, out cacheSp) || cacheSp == null)) return;
         SpriteRenderer[] instSrs = null;
         try { instSrs = t.GetComponentsInChildren<SpriteRenderer>(true); } catch { return; }
         if (instSrs == null || instSrs.Length == 0) return;
         int n = instSrs.Length;
         bool changed = false;
+        // 900102 绿层即时屏蔽（存量/新建首次 Init 后也可能残留）
+        if (id == 900102)
+        {
+            try
+            {
+                for (int kk = 0; kk < instSrs.Length; kk++)
+                {
+                    var s2 = instSrs[kk];
+                    if (s2 == null) continue;
+                    string sn2 = s2.name ?? "";
+                    if (sn2.Contains("ChargingState") && s2.enabled) { s2.enabled = false; changed = true; }
+                }
+            }
+            catch { }
+        }
         int limit = n > 8 ? 8 : n;
         for (int i = 0; i < limit; i++)
         {
             var sr = instSrs[i];
             if (sr == null) continue;
-            try { if (sr.sprite != null && !ReferenceEquals(sr.sprite, cacheSp)) { sr.sprite = cacheSp; changed = true; } } catch { }
+            try
+            {
+                if (sr.sprite != null && !ReferenceEquals(sr.sprite, cacheSp))
+                {
+                    bool curIsBody = sr.sprite.name != null && sr.sprite.name.EndsWith("_Body");
+                    bool cacheIsBody = cacheSp.name != null && cacheSp.name.EndsWith("_Body");
+                    if (curIsBody && !cacheIsBody) continue; // 已是 Body 时不被 Icon 覆写
+                    if (curIsBody && cacheIsBody && Math.Abs(sr.sprite.pixelsPerUnit - cacheSp.pixelsPerUnit) < 0.1f) continue;
+                    sr.sprite = cacheSp; changed = true;
+                }
+            }
+            catch { }
         }
-        if (changed) Plugin.L.LogInfo($"[TS] 克隆贴图重钉: id={id} srs={n}");
+        if (changed) Plugin.L.LogInfo($"[TS] 克隆贴图重钉: id={id} srs={n} ppu={cacheSp.pixelsPerUnit:F1}");
     }
 }

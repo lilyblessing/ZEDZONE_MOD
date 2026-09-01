@@ -95,7 +95,7 @@ public static class BatteryChargeFix
     private static float Charge(TerrainObject_Production_StirlingGenerator g, float gameDays)
     {
         // v0.9.3：虚拟供电（范围检测）——盘不是游戏原生消费者，powerInputSufficientFloat 恒 0；
-        // 供电 = 20m 内运行中的发电机（900103 生物能 / 120 原版斯特林），源判×4
+        // 供电 = 50m 内运行中的发电机（900103 生物能 / 120 原版斯特林），源判×4
         float sufficient;
         float mult;
         if (!FindSupply(g, out sufficient, out mult)) return 0f;
@@ -130,7 +130,7 @@ public static class BatteryChargeFix
         return totalWh;
     }
 
-    /// <summary>虚拟供电检测（v0.9.3）：20m 内运行中的发电机 → (满足度1.0, 倍率)；生物能(900103)优先生效 ×4。
+    /// <summary>虚拟供电检测（v0.9.3）：50m 内运行中的发电机 → (满足度1.0, 倍率)；生物能(900103)优先生效 ×4。
     /// 替代原 powerInputSufficientFloat/connectedElectricGeneratorList（克隆盘非原生消费者，恒无电）。</summary>
     private static bool FindSupply(TerrainObject_Production_StirlingGenerator pad, out float sufficient, out float mult)
     {
@@ -149,7 +149,7 @@ public static class BatteryChargeFix
                 int id = GenId(g);
                 if (id != BioGenId && id != 120) continue; // 生物能 900103 / 原版斯特林 120
                 var dp = g.transform.position - padPos;
-                if (dp.x * dp.x + dp.y * dp.y > 20f * 20f) continue; // 虚拟电线距离 20m
+                if (dp.x * dp.x + dp.y * dp.y > 50f * 50f) continue; // 虚拟电线距离 50m
                 if (!IsRunning(g)) continue;
                 found = true;
                 if (id == BioGenId) mult = 4f; // 生物能 ×4（若有多个源取优）

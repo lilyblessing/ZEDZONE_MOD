@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.22")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.26")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -325,6 +325,18 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩失败（方法未找到）");
             }
             catch (Exception es) { Log.LogWarning($"[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩异常: {es.Message.Split('\n')[0]}"); }
+            // v0.9.23 Fix: 强制克隆缩放为1（根治虚影小+存量污染，Init 是唯一覆写点，postfix 最终写回 Vector3.one）
+            try
+            {
+                var init = AccessTools.Method(typeof(TerrainObject), "Init");
+                if (init != null)
+                {
+                    h.Patch(init, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.ScaleGuardPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TerrainObject.Init（缩放强制为1）");
+                }
+                else Log.LogWarning("[TS] TerrainObject.Init 挂钩失败（方法未找到）");
+            }
+            catch (Exception eInit) { Log.LogWarning($"[TS] TerrainObject.Init 挂钩异常: {eInit.Message.Split('\n')[0]}"); }
             // P1-B（2026-08-31）：PadLayerGuard 已移除——10.30-10.33 实锤 detour 层拦不住实例（游戏实例化时重建/重置层），
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
@@ -340,7 +352,7 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] P1 v0.9.4 圆盘克隆源切充电台126（消费端：真实电网路由+原生充电；×4 倍率 hook+层钉 Production 列表）");
+        Log.LogInfo("[TeleportStation] v0.9.26 距离 50m（20→50）+ 绿叠加层屏蔽 + BodyCache ppu");
     }
 }
 
@@ -473,6 +485,7 @@ public static class SourceInjector
 public class SpriteInjector
 {
     internal static readonly Dictionary<int, Sprite> Cache = new();
+    internal static readonly Dictionary<int, Sprite> BodyCache = new();
 
     /// <summary>注册时缓存贴图 Sprite（从 textures/ 目录加载）。</summary>
 
@@ -1036,11 +1049,28 @@ internal static class RegistrarLogic
             float ppu = tex.height / worldH;
             var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), ppu);
             sp.name = def.SpriteKey + "_Body";
+            // v0.9.24 Fix: Body 贴图单独缓存（ppu=worldH 正确），供 FixCloneSprites/EnsurePadSprites 巡检回钉（Icon 缓存 ppu100 勿用）
+            try { SpriteInjector.BodyCache[def.Id] = sp; } catch { }
             var clone = UnityEngine.Object.Instantiate(template);
             clone.name = "TS_" + def.SpriteKey;
             try { clone.hideFlags = HideFlags.HideAndDontSave; } catch { }
+            // v0.9.23 诊断：记录克隆 prefab 缩放（不强制，定位真凶）
+            try
+            {
+                var tr = clone.transform;
+                Plugin.L.LogInfo($"[TS][ScaleDiag][Clone] id={def.Id} prefab={clone.name} cloneScale={tr.localScale.x:F3},{tr.localScale.y:F3},{tr.localScale.z:F3} template={template.name} tplScale={template.transform.localScale.x:F3},{template.transform.localScale.y:F3},{template.transform.localScale.z:F3}");
+            }
+            catch { }
             bool mainDone = false;
             var srs = clone.GetComponentsInChildren<SpriteRenderer>(true);
+            // 诊断：记录克隆前全部 SR（定位绿叠加层归属）
+            try
+            {
+                var sb0 = new System.Text.StringBuilder($"[TS][CloneSR] {def.SpriteKey} n={srs.Length} | ");
+                for (int ci = 0; ci < srs.Length && ci < 12; ci++) { var sr = srs[ci]; if (sr==null) continue; sb0.Append($"[{ci}:{sr.name} sp={(sr.sprite!=null?sr.sprite.name:"null")} col={sr.color.r:F2},{sr.color.g:F2},{sr.color.b:F2} en={sr.enabled}] "); }
+                Plugin.L.LogInfo(sb0.ToString());
+            }
+            catch { }
             foreach (var sr in srs)
             {
                 if (sr == null) continue;
@@ -1051,9 +1081,17 @@ internal static class RegistrarLogic
                     mainDone = true;
                     continue;
                 }
-                if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire"))
-                    sr.enabled = false; // 零件贴图禁用（整机贴图已含细节）
+                if (sn.Contains("Cylinder") || sn.Contains("Parts") || sn.Contains("Fire") || sn.Contains("ChargingState"))
+                    sr.enabled = false; // 零件/充电指示禁用（整机贴图已含细节；充电台模板自带 11 个 ChargingStateSprite 通电后绿覆盖，需屏蔽）
             }
+            // 诊断：克隆后 SR 状态
+            try
+            {
+                var sb1 = new System.Text.StringBuilder($"[TS][CloneSRAfter] {def.SpriteKey} | ");
+                for (int ci = 0; ci < srs.Length && ci < 12; ci++) { var sr = srs[ci]; if (sr==null) continue; sb1.Append($"[{sr.name} sp={(sr.sprite!=null?sr.sprite.name:"null")} en={sr.enabled} col={sr.color.r:F2},{sr.color.g:F2},{sr.color.b:F2} mat={(sr.sharedMaterial!=null?sr.sharedMaterial.name:"null")}] "); }
+                Plugin.L.LogInfo(sb1.ToString());
+            }
+            catch { }
             // v0.6.38 圆盘特殊化：无碰撞（禁全部 Collider2D）+ 排序层覆盖（FX_BG：地板之上、玩家/车辆之下）
             if (def.NoCollision)
             {
