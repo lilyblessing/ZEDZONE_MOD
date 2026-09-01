@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEngine;
 using HarmonyLib;
 using ZedZoneShared;
@@ -175,21 +176,20 @@ public static class TeleportBatteryManager
 
     private static float GetCharge(object itemData)
     {
-        // ItemFeature_Battery 的 charge 字段可能在 itemData 或其 feature
         try
         {
-            var v = Reflect.Get(itemData, "currentCharge") ?? Reflect.Get(itemData, "charge") ?? Reflect.Get(itemData, "batteryCharge") ?? Reflect.Get(itemData, "energy");
-            if (v!=null) return Convert.ToSingle(v);
-            // 尝试从 feature
-            var feat = GetBatteryFeature(itemData);
-            if (feat!=null)
+            // 原生 API：ItemFeature_Battery.GetBatteryRemainingPower
+            var m = typeof(ItemFeature_Battery).GetMethod("GetBatteryRemainingPower", BindingFlags.Public | BindingFlags.Static);
+            if (m != null)
             {
-                var c2 = Reflect.Get(feat, "currentCharge") ?? Reflect.Get(feat, "charge") ?? Reflect.Get(feat, "batteryCharge");
-                if (c2!=null) return Convert.ToSingle(c2);
+                var v = m.Invoke(null, new object[]{ (ItemData)itemData });
+                if (v != null) return Convert.ToSingle(v);
             }
-            // 回退：durability 视效
-            var d = Reflect.Get(itemData, "durability") ?? Reflect.Get(itemData, "currentDurability");
-            if (d!=null) return Convert.ToSingle(d) * SingleCapacity; // 粗略
+        } catch {}
+        try
+        {
+            var v = Reflect.Get(itemData, "currentCharge") ?? Reflect.Get(itemData, "charge") ?? Reflect.Get(itemData, "batteryCharge");
+            if (v!=null) return Convert.ToSingle(v);
         } catch {}
         return 0f;
     }
@@ -198,17 +198,19 @@ public static class TeleportBatteryManager
     {
         try
         {
+            float cur = GetCharge(itemData);
+            float delta = newCharge - cur;
+            var m = typeof(ItemFeature_Battery).GetMethod("ChargeBattery", BindingFlags.Public | BindingFlags.Static);
+            if (m != null)
+            {
+                m.Invoke(null, new object[]{ (ItemData)itemData, delta });
+                return;
+            }
+        } catch {}
+        try
+        {
             if (Reflect.Get(itemData, "currentCharge")!=null) { Reflect.Set(itemData, "currentCharge", newCharge); return; }
             if (Reflect.Get(itemData, "charge")!=null) { Reflect.Set(itemData, "charge", newCharge); return; }
-            if (Reflect.Get(itemData, "batteryCharge")!=null) { Reflect.Set(itemData, "batteryCharge", newCharge); return; }
-            var feat = GetBatteryFeature(itemData);
-            if (feat!=null)
-            {
-                if (Reflect.Get(feat, "currentCharge")!=null) { Reflect.Set(feat, "currentCharge", newCharge); return; }
-                if (Reflect.Get(feat, "charge")!=null) { Reflect.Set(feat, "charge", newCharge); return; }
-            }
-            // 回退 durability
-            if (Reflect.Get(itemData, "durability")!=null) Reflect.Set(itemData, "durability", newCharge / SingleCapacity);
         } catch {}
     }
 

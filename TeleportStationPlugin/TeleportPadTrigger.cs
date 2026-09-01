@@ -140,7 +140,7 @@ public class TeleportPadTrigger : MonoBehaviour
                     if (list != null && list.Count > 0) powered = true;
                 } catch {}
             }
-            else powered = true;
+            else powered = false;
             if (!powered)
             {
                 ShowBubble("未供电");
