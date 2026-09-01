@@ -8,10 +8,10 @@ using HarmonyLib;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// P4 绑定管理：控制台 900101 ↔ 圆盘 900102 自动就近绑定（50m），激活判定（已绑定+通电），超距提示，存档持久化。
+/// P4 绑定管理：控制台 900101 ↔ 圆盘 900102 自动就近绑定（20m），激活判定（已绑定+通电），超距提示，存档持久化。
 /// 内存表：Dict<long, long> consolePtr -> padPtr（以 TerrainObject 实例的 GetInstanceID / Pointer 为键，H&D 下 OnEnable 注册表互补）。
 /// 持久化：优先 TerrainObjectData.SetProperty(int,string)，失败回退独立 JSON（BepInEx/config/TeleportBinding.json）。
-/// 语义（v0.9.28 修正）：
+/// 语义（v0.9.29 候选全量 + v0.9.30 20m 回退）：
 ///   已有绑定 = 想要配对的对方设备已被别的设备占用，本次配对失败；
 ///   已绑对反复放置：距离内→绑定成功（重申），超距→超过距离；不再一律已有绑定。
 /// </summary>
@@ -19,8 +19,8 @@ public static class TeleportBindingManager
 {
     private const int ConsoleId = 900101;
     private const int PadId = 900102;
-    private const float BindRange = 50f;
-    private const float BindRangeSqr = 50f * 50f;
+    private const float BindRange = 20f;
+    private const float BindRangeSqr = 20f * 20f;
     private static readonly Dictionary<long, long> _consoleToPad = new(); // console instanceId -> pad instanceId
     private static readonly Dictionary<long, long> _padToConsole = new(); // pad -> console
     private static readonly Dictionary<long, int> _instanceIdToObjId = new(); // instanceId -> attr id (for debug)
