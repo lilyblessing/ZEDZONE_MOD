@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.34")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.35")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -355,13 +355,13 @@ public class Plugin : BasePlugin
         AddComponent<TeleportBindingController>(); // P4：控制台↔圆盘 20m 自动就近绑定（放置触发 + E/H 兜底）
         try { TeleportBindingManager.Load(); } catch { }
         // P5
-        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportPadTrigger>(); } catch {}
-        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportCountdownUI>(); } catch {}
-        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportAnchorTicker>(); } catch {}
-        try { AddComponent<TeleportPadTrigger>(); } catch {}
-        try { AddComponent<TeleportCountdownUI>(); } catch {}
-        try { AddComponent<TeleportAnchorTicker>(); } catch {}
-        try { TeleportExecutionManager.EnsurePatches(); } catch {}
+        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportPadTrigger>(); Plugin.L.LogInfo("[TS] RegisterType TeleportPadTrigger OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportPadTrigger 失败: {e.Message}"); }
+        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportCountdownUI>(); Plugin.L.LogInfo("[TS] RegisterType TeleportCountdownUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportCountdownUI 失败: {e.Message}"); }
+        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportAnchorTicker>(); Plugin.L.LogInfo("[TS] RegisterType TeleportAnchorTicker OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportAnchorTicker 失败: {e.Message}"); }
+        try { AddComponent<TeleportPadTrigger>(); Plugin.L.LogInfo("[TS] AddComponent TeleportPadTrigger OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportPadTrigger 失败: {e.GetType().Name} {e.Message}"); }
+        try { AddComponent<TeleportCountdownUI>(); Plugin.L.LogInfo("[TS] AddComponent TeleportCountdownUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportCountdownUI 失败: {e.GetType().Name} {e.Message}"); }
+        try { AddComponent<TeleportAnchorTicker>(); Plugin.L.LogInfo("[TS] AddComponent TeleportAnchorTicker OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportAnchorTicker 失败: {e.GetType().Name} {e.Message}"); }
+        try { TeleportExecutionManager.EnsurePatches(); Plugin.L.LogInfo("[TS] EnsurePatches P5 OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] EnsurePatches 失败: {e.Message}"); }
         // P4 搬运放下主钩（探针实证：Build/Add 仅建/读档，搬运为已有实例位移 → HumanCharacterController.OnPlaceTerrainObject @0x18048A6F0 非虚 + TerrainObject.PlaceTerrainObject @0x18095A430 Slot27 双保险）
         try
         {
@@ -375,7 +375,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.34 P5 诊断 HideFromIl2Cpp+ClassInjector+扫描日志");
+        Log.LogInfo("[TeleportStation] v0.9.35 P5 修复 GetPlayer=playerCharacter 直访 + 注册可观测");
     }
 }
 

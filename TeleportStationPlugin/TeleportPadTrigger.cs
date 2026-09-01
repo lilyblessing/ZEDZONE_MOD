@@ -283,13 +283,16 @@ public class TeleportPadTrigger : MonoBehaviour
             var gc = GameController.instance;
             if (gc!=null)
             {
-                var p = Reflect.Get(gc, "player") as Component;
-                if (p!=null) return p;
-                var pl = Reflect.Get(gc, "localPlayer") as Component;
-                if (pl!=null) return pl;
+                // dump.cs:33935 public HumanCharacterController playerCharacter; // 0x298 唯一玩家字段（直访，零反射）
+                var pc = gc.playerCharacter;
+                if (pc != null) return pc;
             }
+        } catch (Exception e) { Plugin.L?.LogWarning($"[TS][Teleport] GetPlayer 直访异常: {e.Message}"); }
+        // 兜底：FindWithTag 仅作最后尝试（ZED ZONE 实际无 Player tag，探针从未使用）
+        try
+        {
             var go = GameObject.FindWithTag("Player");
-            if (go!=null) return go.GetComponent<Component>();
+            if (go!=null) return go.GetComponent<HumanCharacterController>() ?? (object)go.GetComponent<Component>();
         } catch {}
         return null;
     }
