@@ -130,21 +130,21 @@ public class TeleportPadTrigger : MonoBehaviour
             // 通电判定：复用 TeleportBindingManager.IsActive 的通电部分
             var pd = GetProductionData(pad);
             bool powered = false;
-            float diagSufficient = -1f; int diagListCount = -1;
-            if (pd != null)
+            float diagSufficient = -1f; int diagListCount = -1; bool diagConsuming = false;
+            if (pd != null && pad.attr != null)
             {
                 try
                 {
+                    diagConsuming = pad.attr.electricConsuming;
                     var sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat"));
                     diagSufficient = sufficient;
-                    if (sufficient > 0.01f) powered = true;
                     var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
                     diagListCount = list != null ? list.Count : -1;
-                    if (list != null && list.Count > 0) powered = true;
+                    powered = diagConsuming && sufficient > 0.01f && list != null && list.Count > 0;
                 } catch (Exception ex) { Plugin.L?.LogWarning($"[TS][Teleport] 通电判定异常: {ex.Message}"); }
             }
             else { diagSufficient = -999; diagListCount = -999; }
-            Plugin.L?.LogInfo($"[TS][Teleport] 通电判定 pad={pad.name} sufficient={diagSufficient:F2} list={diagListCount} powered={powered}");
+            Plugin.L?.LogInfo($"[TS][Teleport] 通电判定 pad={pad.name} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered}");
             if (!powered)
             {
                 ShowBubble("未供电");
@@ -268,13 +268,16 @@ public class TeleportPadTrigger : MonoBehaviour
     {
         try
         {
-            var prod = FindProduction(pad);
-            if (prod==null) return null;
-            var od = Reflect.Get(prod, "objectData");
-            if (od==null) od = Reflect.Get(pad, "objectData");
-            if (od==null) return null;
-            return Reflect.Get(od, "productionData");
-        } catch { return null; }
+            // 直访 pad.objectData.productionData（dump 0xA8 → TerrainObjectData.productionData），编译期直访可靠
+            var od = pad.objectData;
+            if (od != null && od.productionData != null) return od.productionData;
+        } catch {}
+        try
+        {
+            var od2 = Reflect.Get(pad, "objectData");
+            if (od2 != null) return Reflect.Get(od2, "productionData");
+        } catch {}
+        return null;
     }
 
     private static Component FindProduction(TerrainObject pad)
