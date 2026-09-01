@@ -11,8 +11,8 @@ namespace TeleportStationPlugin;
 /// </summary>
 public class TeleportPadTrigger : MonoBehaviour
 {
-    private const float PadRadius = 4.9f;
-    private const float PadRadiusSqr = 4.9f * 4.9f;
+    private const float PadRadius = 5f;
+    private const float PadRadiusSqr = 5f * 5f;
     private float _nextScan = -1f;
     private TerrainObject _activePad = null;
     private object _activeEntrant = null; // HumanCharacterController or BasicVehicle
@@ -261,17 +261,7 @@ public class TeleportPadTrigger : MonoBehaviour
         return null;
     }
 
-    private static InventoryData GetBatteryInventory(TerrainObject pad)
-    {
-        try
-        {
-            var pd = GetProductionData(pad);
-            if (pd==null) return null;
-            var inv = Reflect.Get(pd, "inventoryData1") as InventoryData;
-            if (inv==null) inv = Reflect.Get(pd, "inventoryData") as InventoryData;
-            return inv;
-        } catch { return null; }
-    }
+    private static InventoryData GetBatteryInventory(TerrainObject pad) => TeleportBatteryManager.GetBatteryInventory(pad);
 
     private static object GetPlayer()
     {

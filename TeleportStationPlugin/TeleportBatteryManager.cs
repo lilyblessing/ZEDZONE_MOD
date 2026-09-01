@@ -40,6 +40,8 @@ public static class TeleportBatteryManager
             // 按电量降序，优先扣满电的
             list.Sort((a,b) => GetCharge(b).CompareTo(GetCharge(a)));
             float need = amount;
+            var snapshot = new System.Collections.Generic.Dictionary<object,float>();
+            foreach (var it in list) snapshot[it] = GetCharge(it);
             foreach (var item in list)
             {
                 if (need <= 0.001f) break;
@@ -50,7 +52,14 @@ public static class TeleportBatteryManager
                 need -= take;
                 Plugin.L?.LogInfo($"[TS][Battery] 扣减 id={GetItemId(item)} {charge:F0}->{charge-take:F0} 余需 {need:F0}");
             }
-            return need <= 0.001f;
+            if (need > 0.001f)
+            {
+                // 回滚
+                foreach (var kv in snapshot) SetCharge(kv.Key, kv.Value);
+                Plugin.L?.LogWarning($"[TS][Battery] 扣减失败回滚 需 {amount:F0} 余 {need:F0}");
+                return false;
+            }
+            return true;
         }
         catch (Exception e) { Plugin.L?.LogWarning($"[TS][Battery] 扣减异常: {e.Message}"); return false; }
     }
@@ -64,7 +73,7 @@ public static class TeleportBatteryManager
         return sum;
     }
 
-    private static InventoryData GetBatteryInventory(TerrainObject pad)
+    public static InventoryData GetBatteryInventory(TerrainObject pad)
     {
         try
         {
