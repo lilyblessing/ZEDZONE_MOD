@@ -130,17 +130,21 @@ public class TeleportPadTrigger : MonoBehaviour
             // 通电判定：复用 TeleportBindingManager.IsActive 的通电部分
             var pd = GetProductionData(pad);
             bool powered = false;
+            float diagSufficient = -1f; int diagListCount = -1;
             if (pd != null)
             {
                 try
                 {
                     var sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat"));
+                    diagSufficient = sufficient;
                     if (sufficient > 0.01f) powered = true;
                     var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
+                    diagListCount = list != null ? list.Count : -1;
                     if (list != null && list.Count > 0) powered = true;
-                } catch {}
+                } catch (Exception ex) { Plugin.L?.LogWarning($"[TS][Teleport] 通电判定异常: {ex.Message}"); }
             }
-            else powered = false;
+            else { diagSufficient = -999; diagListCount = -999; }
+            Plugin.L?.LogInfo($"[TS][Teleport] 通电判定 pad={pad.name} sufficient={diagSufficient:F2} list={diagListCount} powered={powered}");
             if (!powered)
             {
                 ShowBubble("未供电");
@@ -157,8 +161,11 @@ public class TeleportPadTrigger : MonoBehaviour
             // 通过 → 启动 5s 倒计时
             var ui = TeleportCountdownUI.EnsureExists();
             // 确保 entrant Transform 正确（载具时用 vehicle 根）
+            var sumBefore = TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad));
+            Plugin.L?.LogInfo($"[TS][Teleport] 倒计时开始 pad={pad.name} sumBefore={sumBefore:F0} entrant={(inVehicle?"vehicle":"player")}");
             ui.ShowCountdown(pad.transform, entrantTr, () =>
             {
+                Plugin.L?.LogInfo($"[TS][Teleport] 倒计时完成回调 pad={pad.name} sumBefore2={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
                 // 倒计时完成回调：先扣电再传送
                 if (!TeleportBatteryManager.HasEnoughCharge(pad))
                 {
@@ -168,8 +175,10 @@ public class TeleportPadTrigger : MonoBehaviour
                 if (!TeleportBatteryManager.ConsumeCharge(pad, 10000f))
                 {
                     ShowBubble("电量不足");
+                    Plugin.L?.LogInfo($"[TS][Teleport] 扣电失败 pad={pad.name} sumAfter={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
                     return;
                 }
+                Plugin.L?.LogInfo($"[TS][Teleport] 扣电成功 pad={pad.name} sumAfter={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
                 // 执行传送至对方圆盘
                 var targetPad = FindTargetPad(pad);
                 Vector3 targetPos = targetPad != null ? targetPad.transform.position : pad.transform.position + new Vector3(10,0,0);
