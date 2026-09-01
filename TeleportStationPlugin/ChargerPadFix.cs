@@ -19,6 +19,7 @@ public static class ChargerPadFix
 {
     private const int PadId = 900102;
     private const int BioGenId = 900103;
+    private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
@@ -215,8 +216,8 @@ public static class ChargerPadFix
                 if (to == null || to.attr == null) continue;
                 int aid = to.attr.id;
                 if (aid != 900101 && aid != 900102 && aid != 900103) continue;
-                // 诊断：900102 每轮 dump 全部 SR 详情（定位绿叠加层，限 5s 一次，首实例）
-                if (aid == 900102 && i == 0)
+                // 诊断：900102 每轮 dump 全部 SR 详情（已关闭，EnableDiag=false 时不刷屏）
+                if (EnableDiag && aid == 900102 && i == 0)
                 {
                     try
                     {
@@ -232,12 +233,10 @@ public static class ChargerPadFix
                             string mat = sr.sharedMaterial != null ? sr.sharedMaterial.name : (sr.material != null ? sr.material.name : "null");
                             sb.Append($"[{di}:{sn} sp={spn} ppu={(sr.sprite!=null?sr.sprite.pixelsPerUnit:0):F1} col={col} mat={mat} en={sr.enabled} layer={sr.sortingLayerName}:{sr.sortingOrder} pos={sr.transform.localPosition.x:F2},{sr.transform.localPosition.y:F2}] ");
                         }
-                        // 额外 dump TerrainObject 专用 SR 字段
                         try
                         {
                             var sh = Reflect.Get(to, "shadowSR") as SpriteRenderer;
                             var refl = Reflect.Get(to, "reflectedSpriteRenderer") as SpriteRenderer;
-                            var mcol = Reflect.Get(to, "m_collider");
                             sb.Append($"| shadowSR={(sh!=null?sh.name+":"+(sh.sprite!=null?sh.sprite.name:"null"):"null")} refl={(refl!=null?refl.name+":"+(refl.sprite!=null?refl.sprite.name:"null"):"null")}");
                         }
                         catch { }
@@ -738,6 +737,7 @@ public static class ChargerPadFix
                 }
                 catch { }
             }
+            if (!EnableDiag) return;
             // v0.9.9 对照实验：采样全部 Production 实例（含原版充电台/冰箱/杆子），对比克隆建筑 vs 原版的连接表
             string sb = "[TS] 电网重扫完成，全实例连接表:";
             var list = TerrainObject_Production.ActiveObjects_Production;
@@ -1078,6 +1078,7 @@ public static class ChargerPadFix
     // ── v0.9.11 延迟重试探针：Stirling 表归属 + Prefab 查询链（延迟重试，只读，中文前缀）──
     private static void ProbeOnce()
     {
+        if (!EnableDiag) return;
         try
         {
             if (Time.unscaledTime < 3f) return;
@@ -1453,14 +1454,15 @@ public static class ChargerPadFix
         try { if (d == null) return false; var m = d.GetType().GetMethod("ContainsKey"); if (m == null) return false; return (bool)m.Invoke(d, new object[] { id }); } catch { return false; }
     }
 
-    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); ScaleDiagLog(__result, "Build"); } catch { } }
-    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); ScaleDiagLog(__result, "Add"); } catch { } }
+    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); if (EnableDiag) ScaleDiagLog(__result, "Build"); TeleportBindingManager.OnPlaced(__result); } catch { } }
+    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
 
     // ═══ v0.9.23 诊断：缩放追踪（不改值，只日志，定位几秒后缩小真凶）═══
-    public static void ScaleGuardPostfix(TerrainObject __instance) { try { ScaleDiagLog(__instance, "Init"); } catch { } }
+    public static void ScaleGuardPostfix(TerrainObject __instance) { try { if (EnableDiag) ScaleDiagLog(__instance, "Init"); TeleportBindingManager.OnPlaced(__instance); } catch { } }
     private static int _diagCount = 0;
     private static void ScaleDiagLog(TerrainObject t, string tag)
     {
+        if (!EnableDiag) return;
         if (t == null) return;
         try
         {

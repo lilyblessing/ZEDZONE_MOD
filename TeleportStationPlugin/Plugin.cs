@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.26")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.28")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -352,7 +352,22 @@ public class Plugin : BasePlugin
 
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
-        Log.LogInfo("[TeleportStation] v0.9.26 距离 50m（20→50）+ 绿叠加层屏蔽 + BodyCache ppu");
+        AddComponent<TeleportBindingController>(); // P4：控制台↔圆盘 50m 自动就近绑定（放置触发 + E/H 兜底）
+        try { TeleportBindingManager.Load(); } catch { }
+        // P4 搬运放下主钩（探针实证：Build/Add 仅建/读档，搬运为已有实例位移 → HumanCharacterController.OnPlaceTerrainObject @0x18048A6F0 非虚 + TerrainObject.PlaceTerrainObject @0x18095A430 Slot27 双保险）
+        try
+        {
+            var h2 = new Harmony("com.zedzone.teleportstation.p4");
+            var onPlace = AccessTools.Method(AccessTools.TypeByName("HumanCharacterController"), "OnPlaceTerrainObject");
+            if (onPlace != null) h2.Patch(onPlace, postfix: new HarmonyMethod(typeof(TeleportBindingManager).GetMethod(nameof(TeleportBindingManager.OnPlaceLifted), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
+            var place = AccessTools.Method(typeof(TerrainObject), "PlaceTerrainObject");
+            if (place != null) h2.Patch(place, postfix: new HarmonyMethod(typeof(TeleportBindingManager).GetMethod(nameof(TeleportBindingManager.OnPlacedNoParam), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
+            var placeNoCheck = AccessTools.Method(typeof(TerrainObject), "PlaceTerrainObjectWithoutCheck");
+            if (placeNoCheck != null) h2.Patch(placeNoCheck, postfix: new HarmonyMethod(typeof(TeleportBindingManager).GetMethod(nameof(TeleportBindingManager.OnPlacedNoParam), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
+            Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
+        }
+        catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
+        Log.LogInfo("[TeleportStation] v0.9.28 P4 绑定重申/超距/冲突三态 + liftingTerrainObject + WithoutCheck 修复 + 死键清理");
     }
 }
 
