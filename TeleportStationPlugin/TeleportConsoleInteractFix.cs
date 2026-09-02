@@ -89,7 +89,9 @@ public static class TeleportConsoleInteractFix
             try
             {
                 Type closure = null;
-                try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
+                try { closure = typeof(TerrainObject_Furniture_Commu).GetNestedType("<>c", BindingFlags.NonPublic); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] GetNestedType <>c fail {ex.Message.Split('\n')[0]}"); }
+                if (closure == null) try { closure = AccessTools.Inner(typeof(TerrainObject_Furniture_Commu), "<>c"); } catch {}
+                if (closure == null) try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
                 if (closure == null) try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
                 if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
                 if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
@@ -797,16 +799,8 @@ public static class TeleportConsoleInteractFix
                 }
             }
         } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate Il2Cpp fail {ex2.Message.Split('\n')[0]}"); }
-        try
-        {
-            try { RuntimeHelpers.PrepareMethod(mi.MethodHandle); } catch {}
-            var ptr = mi.MethodHandle.GetFunctionPointer();
-            if (ptr != IntPtr.Zero)
-            {
-                var del = Activator.CreateInstance(delType, new object[]{ null, ptr });
-                if (del != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate via Activator IntPtr success delType={delType.FullName} ptr=0x{ptr.ToInt64():X}"); return del; }
-            }
-        } catch (Exception ex3) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate Activator fail {ex3.Message.Split('\n')[0]}"); }
+        // P6.11 hotfix 0.9.55: Activator IntPtr path disabled — creates faulting delegate causing crash on Invoke (0x7FFBEE...), keep null and rely on <>c prefix
+        Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate disabled Activator path delType={delType.FullName} -> null (use <>c prefix)");
         return null;
     }
 
