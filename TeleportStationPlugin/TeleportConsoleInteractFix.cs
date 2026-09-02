@@ -285,7 +285,7 @@ public static class TeleportConsoleInteractFix
                             }
                         } catch {}
                         if (needFullRebuild) {
-                            // 0.9.52 preserve Q + avoid NRE: hijack existing F entry in-place (keep its transform/range etc.)
+                            // 0.9.53 fieldType delegate fix + preserve Q: hijack F in-place via fieldType
                             object targetF = null; int targetIdx = -1;
                             for (int k=0;k<dc;k++) {
                                 object cand=null; try { if (gItem!=null) cand=gItem.Invoke(dataList,new object[]{k}); } catch { continue; }
@@ -306,14 +306,21 @@ public static class TeleportConsoleInteractFix
                                 Plugin.L.LogInfo($"[TS][Fix] hijack F idx={targetIdx} dc={dc} orig='{s0 ?? "null"}' -> 打开传送控制台 (Q preserved)");
                                 try { Reflect.Set(targetF,"interactStr","打开传送控制台"); } catch { try { targetF.GetType().GetField("interactStr")?.SetValue(targetF,"打开传送控制台"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] set interactStr fail {ex.Message.Split('\n')[0]}"); } }
                                 try {
-                                    if (_interactDelegateType != null) {
-                                        var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                        if (m2 != null) {
-                                            var del = Delegate.CreateDelegate(_interactDelegateType, m2);
-                                            try { Reflect.Set(targetF, "interactAction", del); } catch { try { targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(targetF, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
-                                            Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved");
-                                        }
-                                    } else Plugin.L.LogWarning("[TS][Fix] _interactDelegateType null cannot hijack");
+                                    var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                    if (m2 != null) {
+                                        Type delType = null;
+                                        try { var f = targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (f!=null) delType = f.FieldType; } catch {}
+                                        if (delType == null) delType = _interactDelegateType;
+                                        if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
+                                        if (delType != null) {
+                                            object del = null;
+                                            try { del = Delegate.CreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] CreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch (Exception ex1) { Plugin.L.LogWarning($"[TS][Fix] fallback CreateDelegate fail {ex1.Message.Split('\n')[0]}"); } }
+                                            if (del != null) {
+                                                try { Reflect.Set(targetF, "interactAction", del); } catch { try { targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(targetF, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
+                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved delType={delType.FullName}");
+                                            } else Plugin.L.LogWarning("[TS][Fix] del null after CreateDelegate");
+                                        } else Plugin.L.LogWarning("[TS][Fix] delType null cannot hijack");
+                                    }
                                 } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
                                 try { var curTemp=Reflect.Get(targetF,"interactObjectTemp"); if (curTemp==null) Reflect.Set(targetF,"interactObjectTemp", t); } catch {}
                             } else {
@@ -340,11 +347,20 @@ public static class TeleportConsoleInteractFix
                             object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
                             if (id0!=null) {
                                 try {
-                                    if (_interactDelegateType != null) {
-                                        var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                        var del = Delegate.CreateDelegate(_interactDelegateType, m2);
-                                        try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
-                                        Plugin.L.LogInfo($"[TS][Fix] re-hijacked delegate for already single console={t.GetInstanceID()}");
+                                    var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                    if (m2 != null) {
+                                        Type delType = null;
+                                        try { var f = id0.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (f!=null) delType = f.FieldType; } catch {}
+                                        if (delType == null) delType = _interactDelegateType;
+                                        if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
+                                        if (delType != null) {
+                                            object del = null;
+                                            try { del = Delegate.CreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] re-hijack CreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch {} }
+                                            if (del != null) {
+                                                try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
+                                                Plugin.L.LogInfo($"[TS][Fix] re-hijacked delegate for already single console={t.GetInstanceID()} delType={delType.FullName}");
+                                            }
+                                        }
                                     }
                                 } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] re-hijack fail {ex.Message.Split('\n')[0]}"); }
                             }
