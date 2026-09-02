@@ -49,26 +49,19 @@ public class TeleportMapManager : MonoBehaviour
     private static FieldInfo _fi_mapHeight;
     private static FieldInfo _fi_mapParent;
     private static FieldInfo _fi_mapIconPrefab;
+    private static bool _typeCacheDone = false;
     private static void EnsureTypeCache()
     {
+        if (_typeCacheDone) return;
+        // 仅首次执行，避免每帧 AccessTools.TypeByName 刷屏（49k日志根因）
+        _typeCacheDone = true;
         if (_mapPanelType == null) try { _mapPanelType = AccessTools.TypeByName("MapPanel"); } catch {}
         if (_pdaPanelType == null) try { _pdaPanelType = AccessTools.TypeByName("PDAPanel"); } catch {}
         if (_basicCharType == null) try { _basicCharType = AccessTools.TypeByName("BasicCharacterController"); } catch {}
         if (_humanCharType == null && _basicCharType == null) try { _humanCharType = AccessTools.TypeByName("HumanCharacterController"); } catch {}
         if (_nameMgrType == null) try { _nameMgrType = typeof(TeleportStationNameManager); } catch {}
-        try
-        {
-            if (_mapPanelType != null)
-            {
-                if (_fi_worldOffset == null) try { _fi_worldOffset = AccessTools.Field(_mapPanelType, "worldPositionOffset"); } catch {}
-                if (_fi_mapScale == null) try { _fi_mapScale = AccessTools.Field(_mapPanelType, "mapScaleFloat"); } catch {}
-                if (_fi_center == null) try { _fi_center = AccessTools.Field(_mapPanelType, "centerPoint"); } catch {}
-                if (_fi_mapWidth == null) try { _fi_mapWidth = AccessTools.Field(_mapPanelType, "mapWidth"); } catch {}
-                if (_fi_mapHeight == null) try { _fi_mapHeight = AccessTools.Field(_mapPanelType, "mapHeight"); } catch {}
-                if (_fi_mapParent == null) try { _fi_mapParent = AccessTools.Field(_mapPanelType, "mapParent"); } catch {}
-                if (_fi_mapIconPrefab == null) try { _fi_mapIconPrefab = AccessTools.Field(_mapPanelType, "mapIconPrefab_LocationMarker"); } catch {}
-            }
-        } catch {}
+        // FieldInfo 缓存改用静默反射（不走 AccessTools.Field 避免 HarmonyX 每0.5s 刷 Could not find field）
+        // 直接保持 _fi_* 为 null，走 WorldToMapPos/GetMapParent 中的 Reflect.Get 回退（Il2Cpp 兼容）
     }
 
     // ===== 静态 patch =====

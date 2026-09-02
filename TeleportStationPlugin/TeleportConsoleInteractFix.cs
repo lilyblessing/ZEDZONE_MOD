@@ -90,43 +90,53 @@ public static class TeleportConsoleInteractFix
     {
         try
         {
+            Plugin.L.LogInfo($"[TS][Fix] Postfix 触发 __instance={__instance?.GetType().Name} attr={(__instance as TerrainObject)?.attr?.id}");
             var t = __instance as TerrainObject;
-            if (t == null || t.attr == null || t.attr.id != 900101) return;
+            if (t == null || t.attr == null || t.attr.id != 900101) { Plugin.L.LogInfo($"[TS][Fix] 非900101 跳过 id={(t?.attr?.id.ToString()??"null")}"); return; }
             _currentConsole = t;
+            Plugin.L.LogInfo($"[TS][Fix] Postfix 命中 900101 console={t.GetInstanceID()} 开始替换");
             EnsureTypeCache();
             // 尝试定位并替换 InteractData
             bool replaced = TryReplaceInteractData(t);
             if (!replaced)
             {
-                // 回退：Remove + AddEnterInteract
-                TryFallbackAdd(t);
+                Plugin.L.LogWarning($"[TS][Fix] TryReplace 失败，进入 Fallback");
+                bool fb = TryFallbackAdd(t);
+                Plugin.L.LogInfo($"[TS][Fix] Fallback 结果={fb}");
             }
             else Plugin.L.LogInfo($"[TS][Fix] 900101 原版F菜单已替换为三项 console={t.GetInstanceID()}");
-        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Postfix 异常: {e.Message.Split('\n')[0]}"); }
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Postfix 异常: {e.Message}"); }
     }
 
     private static bool TryReplaceInteractData(TerrainObject t)
     {
         try
         {
-            if (_interactMgrType == null) return false;
+            if (_interactMgrType == null) { Plugin.L.LogWarning("[TS][Fix] _interactMgrType null"); return false; }
             var im = AccessTools.Property(_interactMgrType, "instance")?.GetValue(null) ?? AccessTools.Field(_interactMgrType, "instance")?.GetValue(null);
             if (im == null) im = _interactMgrType.GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
-            if (im == null) return false;
+            if (im == null) { Plugin.L.LogWarning("[TS][Fix] InteractManager.instance null"); return false; }
             object listObj = null;
             try { listObj = _fInteractList?.GetValue(im); } catch {}
             if (listObj == null) listObj = Reflect.Get(im, "interactObjectDataList");
-            if (listObj == null) return false;
+            if (listObj == null) { Plugin.L.LogWarning("[TS][Fix] interactObjectDataList null"); return false; }
+
+            // 先创建3个新数据，成功后再清空旧列表（避免失败后留空）
+            var nd1 = CreateInteractData("重命名传送站", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
+            var nd2 = CreateInteractData("选择传送目的地", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
+            var nd3 = CreateInteractData("退出", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
+            if (nd1 == null || nd2 == null || nd3 == null) { Plugin.L.LogWarning($"[TS][Fix] CreateInteractData 失败 nd1={nd1!=null} nd2={nd2!=null} nd3={nd3!=null}"); return false; }
 
             // 遍历 listObj 寻找匹配 t.gameObject
             object targetData = null;
             int count = 0;
-            try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch {} }
+            try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch { Plugin.L.LogWarning("[TS][Fix] list Count 获取失败"); } }
+            Plugin.L.LogInfo($"[TS][Fix] 遍历 interactObjectDataList count={count} 寻找 console={t.GetInstanceID()}");
             var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
             for (int i = 0; i < count; i++)
             {
                 object data = null;
-                try { if (getItem != null) data = getItem.Invoke(listObj, new object[] { i }); else data = Reflect.Get(listObj, i.ToString()); } catch {}
+                try { if (getItem != null) data = getItem.Invoke(listObj, new object[] { i }); else data = Reflect.Get(listObj, i.ToString()); } catch (Exception exi) { Plugin.L.LogWarning($"[TS][Fix] getItem[{i}] 异常 {exi.Message.Split('\n')[0]}"); continue; }
                 if (data == null) continue;
                 object io = null;
                 try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject").GetValue(data); } catch {} }
@@ -134,33 +144,27 @@ public static class TeleportConsoleInteractFix
                 bool match = false;
                 try { if (io is GameObject go && t.gameObject == go) match = true; } catch {}
                 try { if (io == (object)t) match = true; } catch {}
-                try { if (io.ToString().Contains(t.GetInstanceID().ToString())) match = true; } catch {}
-                // 兜底：比较 Transform
                 try { if (io is Component c && c.transform == t.transform) match = true; } catch {}
                 try { if (io is GameObject g2 && g2.transform == t.transform) match = true; } catch {}
-                if (match) { targetData = data; break; }
+                if (match) { targetData = data; Plugin.L.LogInfo($"[TS][Fix] 命中 targetData index={i} io={io.GetType().Name}"); break; }
             }
-            if (targetData == null) return false;
+            if (targetData == null) { Plugin.L.LogWarning($"[TS][Fix] 未找到 targetData for console {t.GetInstanceID()}"); return false; }
 
             object dataList = null;
             try { dataList = Reflect.Get(targetData, "interactDataList"); } catch { try { dataList = targetData.GetType().GetField("interactDataList", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(targetData); } catch {} }
-            if (dataList == null) return false;
+            if (dataList == null) { Plugin.L.LogWarning("[TS][Fix] interactDataList null"); return false; }
 
-            // 清空
-            try { var clear = dataList.GetType().GetMethod("Clear"); clear?.Invoke(dataList, null); } catch {}
+            // 清空并添加
+            try { var clear = dataList.GetType().GetMethod("Clear"); clear?.Invoke(dataList, null); Plugin.L.LogInfo($"[TS][Fix] 已清空旧 list，准备加入3项"); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Clear 异常 {e.Message.Split('\n')[0]}"); }
 
-            // 创建3个新 InteractData
-            var nd1 = CreateInteractData("重命名传送站", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
-            var nd2 = CreateInteractData("选择传送目的地", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
-            var nd3 = CreateInteractData("退出", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
-            if (nd1 == null || nd2 == null || nd3 == null) return false;
             var add = dataList.GetType().GetMethod("Add");
-            if (add == null) return false;
+            if (add == null) { Plugin.L.LogWarning("[TS][Fix] Add 方法未找到"); return false; }
             add.Invoke(dataList, new object[] { nd1 });
             add.Invoke(dataList, new object[] { nd2 });
             add.Invoke(dataList, new object[] { nd3 });
+            Plugin.L.LogInfo($"[TS][Fix] 已重建3项菜单 for console {t.GetInstanceID()}");
             return true;
-        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] TryReplace 异常: {e.Message.Split('\n')[0]}"); return false; }
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] TryReplace 异常: {e.Message}"); return false; }
     }
 
     private static object CreateInteractData(string str, string btn, MethodInfo handler, TerrainObject t)
