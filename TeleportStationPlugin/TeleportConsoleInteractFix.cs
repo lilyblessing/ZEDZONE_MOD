@@ -189,90 +189,61 @@ public static class TeleportConsoleInteractFix
             if (t == null || t.attr == null || t.attr.id != 900101) return;
             _currentConsole = t;
             EnsureTypeCache();
+            Plugin.L.LogInfo($"[TS][Fix] CommuEnterPostfix hit console={t.GetInstanceID()} pos={t.transform.position} delegateType={_interactDelegateType?.FullName ?? "null"}");
             try
             {
                 var im = GetInteractManagerInstance();
-                if (im != null)
+                if (im == null) { Plugin.L.LogWarning("[TS][Fix] GetInteractManagerInstance null"); return; }
+                object listObj = GetInteractList(im);
+                if (listObj == null) { Plugin.L.LogWarning("[TS][Fix] GetInteractList null"); return; }
+                int count = 0;
+                try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch {} }
+                var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
+                var tTrans = t.transform; int tId = 0; try { tId = tTrans!=null? tTrans.GetInstanceID():0; } catch {}
+                Plugin.L.LogInfo($"[TS][Fix] interactObjectDataList count={count} tId={tId}");
+                for (int i=0;i<count;i++)
                 {
-                    object listObj = GetInteractList(im);
-                    if (listObj != null)
-                    {
-                        int count = 0;
-                        try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch {} }
-                        var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
-                        var tTrans = t.transform; int tId = 0; try { tId = tTrans!=null? tTrans.GetInstanceID():0; } catch {}
-                        for (int i=0;i<count;i++)
-                        {
-                            object data=null; try { if (getItem!=null) data=getItem.Invoke(listObj,new object[]{i}); } catch { continue; }
-                            if (data==null) continue;
-                            object io=null; try { io=Reflect.Get(data,"interactObject"); } catch { try { io=data.GetType().GetField("interactObject",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
-                            if (io==null) continue;
-                            bool isOurs=false;
-                            try { var ioTrans=GetTransformForIo(io); if (ioTrans!=null && tTrans!=null && ioTrans.GetInstanceID()==tId) isOurs=true; } catch {}
-                            if (!isOurs) continue;
-                            object dataList=null; try { dataList=Reflect.Get(data,"interactDataList"); } catch { try { dataList=data.GetType().GetField("interactDataList",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
-                            if (dataList==null) continue;
-                            int dc=0; try { dc=Convert.ToInt32(Reflect.Get(dataList,"Count")); } catch { try { dc=(int)dataList.GetType().GetProperty("Count").GetValue(dataList); } catch {} }
-                            var gItem=dataList.GetType().GetMethod("get_Item") ?? dataList.GetType().GetMethod("Get");
-                            bool found = false;
-                            for (int j=0;j<dc;j++)
-                            {
-                                object id=null; try { if (gItem!=null) id=gItem.Invoke(dataList,new object[]{j}); } catch { continue; }
-                                if (id==null) continue;
-                                string s=null; try { s=Reflect.Get(id,"interactStr") as string; } catch { try { s=id.GetType().GetField("interactStr")?.GetValue(id) as string; } catch {} }
-                                if (!string.IsNullOrEmpty(s) && s.Contains("通讯终端"))
-                                {
-                                    try { Reflect.Set(id,"interactStr","打开传送控制台"); } catch { try { id.GetType().GetField("interactStr")?.SetValue(id,"打开传送控制台"); } catch {} }
-                                    try
-                                    {
-                                        if (_interactDelegateType != null)
-                                        {
-                                            var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                            if (m2 != null)
-                                            {
-                                                var del = Delegate.CreateDelegate(_interactDelegateType, m2);
-                                                try { Reflect.Set(id, "interactAction", del); } catch { try { id.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(id, del); } catch {} }
-                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked for console={t.GetInstanceID()} idx={j}");
-                                            }
-                                        }
-                                    } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if (!found && dc>0)
-                            {
-                                try
-                                {
-                                    object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
-                                    if (id0 != null)
-                                    {
-                                        string s0=null; try { s0=Reflect.Get(id0,"interactStr") as string; } catch { try { s0=id0.GetType().GetField("interactStr")?.GetValue(id0) as string; } catch {} }
-                                        if (s0 != null && s0.Contains("传送控制台"))
-                                        {
-                                            object curDel=null; try { curDel=Reflect.Get(id0,"interactAction"); } catch { try { curDel=id0.GetType().GetField("interactAction")?.GetValue(id0); } catch {} }
-                                            bool needHijack = false;
-                                            try { if (curDel == null) needHijack = true; else { var mm = curDel.GetType().GetMethod("Method"); if (mm!=null) { var mi = mm.Invoke(curDel,null) as MethodInfo; if (mi==null || mi.Name != nameof(OnTeleportConsoleInteract)) needHijack=true; } } } catch { needHijack=true; }
-                                            if (needHijack && _interactDelegateType != null)
-                                            {
-                                                var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                                if (m2 != null)
-                                                {
-                                                    var del = Delegate.CreateDelegate(_interactDelegateType, m2);
-                                                    try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
-                                                    Plugin.L.LogInfo($"[TS][Fix] delegate re-hijacked for console={t.GetInstanceID()}");
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch {}
-                            }
-                            break;
+                    object data=null; try { if (getItem!=null) data=getItem.Invoke(listObj,new object[]{i}); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] getItem {i} fail {ex.Message.Split('\n')[0]}"); continue; }
+                    if (data==null) continue;
+                    object io=null; try { io=Reflect.Get(data,"interactObject"); } catch { try { io=data.GetType().GetField("interactObject",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
+                    if (io==null) continue;
+                    bool isOurs=false;
+                    try { var ioTrans=GetTransformForIo(io); if (ioTrans!=null && tTrans!=null && ioTrans.GetInstanceID()==tId) isOurs=true; else if (io is GameObject go && t.gameObject != null && go.GetInstanceID()==t.gameObject.GetInstanceID()) isOurs=true; } catch {}
+                    Plugin.L.LogInfo($"[TS][Fix] data[{i}] isOurs={isOurs} io={io?.GetType().Name ?? "null"}");
+                    if (!isOurs) continue;
+                    object dataList=null; try { dataList=Reflect.Get(data,"interactDataList"); } catch { try { dataList=data.GetType().GetField("interactDataList",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
+                    if (dataList==null) { Plugin.L.LogWarning("[TS][Fix] dataList null"); continue; }
+                    int dc=0; try { dc=Convert.ToInt32(Reflect.Get(dataList,"Count")); } catch { try { dc=(int)dataList.GetType().GetProperty("Count").GetValue(dataList); } catch {} }
+                    var gItem=dataList.GetType().GetMethod("get_Item") ?? dataList.GetType().GetMethod("Get");
+                    Plugin.L.LogInfo($"[TS][Fix] found our InteractObjectData dc={dc}");
+                    for (int j=0;j<dc;j++) {
+                        object id=null; try { if (gItem!=null) id=gItem.Invoke(dataList,new object[]{j}); } catch { continue; }
+                        if (id==null) continue;
+                        string s=null; try { s=Reflect.Get(id,"interactStr") as string; } catch { try { s=id.GetType().GetField("interactStr")?.GetValue(id) as string; } catch {} }
+                        Plugin.L.LogInfo($"[TS][Fix]   InteractData[{j}] str='{s ?? "null"}'");
+                    }
+                    if (dc>0) {
+                        object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
+                        if (id0!=null) {
+                            string s0=null; try { s0=Reflect.Get(id0,"interactStr") as string; } catch { try { s0=id0.GetType().GetField("interactStr")?.GetValue(id0) as string; } catch {} }
+                            Plugin.L.LogInfo($"[TS][Fix] hijacking InteractData[0] origStr='{s0 ?? "null"}'");
+                            try { Reflect.Set(id0,"interactStr","打开传送控制台"); } catch { try { id0.GetType().GetField("interactStr")?.SetValue(id0,"打开传送控制台"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] set interactStr fail {ex.Message.Split('\n')[0]}"); } }
+                            try {
+                                if (_interactDelegateType != null) {
+                                    var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                    if (m2 != null) {
+                                        var del = Delegate.CreateDelegate(_interactDelegateType, m2);
+                                        try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(id0, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
+                                        Plugin.L.LogInfo($"[TS][Fix] delegate hijacked for console={t.GetInstanceID()} idx=0 orig='{s0}'");
+                                    } else Plugin.L.LogWarning("[TS][Fix] OnTeleportConsoleInteract method not found");
+                                } else Plugin.L.LogWarning($"[TS][Fix] _interactDelegateType null cannot hijack");
+                            } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
                         }
                     }
+                    break;
                 }
             } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] postfix inner err {ex.Message.Split('\n')[0]}"); }
-        } catch {}
+        } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] CommuEnterPostfix outer err {ex.Message.Split('\n')[0]}"); }
     }
 
     public static void ClearAllPostfix()
