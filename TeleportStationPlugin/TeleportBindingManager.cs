@@ -474,30 +474,28 @@ public static class TeleportBindingManager
 
     private static List<TerrainObject> FindAllTerrainObjectsById(int attrId)
     {
+        // P6.1 性能：统一走 0.5s 缓存（TeleportObjectCache），原每帧 4× Resources 导致 30 帧
+        try { return TeleportObjectCache.FindAllById(attrId); } catch {}
         var result = new List<TerrainObject>();
         var seen = new HashSet<long>();
         try
         {
-            // 1. _knownClones（含 H&D）
             var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             var list = f?.GetValue(null) as System.Collections.Generic.List<object>;
             if (list != null) foreach (var o in list) { var c = o as Component; if (c==null) continue; var t = FindTerrainObject(c.transform) as TerrainObject; if (t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
         } catch {}
         try
         {
-            // 2. ActiveObjects_Production（消费端/充电台等）
             var list2 = TerrainObject_Production.ActiveObjects_Production;
             if (list2 != null) for (int i=0;i<list2.Count;i++) { var g=list2[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
         } catch {}
         try
         {
-            // 3. 全量扫描（覆盖 900101 控制台等非 Production 类型）
             var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
             if (all != null) foreach (var t in all) if (t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); }
         } catch {}
         try
         {
-            // 4. ActiveObjects_StirlingGenerator 也可能包含克隆
             var list3 = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
             if (list3 != null) for (int i=0;i<list3.Count;i++) { var g=list3[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
         } catch {}
@@ -613,13 +611,19 @@ public static class TeleportBindingManager
 public class TeleportBindingController : MonoBehaviour
 {
     private float _nextCheck = -1f;
+    private float _nextCleanup = -1f;
     void Update()
     {
         try
         {
             TeleportBindingManager.EnsureP4Hooks();
-            TeleportBindingManager.CleanupStale();
-            try { TeleportConsoleSelection.CleanupStale(); } catch {}
+            float now = Time.unscaledTime;
+            if (now >= _nextCleanup)
+            {
+                _nextCleanup = now + 1f; // 1s 节流：原每帧 4× Resources 导致 30 帧，已改为 1Hz
+                try { TeleportBindingManager.CleanupStale(); } catch {}
+                try { TeleportConsoleSelection.CleanupStale(); } catch {}
+            }
             // 若选点面板打开，E/H 不再处理绑定，ESC 由面板自行关闭；可按 H 关闭面板
             var ui = TeleportConsoleUI.Instance;
             if (ui != null && ui.IsOpen)
@@ -686,45 +690,15 @@ public class TeleportBindingController : MonoBehaviour
         {
             float best = maxDist * maxDist;
             TerrainObject bestObj = null;
-            var list = TerrainObject_Production.ActiveObjects_Production;
-            if (list != null)
+            // P6.1 性能：走 0.5s 缓存，单次扫描而非三源分散扫描
+            var candidates = TeleportObjectCache.FindAllById(900101);
+            foreach (var t in candidates)
             {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    var g = list[i];
-                    if (g == null) continue;
-                    var t = Reflect.Get(g, "terrainObject") as TerrainObject;
-                    if (t == null) t = FindTerrainObject(g.transform) as TerrainObject;
-                    if (t == null || t.attr == null || t.attr.id != 900101) continue;
-                    var d = t.transform.position - pos;
-                    float d2 = d.x * d.x + d.y * d.y;
-                    if (d2 < best) { best = d2; bestObj = t; }
-                }
+                if (t == null || t.transform == null) continue;
+                var d = t.transform.position - pos;
+                float d2 = d.x * d.x + d.y * d.y;
+                if (d2 < best) { best = d2; bestObj = t; }
             }
-            try
-            {
-                var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                var lst = f?.GetValue(null) as System.Collections.Generic.List<object>;
-                if (lst != null)
-                {
-                    foreach (var o in lst)
-                    {
-                        var comp = o as Component;
-                        if (comp == null) continue;
-                        var t = FindTerrainObject(comp.transform) as TerrainObject;
-                        if (t == null || t.attr == null || t.attr.id != 900101) continue;
-                        var d = t.transform.position - pos;
-                        float d2 = d.x * d.x + d.y * d.y;
-                        if (d2 < best) { best = d2; bestObj = t; }
-                    }
-                }
-            }
-            catch { }
-            try
-            {
-                var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
-                if (all != null) foreach (var t in all) if (t!=null && t.attr!=null && t.attr.id==900101) { var d = t.transform.position - pos; float d2 = d.x*d.x+d.y*d.y; if (d2 < best) { best=d2; bestObj=t; } }
-            } catch {}
             return bestObj;
         }
         catch { return null; }

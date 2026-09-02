@@ -74,6 +74,23 @@ public static class ChargerPadFix
         catch { }
     }
 
+    // P6.1 新增：通用 TerrainObject OnEnable 捕获（900101 控制台类型为 TerrainObject_Furniture_Commu，不走 Production）
+    public static void OnEnableRecorder_All(TerrainObject __instance)
+    {
+        try
+        {
+            if (__instance == null) return;
+            int id = -1;
+            try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
+            if (id == 900101 || id == 900102 || id == 900103)
+            {
+                if (!_knownClones.Contains(__instance))
+                    _knownClones.Add(__instance);
+            }
+        }
+        catch { }
+    }
+
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
     public static void Tick()
     {

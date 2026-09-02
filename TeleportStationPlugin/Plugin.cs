@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.40")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.41")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -325,6 +325,16 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩失败（方法未找到）");
             }
             catch (Exception es) { Log.LogWarning($"[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩异常: {es.Message.Split('\n')[0]}"); }
+            try
+            {
+                var onAll = AccessTools.Method(typeof(TerrainObject), "OnEnable");
+                if (onAll != null)
+                {
+                    h.Patch(onAll, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_All), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 TerrainObject.OnEnable（通用克隆注册表 P6.1）");
+                }
+            }
+            catch (Exception ea) { Log.LogWarning($"[TS] TerrainObject.OnEnable 挂钩异常: {ea.Message.Split('\n')[0]}"); }
             // v0.9.23 Fix: 强制克隆缩放为1（根治虚影小+存量污染，Init 是唯一覆写点，postfix 最终写回 Vector3.one）
             try
             {
@@ -341,6 +351,9 @@ public class Plugin : BasePlugin
             // 且为全游戏每次 SpriteRenderer 层写入的全局祖先链扫描（高频热路径）；层钉由 PadLayerPin 物理钉全权覆盖。
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
+
+        // P6.1：控制台劫持——拦截 900101 复用 108 的雇佣交互，改为选点面板
+        try { var h61 = new Harmony("com.zedzone.teleportstation.p61"); TeleportConsoleInteractFix.EnsurePatch(h61); } catch (Exception e) { Log.LogWarning($"[TS] 控制台劫持挂钩异常: {e.Message.Split('\n')[0]}"); }
 
         // v0.6.34：图标缓存提前到 Load（不等 20s 注册定时器），消除图标源头时序依赖
         try
@@ -378,7 +391,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.40 P6 控制台选目的地 已上线=已绑+IsPowered(AND) 发送方=已绑+供电+电池≥10000");
+        Log.LogInfo("[TeleportStation] v0.9.41 P6.1 控制台劫持+性能 900101雇佣屏蔽 0.5s缓存+1s Cleanup 节流 30→60帧");
     }
 }
 

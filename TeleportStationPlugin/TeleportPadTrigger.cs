@@ -40,9 +40,9 @@ public class TeleportPadTrigger : MonoBehaviour
         {
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
-            _nextScan = now + 0.2f;
+            _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
             // 诊断：每 5s 打印一次扫描
-            if ((int)(now) % 5 == 0 && now - _nextScan < 0.3f)
+            if ((int)(now) % 5 == 0 && now - _nextScan < 0.6f)
             {
                 var diagPads = FindAllPads();
                 Plugin.L?.LogInfo($"[TS][Teleport] 扫描 pads={diagPads.Count} player={(GetPlayer()!=null?"ok":"null")}");
@@ -293,6 +293,7 @@ public class TeleportPadTrigger : MonoBehaviour
 
     private static List<TerrainObject> FindAllPads()
     {
+        try { return TeleportObjectCache.FindAllById(900102); } catch {}
         var list = new List<TerrainObject>();
         var seen = new HashSet<long>();
         try

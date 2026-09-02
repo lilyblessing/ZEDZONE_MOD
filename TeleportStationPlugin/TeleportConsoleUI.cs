@@ -383,6 +383,7 @@ public class TeleportConsoleUI : MonoBehaviour
 
     private static List<TerrainObject> FindAllPads()
     {
+        try { return TeleportObjectCache.FindAllById(900102); } catch {}
         var list = new List<TerrainObject>();
         var seen = new HashSet<long>();
         try

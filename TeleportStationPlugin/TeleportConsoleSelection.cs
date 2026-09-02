@@ -290,6 +290,7 @@ public static class TeleportConsoleSelection
 
     private static List<TerrainObject> FindAllTerrainObjectsById(int attrId)
     {
+        try { return TeleportObjectCache.FindAllById(attrId); } catch {}
         var result = new List<TerrainObject>();
         var seen = new HashSet<long>();
         try
