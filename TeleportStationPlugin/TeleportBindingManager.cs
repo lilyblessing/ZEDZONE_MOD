@@ -299,6 +299,45 @@ public static class TeleportBindingManager
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Bind] 异常: {e.Message.Split('\n')[0]}"); return false; }
     }
 
+    // P6.2 静默版：供自动轮询使用，仅成功时 ShowHint，不刷失败提示
+    public static bool TryAutoBindNearestQuiet(TerrainObject console)
+    {
+        if (console == null) return false;
+        try
+        {
+            long cid = GetInstanceKey(console);
+            if (console.attr == null || console.attr.id != ConsoleId) return false;
+            if (_consoleToPad.ContainsKey(cid)) return true; // 已绑视为成功，不重申刷屏
+            var cPos = console.transform.position;
+            TerrainObject nearestUnbound = null;
+            float bestUnboundD2 = float.MaxValue;
+            long bestUnboundKey = 0;
+            var candidates = FindAllTerrainObjectsById(PadId);
+            foreach (var pad in candidates)
+            {
+                var d = pad.transform.position - cPos;
+                float d2 = d.x * d.x + d.y * d.y;
+                if (d2 > BindRangeSqr) continue;
+                long pid = GetInstanceKey(pad);
+                if (_padToConsole.ContainsKey(pid)) continue;
+                if (d2 < bestUnboundD2) { bestUnboundD2 = d2; nearestUnbound = pad; bestUnboundKey = pid; }
+            }
+            if (nearestUnbound != null)
+            {
+                _consoleToPad[cid] = bestUnboundKey;
+                _padToConsole[bestUnboundKey] = cid;
+                _instanceIdToObjId[cid] = ConsoleId;
+                _instanceIdToObjId[bestUnboundKey] = PadId;
+                SaveForInstance(console, nearestUnbound);
+                Save();
+                ShowHint("绑定成功", isError: false);
+                Plugin.L.LogInfo($"[TS][Bind][Auto] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
+                return true;
+            }
+            return false;
+        } catch { return false; }
+    }
+
     public static bool TryUnbind(TerrainObject console)
     {
         if (console == null) return false;
@@ -606,12 +645,13 @@ public static class TeleportBindingManager
 }
 
 /// <summary>
-/// P4 轮询控制器：玩家靠近控制台按 E 自动就近绑定（20m），H 键解绑；P6 新增：已绑控制台按 E 打开选点面板（已上线亮/离线灰，仅选中后圆盘才触发传送）。
+/// P6.2 轮询控制器：20m 自动互绑（无 E 绑定），原版 E/Q 保留（E 走 ComputerPanel，Q 移动）。
+/// 每秒对未绑控制台尝试就近绑定静默版，仅成功时提示。
 /// </summary>
 public class TeleportBindingController : MonoBehaviour
 {
-    private float _nextCheck = -1f;
     private float _nextCleanup = -1f;
+    private float _nextAutoBind = -1f;
     void Update()
     {
         try
@@ -620,44 +660,42 @@ public class TeleportBindingController : MonoBehaviour
             float now = Time.unscaledTime;
             if (now >= _nextCleanup)
             {
-                _nextCleanup = now + 1f; // 1s 节流：原每帧 4× Resources 导致 30 帧，已改为 1Hz
+                _nextCleanup = now + 1f;
                 try { TeleportBindingManager.CleanupStale(); } catch {}
                 try { TeleportConsoleSelection.CleanupStale(); } catch {}
+                try { TeleportStationNameManager.CleanupStale(); } catch {}
             }
-            // 若选点面板打开，E/H 不再处理绑定，ESC 由面板自行关闭；可按 H 关闭面板
-            var ui = TeleportConsoleUI.Instance;
-            if (ui != null && ui.IsOpen)
+            if (now >= _nextAutoBind)
             {
-                if (Input.GetKeyDown(KeyCode.H)) { try { ui.Close(); } catch {} }
-                return;
+                _nextAutoBind = now + 1f; // 1Hz 自动互绑
+                try { AutoBindTick(); } catch {}
             }
-            if (Time.unscaledTime < _nextCheck) return;
-            _nextCheck = Time.unscaledTime + 0.2f;
-            if (!Input.GetKeyDown(KeyCode.E) && !Input.GetKeyDown(KeyCode.H)) return;
-            var player = GetPlayerTransform();
-            if (player == null) return;
-            var console = FindNearestConsole(player.position, 3f);
-            if (console == null) return;
-            if (Input.GetKeyDown(KeyCode.E))
+            // P6.1 的 E/H 绑定/选点逻辑已退役：E 由原生 ComputerPanel 接管，选点改走地图标记
+            // 保留 H 关闭旧面板兼容（若 TeleportConsoleUI 仍打开）
+            try
             {
-                long ck = GetInstanceKey(console);
-                if (TeleportBindingManager.IsBound(ck))
-                {
-                    // 已绑 → 打开选点面板
-                    try { TeleportConsoleUI.EnsureExists().ShowForConsole(console); Plugin.L.LogInfo($"[TS][Bind] 打开选点面板 console={ck}"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Bind] 打开面板异常: {ex.Message}"); }
-                }
-                else
-                {
-                    TeleportBindingManager.TryAutoBindNearest(console);
-                }
-            }
-            else if (Input.GetKeyDown(KeyCode.H))
-            {
-                bool ok = TeleportBindingManager.TryUnbind(console);
-                if (ok) { try { TeleportConsoleSelection.Clear(console); } catch {} }
-            }
+                var ui = TeleportConsoleUI.Instance;
+                if (ui != null && ui.IsOpen && Input.GetKeyDown(KeyCode.H)) { try { ui.Close(); } catch {} }
+            } catch {}
         }
         catch { }
+    }
+
+    private void AutoBindTick()
+    {
+        try
+        {
+            var consoles = TeleportObjectCache.FindAllById(900101);
+            if (consoles == null || consoles.Count == 0) return;
+            foreach (var c in consoles)
+            {
+                if (c == null || c.transform == null || c.attr == null) continue;
+                long ck = GetInstanceKey(c);
+                if (TeleportBindingManager.IsBound(ck)) continue;
+                // 静默尝试，仅成功打日志，不刷“超过距离/已有绑定”提示
+                try { TeleportBindingManager.TryAutoBindNearestQuiet(c); } catch {}
+            }
+        } catch {}
     }
 
     private static long GetInstanceKey(TerrainObject t)
