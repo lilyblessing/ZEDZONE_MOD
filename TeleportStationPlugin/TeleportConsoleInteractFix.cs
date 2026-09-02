@@ -87,16 +87,48 @@ public static class TeleportConsoleInteractFix
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 挂钩异常: {e.Message.Split('\n')[0]}"); }
     }
 
+    private static bool _typeCacheDone = false;
+    private static Type SafeTypeByName(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        try
+        {
+            var asm = typeof(TerrainObject).Assembly;
+            var t = asm.GetType(name);
+            if (t != null) return t;
+            try { foreach (var tp in asm.GetTypes()) if (tp.Name == name || tp.FullName == name) return tp; } catch {}
+        } catch {}
+        try
+        {
+            foreach (var a in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                string fn = a.FullName;
+                if (fn.StartsWith("UnityEngine.")) continue;
+                if (fn.StartsWith("Unity.")) continue;
+                if (fn.StartsWith("mscorlib")) continue;
+                if (fn.StartsWith("System.")) continue;
+                try { var t = a.GetType(name); if (t != null) return t; } catch {}
+                try
+                {
+                    Type[] types = null;
+                    try { types = a.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types; }
+                    if (types == null) continue;
+                    foreach (var tp in types) if (tp != null && (tp.Name == name || tp.FullName == name || tp.FullName == name.Replace("+","."))) return tp;
+                } catch {}
+            }
+        } catch {}
+        return null;
+    }
+
     private static void EnsureTypeCache()
     {
-        try { if (_interactMgrType == null) _interactMgrType = AccessTools.TypeByName("InteractManager"); } catch {}
-        try { if (_interactDataType == null) _interactDataType = AccessTools.TypeByName("InteractData"); } catch {}
-        try { if (_interactObjDataType == null) _interactObjDataType = AccessTools.TypeByName("InteractObjectData"); } catch {}
-        try { if (_interactDelegateType == null) _interactDelegateType = AccessTools.TypeByName("InteractManager+InteractDelegate") ?? AccessTools.TypeByName("InteractManager.InteractDelegate"); } catch {}
-        try { if (_playerCtrlType == null) _playerCtrlType = AccessTools.TypeByName("PlayerController"); } catch {}
-        try { if (_humanCtrlType == null) _humanCtrlType = AccessTools.TypeByName("HumanCharacterController"); } catch {}
-        try { if (_interactUIType == null) _interactUIType = AccessTools.TypeByName("InteractUI"); } catch {}
-        try { if (_interactUITerrainType == null) _interactUITerrainType = AccessTools.TypeByName("InteractUI_TerrainObject"); } catch {}
+        if (_typeCacheDone) return;
+        _typeCacheDone = true;
+        try { if (_interactMgrType == null) _interactMgrType = SafeTypeByName("InteractManager"); } catch {}
+        try { if (_interactDataType == null) _interactDataType = SafeTypeByName("InteractData"); } catch {}
+        try { if (_interactObjDataType == null) _interactObjDataType = SafeTypeByName("InteractObjectData"); } catch {}
+        try { if (_interactDelegateType == null) _interactDelegateType = SafeTypeByName("InteractManager+InteractDelegate") ?? SafeTypeByName("InteractManager.InteractDelegate"); } catch {}
+        try { if (_humanCtrlType == null) _humanCtrlType = SafeTypeByName("HumanCharacterController"); } catch {}
         try
         {
             if (_fInteractList == null && _interactMgrType != null)
@@ -106,34 +138,57 @@ public static class TeleportConsoleInteractFix
         {
             if (_interactObjDataType != null)
                 _fDataList = _interactObjDataType.GetField("interactDataList", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
-            if (_fDataList == null) _fDataList = AccessTools.TypeByName("InteractObjectData")?.GetField("interactDataList", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         } catch {}
-        try
-        {
-            if (_mAddEnter == null) _mAddEnter = AccessTools.Method(typeof(TerrainObject), "AddEnterInteract");
-            if (_mAddEnter == null && _commuType != null) _mAddEnter = AccessTools.Method(_commuType, "AddEnterInteract");
-        } catch {}
-        try { if (_mRemove == null && _interactMgrType != null) _mRemove = AccessTools.Method(_interactMgrType, "RemoveInteract", new Type[] { typeof(GameObject) }); } catch {}
         try
         {
             if (_mAddData == null && _interactMgrType != null && _interactObjDataType != null)
-                _mAddData = AccessTools.Method(_interactMgrType, "AddInteractObjectData", new Type[] { _interactObjDataType });
+                _mAddData = _interactMgrType.GetMethod("AddInteractObjectData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new Type[] { _interactObjDataType }, null);
             if (_mAddData == null && _interactMgrType != null)
-                _mAddData = AccessTools.Method(_interactMgrType, "AddInteractObjectData");
+                _mAddData = _interactMgrType.GetMethod("AddInteractObjectData", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         } catch {}
+        try { if (_mRemove == null && _interactMgrType != null) _mRemove = _interactMgrType.GetMethod("RemoveInteract", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance, null, new Type[] { typeof(GameObject) }, null); } catch {}
+    }
+
+    public static void OnTeleportConsoleInteract(object obj)
+    {
+        try
+        {
+            var c = _currentConsole;
+            if (c == null || c.attr == null || c.attr.id != 900101)
+            {
+                try
+                {
+                    var list = TeleportObjectCache.FindAllById(900101);
+                    var player = GetPlayerTransform();
+                    if (player != null && list != null)
+                    {
+                        float best = 25f;
+                        TerrainObject bestObj = null;
+                        foreach (var t in list)
+                        {
+                            if (t == null || t.transform == null) continue;
+                            float d2 = (t.transform.position - player.position).sqrMagnitude;
+                            if (d2 < best) { best = d2; bestObj = t; }
+                        }
+                        if (bestObj != null) c = bestObj;
+                    }
+                    else if (list != null && list.Count > 0) c = list[0];
+                } catch {}
+            }
+            if (c == null) return;
+            try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(c); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] menu show fail {e.Message.Split('\n')[0]}"); }
+            Plugin.L.LogInfo($"[TS][Fix] 900101 delegate hijacked -> teleport menu console={c.GetInstanceID()}");
+        } catch (Exception e) { try { Plugin.L.LogWarning($"[TS][Fix] OnTeleportConsoleInteract err {e.Message.Split('\n')[0]}"); } catch {} }
     }
 
     public static void CommuEnterPostfix(object __instance, object __0)
     {
-        // P6.8 原生化：外部交互完全交给克隆模板原生 OnPlayerEnterRange@0x180997AD0（F 打开通讯终端 / Q 拾起）
-        // 不再替换为三项，仅做一次性文本微调：通讯终端 -> 传送控制台（保持原生单 F + 单 Q）
         try
         {
             var t = __instance as TerrainObject;
             if (t == null || t.attr == null || t.attr.id != 900101) return;
             _currentConsole = t;
             EnsureTypeCache();
-            // 一次性外层文本修正（非轮询）：定位已存在的 InteractDataList 中“打开通讯终端”并改为“打开传送控制台”
             try
             {
                 var im = GetInteractManagerInstance();
@@ -159,6 +214,7 @@ public static class TeleportConsoleInteractFix
                             if (dataList==null) continue;
                             int dc=0; try { dc=Convert.ToInt32(Reflect.Get(dataList,"Count")); } catch { try { dc=(int)dataList.GetType().GetProperty("Count").GetValue(dataList); } catch {} }
                             var gItem=dataList.GetType().GetMethod("get_Item") ?? dataList.GetType().GetMethod("Get");
+                            bool found = false;
                             for (int j=0;j<dc;j++)
                             {
                                 object id=null; try { if (gItem!=null) id=gItem.Invoke(dataList,new object[]{j}); } catch { continue; }
@@ -167,14 +223,55 @@ public static class TeleportConsoleInteractFix
                                 if (!string.IsNullOrEmpty(s) && s.Contains("通讯终端"))
                                 {
                                     try { Reflect.Set(id,"interactStr","打开传送控制台"); } catch { try { id.GetType().GetField("interactStr")?.SetValue(id,"打开传送控制台"); } catch {} }
+                                    try
+                                    {
+                                        if (_interactDelegateType != null)
+                                        {
+                                            var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                            if (m2 != null)
+                                            {
+                                                var del = Delegate.CreateDelegate(_interactDelegateType, m2);
+                                                try { Reflect.Set(id, "interactAction", del); } catch { try { id.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(id, del); } catch {} }
+                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked for console={t.GetInstanceID()} idx={j}");
+                                            }
+                                        }
+                                    } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
+                                    found = true;
                                     break;
                                 }
+                            }
+                            if (!found && dc>0)
+                            {
+                                try
+                                {
+                                    object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
+                                    if (id0 != null)
+                                    {
+                                        string s0=null; try { s0=Reflect.Get(id0,"interactStr") as string; } catch { try { s0=id0.GetType().GetField("interactStr")?.GetValue(id0) as string; } catch {} }
+                                        if (s0 != null && s0.Contains("传送控制台"))
+                                        {
+                                            object curDel=null; try { curDel=Reflect.Get(id0,"interactAction"); } catch { try { curDel=id0.GetType().GetField("interactAction")?.GetValue(id0); } catch {} }
+                                            bool needHijack = false;
+                                            try { if (curDel == null) needHijack = true; else { var mm = curDel.GetType().GetMethod("Method"); if (mm!=null) { var mi = mm.Invoke(curDel,null) as MethodInfo; if (mi==null || mi.Name != nameof(OnTeleportConsoleInteract)) needHijack=true; } } } catch { needHijack=true; }
+                                            if (needHijack && _interactDelegateType != null)
+                                            {
+                                                var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                                if (m2 != null)
+                                                {
+                                                    var del = Delegate.CreateDelegate(_interactDelegateType, m2);
+                                                    try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
+                                                    Plugin.L.LogInfo($"[TS][Fix] delegate re-hijacked for console={t.GetInstanceID()}");
+                                                }
+                                            }
+                                        }
+                                    }
+                                } catch {}
                             }
                             break;
                         }
                     }
                 }
-            } catch {}
+            } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] postfix inner err {ex.Message.Split('\n')[0]}"); }
         } catch {}
     }
 
@@ -233,9 +330,11 @@ public static class TeleportConsoleInteractFix
         try
         {
             if (_interactMgrType == null) return null;
-            var im = AccessTools.Property(_interactMgrType, "instance")?.GetValue(null) ?? AccessTools.Field(_interactMgrType, "instance")?.GetValue(null);
-            if (im == null) im = _interactMgrType.GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
-            return im;
+            var prop = _interactMgrType.GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (prop != null) { var v = prop.GetValue(null); if (v != null) return v; }
+            var field = _interactMgrType.GetField("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+            if (field != null) return field.GetValue(null);
+            return null;
         } catch { return null; }
     }
 
@@ -258,11 +357,6 @@ public static class TeleportConsoleInteractFix
         {
             var tr = io?.GetType().GetProperty("transform", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(io) as Transform;
             if (tr != null) return tr;
-        } catch {}
-        try
-        {
-            var tr2 = AccessTools.Property(io?.GetType(), "transform")?.GetValue(io) as Transform;
-            if (tr2 != null) return tr2;
         } catch {}
         try
         {

@@ -16,7 +16,15 @@ public class TeleportConsoleMenuUI : MonoBehaviour
     private static Type _mapPanelType;
     private static Type _pdaPanelType;
     private static bool _typeCacheInit;
-    private static void EnsureTypeCache() { if(_typeCacheInit) return; _typeCacheInit=true; try{_mapPanelType=AccessTools.TypeByName("MapPanel");}catch{} try{_pdaPanelType=AccessTools.TypeByName("PDAPanel");}catch{} }
+        private static bool _menuCacheDone = false;
+    private static Type SafeTypeByName2(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return null;
+        try { var asm = typeof(TerrainObject).Assembly; var t = asm.GetType(name); if (t!=null) return t; } catch {}
+        try { foreach (var a in AppDomain.CurrentDomain.GetAssemblies()) { if (a.FullName.StartsWith("UnityEngine.")) continue; try { var t=a.GetType(name); if(t!=null) return t; } catch {} } } catch {}
+        return null;
+    }
+    private static void EnsureTypeCache() { if(_menuCacheDone) return; _menuCacheDone=true; try{_mapPanelType=SafeTypeByName2("MapPanel");}catch{} try{_pdaPanelType=SafeTypeByName2("PDAPanel");}catch{} }
 
     public static TeleportConsoleMenuUI Instance { get; private set; }
 
@@ -268,43 +276,9 @@ public class TeleportConsoleMenuUI : MonoBehaviour
                 return;
             }
 
-            // Prompt polling (0.2s)
-            float now = Time.unscaledTime;
-            if (now < _nextPromptCheck) return;
-            _nextPromptCheck = now + 0.2f;
-
-            // If any other UI open (rename / map), hide prompt
-            if ((TeleportStationRenameUI.Instance != null && TeleportStationRenameUI.Instance.IsOpen)
-                || (TeleportMapManager.Instance != null && IsMapOpen()))
-            {
-                if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
-                return;
-            }
-
-            var nearest = FindNearestConsole(3f);
-            _nearestConsole = nearest;
-            if (nearest != null)
-            {
-                if (_promptGO != null && !_promptGO.activeSelf) _promptGO.SetActive(true);
-                // Update prompt text with name
-                try
-                {
-                    if (_promptText != null)
-                    {
-                        string n = TeleportStationNameManager.GetName(nearest);
-                        if (string.IsNullOrWhiteSpace(n)) n = nearest.name;
-                        _promptText.text = $"按 [F] 打开传送控制台  ({n})";
-                    }
-                } catch {}
-                if (Input.GetKeyDown(KeyCode.F))
-                {
-                    ShowForConsole(nearest);
-                }
-            }
-            else
-            {
-                if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
-            }
+            // P6.9 prompt disabled - native InteractManager handles external F, MenuUI only for internal delegate
+            if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
+            return;
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Menu] Update 异常: {e.Message.Split('\n')[0]}"); }
     }
 
