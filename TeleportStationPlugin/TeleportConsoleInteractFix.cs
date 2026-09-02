@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using HarmonyLib;
 using UnityEngine;
 using Il2CppInterop.Runtime.InteropTypes;
@@ -84,6 +85,27 @@ public static class TeleportConsoleInteractFix
                     }
                 }
             } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllInteract 挂钩异常: {e.Message.Split('\n')[0]}"); }
+            // P6.11: 委托目标兜底 — 直接 patch 闭包方法 <>c.<OnPlayerEnterRange>b__0_0，绕过 Delegate.CreateDelegate 的 IL2CPP 类型校验
+            try
+            {
+                Type closure = null;
+                try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
+                if (closure == null) try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
+                if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
+                if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
+                if (closure != null)
+                {
+                    var bMethod = AccessTools.Method(closure, "<OnPlayerEnterRange>b__0_0");
+                    if (bMethod != null)
+                    {
+                        var pre = new HarmonyMethod(typeof(TeleportConsoleInteractFix).GetMethod(nameof(CommuDelegatePrefix), BindingFlags.NonPublic | BindingFlags.Static));
+                        h.Patch(bMethod, prefix: pre);
+                        Plugin.L.LogInfo($"[TS][Fix] 已挂钩 <>c.<OnPlayerEnterRange>b__0_0 prefix (委托目标劫持兜底) type={closure.FullName}");
+                    }
+                    else Plugin.L.LogWarning("[TS][Fix] <>c.<OnPlayerEnterRange>b__0_0 未找到");
+                }
+                else Plugin.L.LogWarning("[TS][Fix] <>c 类型未找到，委托目标劫持未挂钩");
+            } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] <>c 挂钩异常: {e.Message.Split('\n')[0]}"); }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 挂钩异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -314,11 +336,12 @@ public static class TeleportConsoleInteractFix
                                         if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
                                         if (delType != null) {
                                             object del = null;
-                                            try { del = Delegate.CreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] CreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch (Exception ex1) { Plugin.L.LogWarning($"[TS][Fix] fallback CreateDelegate fail {ex1.Message.Split('\n')[0]}"); } }
+                                            try { del = TryCreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); }
+                                            if (del == null) try { del = TryCreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch (Exception ex1) { Plugin.L.LogWarning($"[TS][Fix] fallback TryCreateDelegate fail {ex1.Message.Split('\n')[0]}"); }
                                             if (del != null) {
                                                 try { Reflect.Set(targetF, "interactAction", del); } catch { try { targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(targetF, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
-                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved delType={delType.FullName}");
-                                            } else Plugin.L.LogWarning("[TS][Fix] del null after CreateDelegate");
+                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved delType={delType.FullName} via TryCreateDelegate");
+                                            } else Plugin.L.LogWarning("[TS][Fix] del null after TryCreateDelegate");
                                         } else Plugin.L.LogWarning("[TS][Fix] delType null cannot hijack");
                                     }
                                 } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
@@ -355,11 +378,11 @@ public static class TeleportConsoleInteractFix
                                         if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
                                         if (delType != null) {
                                             object del = null;
-                                            try { del = Delegate.CreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] re-hijack CreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch {} }
+                                            try { del = TryCreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] re-hijack TryCreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = TryCreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch {} }
                                             if (del != null) {
                                                 try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
-                                                Plugin.L.LogInfo($"[TS][Fix] re-hijacked delegate for already single console={t.GetInstanceID()} delType={delType.FullName}");
-                                            }
+                                                Plugin.L.LogInfo($"[TS][Fix] re-hijacked delegate for already single console={t.GetInstanceID()} delType={delType.FullName} via TryCreateDelegate");
+                                            } else Plugin.L.LogWarning("[TS][Fix] re-hijack del null after TryCreateDelegate");
                                         }
                                     }
                                 } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] re-hijack fail {ex.Message.Split('\n')[0]}"); }
@@ -627,16 +650,19 @@ public static class TeleportConsoleInteractFix
             try { Reflect.Set(nd, "interactButtonName", btn); } catch { try { nd.GetType().GetField("interactButtonName").SetValue(nd, btn); } catch {} }
             try { Reflect.Set(nd, "holdingTime", 0f); } catch { try { nd.GetType().GetField("holdingTime").SetValue(nd, 0f); } catch {} }
             try { Reflect.Set(nd, "interactObjectTemp", t); } catch {}
-            // delegate
+            // delegate via TryCreateDelegate (IL2CPP-compatible)
             object del = null;
             try
             {
                 if (_interactDelegateType != null && handler != null)
-                    del = Delegate.CreateDelegate(_interactDelegateType, handler);
-                else
-                    del = Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), handler);
-            } catch { try { del = Delegate.CreateDelegate(_interactDelegateType, handler); } catch {} }
+                    del = TryCreateDelegate(_interactDelegateType, handler);
+                if (del == null && handler != null)
+                    del = TryCreateDelegate(typeof(InteractManager.InteractDelegate), handler);
+                if (del == null && _interactDelegateType != null && handler != null)
+                    del = TryCreateDelegate(_interactDelegateType, handler);
+            } catch {}
             if (del != null) try { Reflect.Set(nd, "interactAction", del); } catch { try { nd.GetType().GetField("interactAction").SetValue(nd, del); } catch {} }
+            else Plugin.L.LogWarning($"[TS][Fix] CreateInteractData delegate null str={str}");
             return nd;
         } catch { return null; }
     }
@@ -716,8 +742,9 @@ public static class TeleportConsoleInteractFix
     {
         try
         {
-            if (_interactDelegateType != null) return Delegate.CreateDelegate(_interactDelegateType, mi);
-            return Delegate.CreateDelegate(typeof(InteractManager.InteractDelegate), mi);
+            var d = _interactDelegateType != null ? TryCreateDelegate(_interactDelegateType, mi) : null;
+            if (d != null) return d;
+            return TryCreateDelegate(typeof(InteractManager.InteractDelegate), mi);
         } catch { return null; }
     }
 
@@ -751,6 +778,76 @@ public static class TeleportConsoleInteractFix
     {
         try { EnsureTypeCache(); var uiType = _interactUIType ?? AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
         Plugin.L.LogInfo("[TS][Fix] OnExit");
+    }
+
+    private static object TryCreateDelegate(Type delType, MethodInfo mi)
+    {
+        if (delType == null || mi == null) return null;
+        try { var d0 = Delegate.CreateDelegate(delType, mi); if (d0 != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate System success delType={delType.FullName}"); return d0; } } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate System fail delType={delType.FullName} err={ex.Message.Split('\n')[0]}"); }
+        try
+        {
+            var ilType = SafeTypeByName("Il2CppSystem.Delegate");
+            if (ilType != null)
+            {
+                var m = ilType.GetMethod("CreateDelegate", BindingFlags.Public | BindingFlags.Static, null, new Type[]{ typeof(Type), typeof(MethodInfo) }, null);
+                if (m != null)
+                {
+                    var d = m.Invoke(null, new object[]{ delType, mi });
+                    if (d != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate via Il2CppSystem.Delegate success delType={delType.FullName}"); return d; }
+                }
+            }
+        } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate Il2Cpp fail {ex2.Message.Split('\n')[0]}"); }
+        try
+        {
+            try { RuntimeHelpers.PrepareMethod(mi.MethodHandle); } catch {}
+            var ptr = mi.MethodHandle.GetFunctionPointer();
+            if (ptr != IntPtr.Zero)
+            {
+                var del = Activator.CreateInstance(delType, new object[]{ null, ptr });
+                if (del != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate via Activator IntPtr success delType={delType.FullName} ptr=0x{ptr.ToInt64():X}"); return del; }
+            }
+        } catch (Exception ex3) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate Activator fail {ex3.Message.Split('\n')[0]}"); }
+        return null;
+    }
+
+    private static bool CommuDelegatePrefix(object __instance, object obj)
+    {
+        try
+        {
+            var c = _currentConsole;
+            if (c == null || c.attr == null || c.attr.id != 900101)
+            {
+                try
+                {
+                    var list = TeleportObjectCache.FindAllById(900101);
+                    var player = GetPlayerTransform();
+                    if (player != null && list != null && list.Count > 0)
+                    {
+                        TerrainObject best = null; float bestD2 = 36f;
+                        foreach (var t in list)
+                        {
+                            if (t == null || t.transform == null) continue;
+                            float d2 = (t.transform.position - player.position).sqrMagnitude;
+                            if (d2 < bestD2) { bestD2 = d2; best = t; }
+                        }
+                        if (best != null) c = best;
+                    }
+                } catch {}
+            }
+            if (c == null || c.attr == null || c.attr.id != 900101) return true;
+            try
+            {
+                var player = GetPlayerTransform();
+                if (player != null)
+                {
+                    float d2 = (c.transform.position - player.position).sqrMagnitude;
+                    if (d2 > 36f) return true;
+                }
+            } catch {}
+            try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(c); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
+            Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted -> menu console={c.GetInstanceID()} pos={c.transform.position} objParam={obj?.GetType().FullName ?? "null"}");
+            return false;
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix err {e.Message.Split('\n')[0]}"); return true; }
     }
 
     public static bool CommuExitPrefix(object __instance)
