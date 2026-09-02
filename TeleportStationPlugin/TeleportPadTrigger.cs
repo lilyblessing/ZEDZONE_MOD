@@ -112,7 +112,7 @@ public class TeleportPadTrigger : MonoBehaviour
     {
         try
         {
-            // 激活条件：已绑定 && 圆盘通电 && 电池≥10000Wh
+            // P6 发送方判定：已绑 + 供电(AND) + 电池≥10000；接收方只需已上线(已绑+供电)
             long padKey = GetInstanceKey(pad);
             long consoleKey = TeleportBindingManager.GetBoundConsole(padKey);
             if (consoleKey == 0)
@@ -127,7 +127,36 @@ public class TeleportPadTrigger : MonoBehaviour
                 ShowBubble("未绑定");
                 return;
             }
-            // 通电判定：复用 TeleportBindingManager.IsActive 的通电部分
+            // P6 新增：未选时不触发任何传送逻辑（仅提示，不进倒计时）
+            long selectedKey = TeleportConsoleSelection.GetSelectedKey(consoleKey);
+            if (selectedKey == 0)
+            {
+                // 节流：每进入一次提示一次（由 _activePad 去重保证）
+                ShowBubble("请选择目的地");
+                Plugin.L?.LogInfo($"[TS][Teleport] 未选择目的地 console={consoleKey} pad={pad.name}");
+                return;
+            }
+            var selectedPad = FindByKey(selectedKey) as TerrainObject;
+            if (selectedPad == null)
+            {
+                ShowBubble("目的地失效");
+                Plugin.L?.LogInfo($"[TS][Teleport] 目的地失效 selected={selectedKey}");
+                TeleportConsoleSelection.ClearByKey(consoleKey);
+                return;
+            }
+            // 接收方必须已上线（已绑+供电）
+            if (!TeleportConsoleSelection.IsOnline(selectedPad))
+            {
+                ShowBubble("目的地离线");
+                Plugin.L?.LogInfo($"[TS][Teleport] 目的地离线 pad={selectedPad.name} key={selectedKey}");
+                return;
+            }
+            if (selectedPad == pad)
+            {
+                ShowBubble("不能传送至本站");
+                return;
+            }
+            // 发送方供电判定（AND）
             var pd = GetProductionData(pad);
             bool powered = false;
             float diagSufficient = -1f; int diagListCount = -1; bool diagConsuming = false;
@@ -144,7 +173,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 } catch (Exception ex) { Plugin.L?.LogWarning($"[TS][Teleport] 通电判定异常: {ex.Message}"); }
             }
             else { diagSufficient = -999; diagListCount = -999; }
-            Plugin.L?.LogInfo($"[TS][Teleport] 通电判定 pad={pad.name} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered}");
+            Plugin.L?.LogInfo($"[TS][Teleport] 发送方通电判定 pad={pad.name} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered} 目的地={selectedPad.name}在线={TeleportConsoleSelection.IsOnline(selectedPad)}");
             if (!powered)
             {
                 ShowBubble("未供电");
@@ -160,13 +189,25 @@ public class TeleportPadTrigger : MonoBehaviour
 
             // 通过 → 启动 5s 倒计时
             var ui = TeleportCountdownUI.EnsureExists();
-            // 确保 entrant Transform 正确（载具时用 vehicle 根）
             var sumBefore = TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad));
-            Plugin.L?.LogInfo($"[TS][Teleport] 倒计时开始 pad={pad.name} sumBefore={sumBefore:F0} entrant={(inVehicle?"vehicle":"player")}");
+            Plugin.L?.LogInfo($"[TS][Teleport] 倒计时开始 pad={pad.name} sumBefore={sumBefore:F0} entrant={(inVehicle?"vehicle":"player")} target={selectedPad.name}");
+            // 捕获 selectedPad/selectedKey/consoleKey 供回调使用
+            TerrainObject targetPadCaptured = selectedPad;
             ui.ShowCountdown(pad.transform, entrantTr, () =>
             {
                 Plugin.L?.LogInfo($"[TS][Teleport] 倒计时完成回调 pad={pad.name} sumBefore2={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
-                // 倒计时完成回调：先扣电再传送
+                // 二次校验：选中仍在线 & 发送方仍满足
+                if (targetPadCaptured == null || !TeleportConsoleSelection.IsOnline(targetPadCaptured))
+                {
+                    ShowBubble("目的地离线");
+                    return;
+                }
+                if (!TeleportConsoleSelection.IsOnline(pad))
+                {
+                    // 发送方离线（供电丢失）
+                    ShowBubble("未供电");
+                    return;
+                }
                 if (!TeleportBatteryManager.HasEnoughCharge(pad))
                 {
                     ShowBubble("电量不足");
@@ -179,11 +220,17 @@ public class TeleportPadTrigger : MonoBehaviour
                     return;
                 }
                 Plugin.L?.LogInfo($"[TS][Teleport] 扣电成功 pad={pad.name} sumAfter={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
-                // 执行传送至对方圆盘
-                var targetPad = FindTargetPad(pad);
-                Vector3 targetPos = targetPad != null ? targetPad.transform.position : pad.transform.position + new Vector3(10,0,0);
-                // 若找对端失败，尝试控制台附近空地
-                if (targetPad == null && console != null) targetPos = console.transform.position + new Vector3(2,0,0);
+                // 目标点：选中圆盘中心 +1.2m 偏移，补地形高度
+                Vector3 targetPos = targetPadCaptured.transform.position + new Vector3(1.2f, 0f, 0f);
+                try
+                {
+                    var mc = MapController.instance;
+                    if (mc != null)
+                    {
+                        float gz = mc.GetTerrainTempHeightByWorldPosition(new Vector2(targetPos.x, targetPos.y));
+                        if (Math.Abs(gz) > 0.01f) targetPos.z = gz;
+                    }
+                } catch {}
 
                 bool ok = false;
                 try
@@ -191,10 +238,15 @@ public class TeleportPadTrigger : MonoBehaviour
                     GameObject go = entrantComp?.gameObject ?? entrantTr?.gameObject;
                     if (go != null) ok = TeleportExecutionManager.TryTeleport(go, targetPos);
                 } catch {}
-                Plugin.L?.LogInfo($"[TS][Teleport] 传送 {(ok?"成功":"失败")} entrant={(inVehicle?"vehicle":"player")} target={targetPos.x:F1},{targetPos.y:F1}");
+                Plugin.L?.LogInfo($"[TS][Teleport] 传送 {(ok?"成功":"失败")} entrant={(inVehicle?"vehicle":"player")} target={targetPos.x:F1},{targetPos.y:F1} 选中={targetPadCaptured.name}");
                 if (!ok) ShowBubble("传送失败");
+                else
+                {
+                    // 传后清空选择（发送方控制台）
+                    try { TeleportConsoleSelection.ClearByKey(consoleKey); Plugin.L.LogInfo($"[TS][Teleport] 已清空选择 console={consoleKey}"); } catch {}
+                }
             });
-            Plugin.L?.LogInfo($"[TS][Teleport] 开始倒计时 pad={pad.name} entrant={(inVehicle?"vehicle":"player")}");
+            Plugin.L?.LogInfo($"[TS][Teleport] 开始倒计时 pad={pad.name} entrant={(inVehicle?"vehicle":"player")} target={selectedPad.name}");
         }
         catch (Exception e) { Plugin.L?.LogWarning($"[TS][Teleport] TryStart异常: {e.Message}"); }
     }

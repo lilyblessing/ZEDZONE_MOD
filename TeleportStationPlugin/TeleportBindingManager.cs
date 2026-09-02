@@ -318,8 +318,9 @@ public static class TeleportBindingManager
             }
             catch { }
             Save();
+            try { TeleportConsoleSelection.ClearByKey(cid); } catch {}
             ShowHint("已解绑", isError: false);
-            Plugin.L.LogInfo($"[TS][Bind] 解绑 console={cid} pad={pid}");
+            Plugin.L.LogInfo($"[TS][Bind] 解绑 console={cid} pad={pid} 并清空选择");
             return true;
         }
         catch { return false; }
@@ -607,7 +608,7 @@ public static class TeleportBindingManager
 }
 
 /// <summary>
-/// P4 轮询控制器：玩家靠近控制台按 E 自动就近绑定（50m），H 键解绑；每帧零分配，失败静默。
+/// P4 轮询控制器：玩家靠近控制台按 E 自动就近绑定（20m），H 键解绑；P6 新增：已绑控制台按 E 打开选点面板（已上线亮/离线灰，仅选中后圆盘才触发传送）。
 /// </summary>
 public class TeleportBindingController : MonoBehaviour
 {
@@ -618,6 +619,14 @@ public class TeleportBindingController : MonoBehaviour
         {
             TeleportBindingManager.EnsureP4Hooks();
             TeleportBindingManager.CleanupStale();
+            try { TeleportConsoleSelection.CleanupStale(); } catch {}
+            // 若选点面板打开，E/H 不再处理绑定，ESC 由面板自行关闭；可按 H 关闭面板
+            var ui = TeleportConsoleUI.Instance;
+            if (ui != null && ui.IsOpen)
+            {
+                if (Input.GetKeyDown(KeyCode.H)) { try { ui.Close(); } catch {} }
+                return;
+            }
             if (Time.unscaledTime < _nextCheck) return;
             _nextCheck = Time.unscaledTime + 0.2f;
             if (!Input.GetKeyDown(KeyCode.E) && !Input.GetKeyDown(KeyCode.H)) return;
@@ -625,10 +634,31 @@ public class TeleportBindingController : MonoBehaviour
             if (player == null) return;
             var console = FindNearestConsole(player.position, 3f);
             if (console == null) return;
-            if (Input.GetKeyDown(KeyCode.E)) TeleportBindingManager.TryAutoBindNearest(console);
-            else if (Input.GetKeyDown(KeyCode.H)) TeleportBindingManager.TryUnbind(console);
+            if (Input.GetKeyDown(KeyCode.E))
+            {
+                long ck = GetInstanceKey(console);
+                if (TeleportBindingManager.IsBound(ck))
+                {
+                    // 已绑 → 打开选点面板
+                    try { TeleportConsoleUI.EnsureExists().ShowForConsole(console); Plugin.L.LogInfo($"[TS][Bind] 打开选点面板 console={ck}"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Bind] 打开面板异常: {ex.Message}"); }
+                }
+                else
+                {
+                    TeleportBindingManager.TryAutoBindNearest(console);
+                }
+            }
+            else if (Input.GetKeyDown(KeyCode.H))
+            {
+                bool ok = TeleportBindingManager.TryUnbind(console);
+                if (ok) { try { TeleportConsoleSelection.Clear(console); } catch {} }
+            }
         }
         catch { }
+    }
+
+    private static long GetInstanceKey(TerrainObject t)
+    {
+        try { return (long)t.GetInstanceID(); } catch { try { return (long)t.Pointer; } catch { return t.GetHashCode(); } }
     }
 
     private Transform GetPlayerTransform()
