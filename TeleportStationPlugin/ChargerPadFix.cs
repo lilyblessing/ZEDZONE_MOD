@@ -40,6 +40,8 @@ public static class ChargerPadFix
     private static bool _dicDiag;
     private static bool _buildDiag;
     private static readonly System.Collections.Generic.List<object> _knownClones = new();
+    private static Il2CppSystem.Type _il2cppProdType;
+    private static Il2CppSystem.Type _il2cppStirType;
 
     // ═══ v0.9.22 R12-2 克隆实例注册表（OnEnable 记录，不依赖可见性）═══
     public static void OnEnableRecorder_P(TerrainObject_Production __instance)
@@ -346,12 +348,19 @@ public static class ChargerPadFix
 
     // ── v0.9.12 R3：表+桶注册兜底（重扫前把克隆塞回游戏视线）──
     // ── v0.9.14 R6-1：事件驱动补表（重扫前用 FindObjectsOfType 含 inactive 回找回克隆实例）──
+    private static void EnsureTypeCacheForClones()
+    {
+        try { if (_il2cppProdType == null) _il2cppProdType = Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"); } catch {}
+        try { if (_il2cppStirType == null) _il2cppStirType = Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"); } catch {}
+    }
+
     private static void EnsureClonesInTables()
     {
+        try { EnsureTypeCacheForClones(); } catch {}
         try
         {
             // hidden 存量实例（FindObjectsOfType 默认跳过 HideAndDontSave/HideInHierarchy）→ 必须 Resources 通道 — 900102
-            var hiddenRaw = UnityEngine.Resources.FindObjectsOfTypeAll(Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
+            var hiddenRaw = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppProdType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
             if (hiddenRaw != null)
             {
                 for (int h = 0; h < hiddenRaw.Length; h++)
@@ -373,7 +382,7 @@ public static class ChargerPadFix
                 }
             }
             // 900102 → ActiveObjects_Production
-            var prodsRaw = UnityEngine.Object.FindObjectsOfType(Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
+            var prodsRaw = UnityEngine.Object.FindObjectsOfType(_il2cppProdType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
             if (prodsRaw != null)
             {
                 for (int i = 0; i < prodsRaw.Length; i++)
@@ -396,7 +405,7 @@ public static class ChargerPadFix
         try
         {
             // hidden 存量实例（FindObjectsOfType 默认跳过 HideAndDontSave/HideInHierarchy）→ 必须 Resources 通道 — 900103
-            var hiddenRaw2 = UnityEngine.Resources.FindObjectsOfTypeAll(Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
+            var hiddenRaw2 = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppStirType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
             if (hiddenRaw2 != null)
             {
                 for (int h = 0; h < hiddenRaw2.Length; h++)
@@ -418,7 +427,7 @@ public static class ChargerPadFix
                 }
             }
             // 900103 → ActiveObjects_StirlingGenerator
-            var stirsRaw = UnityEngine.Object.FindObjectsOfType(Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
+            var stirsRaw = UnityEngine.Object.FindObjectsOfType(_il2cppStirType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
             if (stirsRaw != null)
             {
                 for (int i = 0; i < stirsRaw.Length; i++)

@@ -30,6 +30,10 @@ public static class TeleportConsoleInteractFix
     private static MethodInfo _mAddEnter;
     private static MethodInfo _mRemove;
     private static MethodInfo _mAddData;
+    private static Type _playerCtrlType;
+    private static Type _humanCtrlType;
+    private static Type _interactUIType;
+    private static Type _interactUITerrainType;
     private static TerrainObject _currentConsole;
     private static float _nextTick = -1f;
     private const float TickInterval = 0.5f;
@@ -89,6 +93,10 @@ public static class TeleportConsoleInteractFix
         try { if (_interactDataType == null) _interactDataType = AccessTools.TypeByName("InteractData"); } catch {}
         try { if (_interactObjDataType == null) _interactObjDataType = AccessTools.TypeByName("InteractObjectData"); } catch {}
         try { if (_interactDelegateType == null) _interactDelegateType = AccessTools.TypeByName("InteractManager+InteractDelegate") ?? AccessTools.TypeByName("InteractManager.InteractDelegate"); } catch {}
+        try { if (_playerCtrlType == null) _playerCtrlType = AccessTools.TypeByName("PlayerController"); } catch {}
+        try { if (_humanCtrlType == null) _humanCtrlType = AccessTools.TypeByName("HumanCharacterController"); } catch {}
+        try { if (_interactUIType == null) _interactUIType = AccessTools.TypeByName("InteractUI"); } catch {}
+        try { if (_interactUITerrainType == null) _interactUITerrainType = AccessTools.TypeByName("InteractUI_TerrainObject"); } catch {}
         try
         {
             if (_fInteractList == null && _interactMgrType != null)
@@ -225,10 +233,39 @@ public static class TeleportConsoleInteractFix
         } catch { return null; }
     }
 
+    private static Transform GetTransformForIo(object io)
+    {
+        try { if (io is Component c) return c.transform; } catch {}
+        try { if (io is GameObject go) return go.transform; } catch {}
+        try
+        {
+            var tr = io?.GetType().GetProperty("transform", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(io) as Transform;
+            if (tr != null) return tr;
+        } catch {}
+        try
+        {
+            var tr2 = AccessTools.Property(io?.GetType(), "transform")?.GetValue(io) as Transform;
+            if (tr2 != null) return tr2;
+        } catch {}
+        try
+        {
+            var goProp = io?.GetType().GetProperty("gameObject", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.GetValue(io) as GameObject;
+            if (goProp != null) return goProp.transform;
+        } catch {}
+        return null;
+    }
+
     private static bool HasInteractFor(object listObj, TerrainObject t)
     {
         try
         {
+            if (listObj == null || t == null) return false;
+            var tTrans = t.transform;
+            int tInstId = 0; int goInstId = 0;
+            try { tInstId = tTrans != null ? tTrans.GetInstanceID() : 0; } catch {}
+            try { goInstId = t.gameObject != null ? t.gameObject.GetInstanceID() : 0; } catch {}
+            Vector3 tPos = Vector3.zero;
+            try { tPos = tTrans != null ? tTrans.position : t.transform.position; } catch {}
             int count = 0;
             try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch { return false; } }
             var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
@@ -238,12 +275,24 @@ public static class TeleportConsoleInteractFix
                 try { if (getItem != null) data = getItem.Invoke(listObj, new object[] { i }); } catch { continue; }
                 if (data == null) continue;
                 object io = null;
-                try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject").GetValue(data); } catch {} }
+                try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
                 if (io == null) continue;
-                try { if (io is GameObject go && t.gameObject == go) return true; } catch {}
-                try { if (io == (object)t) return true; } catch {}
-                try { if (io is Component c && c.transform == t.transform) return true; } catch {}
-                try { if (io is GameObject g2 && g2.transform == t.transform) return true; } catch {}
+                // 1. GameObject InstanceID
+                try { if (io is GameObject go && goInstId != 0 && go.GetInstanceID() == goInstId) return true; } catch {}
+                // 2. Direct reference (fallback)
+                try { if (ReferenceEquals(io, (object)t)) return true; } catch {}
+                try { if (ReferenceEquals(io, (object)t.gameObject)) return true; } catch {}
+                // 3. Transform InstanceID (IL2CPP wrapper-safe)
+                try
+                {
+                    var ioTrans = GetTransformForIo(io);
+                    if (ioTrans != null && tTrans != null)
+                    {
+                        if (ioTrans.GetInstanceID() == tInstId) return true;
+                        // 4. Position proximity as last resort (0.1m)
+                        if ((ioTrans.position - tPos).sqrMagnitude < 0.01f) return true;
+                    }
+                } catch {}
             }
         } catch {}
         return false;
@@ -253,10 +302,12 @@ public static class TeleportConsoleInteractFix
     {
         try
         {
-            var pcType = AccessTools.TypeByName("PlayerController") ?? AccessTools.TypeByName("HumanCharacterController");
+            EnsureTypeCache();
+            var pcType = _playerCtrlType ?? _humanCtrlType ?? AccessTools.TypeByName("PlayerController") ?? AccessTools.TypeByName("HumanCharacterController");
             if (pcType != null)
             {
                 var inst = AccessTools.Property(pcType, "instance")?.GetValue(null) ?? AccessTools.Field(pcType, "instance")?.GetValue(null);
+                if (inst == null) try { inst = pcType.GetProperty("instance", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Static)?.GetValue(null); } catch {}
                 if (inst != null)
                 {
                     var tr = AccessTools.Property(inst.GetType(), "transform")?.GetValue(inst) as Transform;
@@ -285,9 +336,9 @@ public static class TeleportConsoleInteractFix
             if (listObj == null) { Plugin.L.LogWarning("[TS][Fix] interactObjectDataList null"); return false; }
 
             // 先创建3个新数据，成功后再清空旧列表（避免失败后留空）
-            var nd1 = CreateInteractData("重命名传送站", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
-            var nd2 = CreateInteractData("选择传送目的地", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
-            var nd3 = CreateInteractData("退出", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
+            var nd1 = CreateInteractData("重命名传送站", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
+            var nd2 = CreateInteractData("选择传送目的地", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
+            var nd3 = CreateInteractData("退出", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
             if (nd1 == null || nd2 == null || nd3 == null) { Plugin.L.LogWarning($"[TS][Fix] CreateInteractData 失败 nd1={nd1!=null} nd2={nd2!=null} nd3={nd3!=null}"); return false; }
 
             // 遍历 listObj 寻找匹配 t.gameObject
@@ -296,19 +347,35 @@ public static class TeleportConsoleInteractFix
             try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch { Plugin.L.LogWarning("[TS][Fix] list Count 获取失败"); } }
             Plugin.L.LogInfo($"[TS][Fix] 遍历 interactObjectDataList count={count} 寻找 console={t.GetInstanceID()}");
             var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
+            var tTrans2 = t.transform;
+            int tInstId2 = 0; int goInstId2 = 0;
+            Vector3 tPos2 = Vector3.zero;
+            try { tInstId2 = tTrans2 != null ? tTrans2.GetInstanceID() : 0; } catch {}
+            try { goInstId2 = t.gameObject != null ? t.gameObject.GetInstanceID() : 0; } catch {}
+            try { tPos2 = tTrans2 != null ? tTrans2.position : Vector3.zero; } catch {}
             for (int i = 0; i < count; i++)
             {
                 object data = null;
                 try { if (getItem != null) data = getItem.Invoke(listObj, new object[] { i }); else data = Reflect.Get(listObj, i.ToString()); } catch (Exception exi) { Plugin.L.LogWarning($"[TS][Fix] getItem[{i}] 异常 {exi.Message.Split('\n')[0]}"); continue; }
                 if (data == null) continue;
                 object io = null;
-                try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject").GetValue(data); } catch {} }
+                try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
                 if (io == null) continue;
                 bool match = false;
-                try { if (io is GameObject go && t.gameObject == go) match = true; } catch {}
-                try { if (io == (object)t) match = true; } catch {}
-                try { if (io is Component c && c.transform == t.transform) match = true; } catch {}
-                try { if (io is GameObject g2 && g2.transform == t.transform) match = true; } catch {}
+                try { if (io is GameObject go && goInstId2 != 0 && go.GetInstanceID() == goInstId2) match = true; } catch {}
+                try { if (ReferenceEquals(io, (object)t)) match = true; } catch {}
+                if (!match)
+                {
+                    try
+                    {
+                        var ioTrans = GetTransformForIo(io);
+                        if (ioTrans != null && tTrans2 != null)
+                        {
+                            if (ioTrans.GetInstanceID() == tInstId2) match = true;
+                            else if ((ioTrans.position - tPos2).sqrMagnitude < 0.01f) match = true;
+                        }
+                    } catch {}
+                }
                 if (match) { targetData = data; Plugin.L.LogInfo($"[TS][Fix] 命中 targetData index={i} io={io.GetType().Name}"); break; }
             }
             if (targetData == null) { Plugin.L.LogWarning($"[TS][Fix] 未找到 targetData for console {t.GetInstanceID()}"); return false; }
@@ -371,9 +438,9 @@ public static class TeleportConsoleInteractFix
             {
                 try { _mRemove.Invoke(im, new object[] { t.gameObject }); } catch {}
             }
-            var nd1 = CreateInteractData("重命名传送站", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
-            var nd2 = CreateInteractData("选择传送目的地", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
-            var nd3 = CreateInteractData("退出", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
+            var nd1 = CreateInteractData("重命名传送站", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
+            var nd2 = CreateInteractData("选择传送目的地", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
+            var nd3 = CreateInteractData("退出", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
             if (nd1 == null || nd2 == null || nd3 == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect Create 失败"); return false; }
             // 构造 InteractObjectData
             object iod = null;
@@ -420,9 +487,9 @@ public static class TeleportConsoleInteractFix
             var del2 = CreateDelegateFor(typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static));
             var del3 = CreateDelegateFor(typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static));
             if (del1 == null || del2 == null || del3 == null) return false;
-            _mAddEnter.Invoke(t, new object[] { "重命名传送站", del1, "F" });
-            _mAddEnter.Invoke(t, new object[] { "选择传送目的地", del2, "F" });
-            _mAddEnter.Invoke(t, new object[] { "退出", del3, "F" });
+            _mAddEnter.Invoke(t, new object[] { "重命名传送站", del1, "Object Interact" });
+            _mAddEnter.Invoke(t, new object[] { "选择传送目的地", del2, "Object Interact" });
+            _mAddEnter.Invoke(t, new object[] { "退出", del3, "Object Interact" });
             Plugin.L.LogInfo($"[TS][Fix] Fallback AddEnterInteract 900101 三项已注入");
             return true;
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Fallback 异常: {e.Message.Split('\n')[0]}"); return false; }
@@ -442,8 +509,8 @@ public static class TeleportConsoleInteractFix
         try
         {
             // 关闭 InteractUI
-            try { var uiType = AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
-            try { var t = AccessTools.TypeByName("InteractUI_TerrainObject"); var inst2 = AccessTools.Property(t, "instance")?.GetValue(null); var m2 = t?.GetMethod("ClosePanel"); m2?.Invoke(inst2, null); } catch {}
+            try { EnsureTypeCache(); var uiType = _interactUIType ?? AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
+            try { EnsureTypeCache(); var t = _interactUITerrainType ?? AccessTools.TypeByName("InteractUI_TerrainObject"); var inst2 = AccessTools.Property(t, "instance")?.GetValue(null); var m2 = t?.GetMethod("ClosePanel"); m2?.Invoke(inst2, null); } catch {}
             var c = _currentConsole;
             if (c == null) { Plugin.L.LogWarning("[TS][Fix] OnRename 无 console"); return; }
             TeleportStationRenameUI.EnsureExists().Show(c);
@@ -455,7 +522,7 @@ public static class TeleportConsoleInteractFix
     {
         try
         {
-            try { var uiType = AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
+            try { EnsureTypeCache(); var uiType = _interactUIType ?? AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
             var c = _currentConsole;
             if (c == null) { Plugin.L.LogWarning("[TS][Fix] OnSelectList 无 console"); return; }
             TeleportConsoleUI.EnsureExists().ShowForConsole(c);
@@ -465,7 +532,7 @@ public static class TeleportConsoleInteractFix
 
     public static void OnExit(object obj)
     {
-        try { var uiType = AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
+        try { EnsureTypeCache(); var uiType = _interactUIType ?? AccessTools.TypeByName("InteractUI"); var inst = AccessTools.Property(uiType, "instance")?.GetValue(null); var m = uiType?.GetMethod("ClosePanel"); m?.Invoke(inst, null); } catch {}
         Plugin.L.LogInfo("[TS][Fix] OnExit");
     }
 
