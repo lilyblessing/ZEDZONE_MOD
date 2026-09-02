@@ -22,12 +22,17 @@ public class TeleportMapManager : MonoBehaviour
 {
     public static TeleportMapManager Instance { get; private set; }
     public static TerrainObject PendingConsole;
+    // P6.3: 仅当 PendingConsole != null 时地图为传送选点模式，原生 M 不显示标记
+    public static bool IsTeleportMapMode => PendingConsole != null;
+    // 兼容 ComputerFix 的 pending
+    public static bool IsTeleportActive => PendingConsole != null || TeleportConsoleComputerFix.PendingConsoleForMap != null;
 
     private Dictionary<long, GameObject> _markers = new();
     private Dictionary<long, Text> _labels = new();
     private Sprite _markerSprite;
     private float _nextRefresh = -1f;
     private bool _mapOpenLast = false;
+    private float _pendingClearAt = -1f;
     private static bool _patched;
 
     // ===== 静态 patch =====
@@ -91,8 +96,49 @@ public class TeleportMapManager : MonoBehaviour
             var mp = GetMapPanelInstance();
             bool isOpen = mp != null && IsMapOpen(mp);
             if (isOpen && !_mapOpenLast) _nextRefresh = 0f;
+            bool wasOpen = _mapOpenLast;
             _mapOpenLast = isOpen;
-            if (!isOpen) return;
+            if (!isOpen)
+            {
+                // 离开地图：若是传送模式，保留 Pending 直到选择完成；否则清理标记
+                if (!IsTeleportMapMode && _markers.Count > 0)
+                {
+                    ClearAllMarkers();
+                }
+                if (wasOpen && IsTeleportMapMode)
+                {
+                    // 传送地图刚刚关闭：清标记，下次原生 M 不会误带
+                    if (_markers.Count > 0) ClearAllMarkers();
+                    // 若用户是按 ESC/关闭按钮且未选点，3s 后自动取消 Pending（防止下次 M 误判为传送模式）
+                    // 记录关闭时间
+                    try { _pendingClearAt = Time.unscaledTime + 3f; } catch { _pendingClearAt = -1f; }
+                }
+                // 处理 Pending 超时清理（地图已关 + 未选）
+                if (IsTeleportMapMode && _pendingClearAt > 0f)
+                {
+                    float now2 = 0f; try { now2 = Time.unscaledTime; } catch { now2 = Time.realtimeSinceStartup; }
+                    if (now2 >= _pendingClearAt)
+                    {
+                        // 超时仍未选：取消选点模式，避免污染下次原生 M
+                        PendingConsole = null;
+                        try { TeleportConsoleComputerFix.PendingConsoleForMap = null; TeleportConsoleComputerFix.CurrentConsole = null; } catch {}
+                        _pendingClearAt = -1f;
+                        Plugin.L.LogInfo("[TS][Map] 传送地图未选点超时，已自动取消选点模式");
+                    }
+                }
+                // 若地图关闭且已选过（OnMarkerClick 已将 Pending 清空），则重置超时
+                if (!IsTeleportMapMode) _pendingClearAt = -1f;
+                return;
+            }
+            // 地图打开时：仅传送模式才刷新标记，原生 M 直接跳过
+            if (!IsTeleportMapMode)
+            {
+                if (_markers.Count > 0) ClearAllMarkers();
+                _pendingClearAt = -1f;
+                return;
+            }
+            // 传送模式打开中：取消超时
+            _pendingClearAt = -1f;
             float now = 0f;
             try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
             if (now < _nextRefresh) return;
@@ -100,6 +146,16 @@ public class TeleportMapManager : MonoBehaviour
             RefreshMarkers();
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] Update 异常: {ex.Message.Split('\n')[0]}"); }
+    }
+
+    private void ClearAllMarkers()
+    {
+        try
+        {
+            foreach (var kv in _markers) try { if (kv.Value != null) UnityEngine.Object.Destroy(kv.Value); } catch {}
+            _markers.Clear();
+            _labels.Clear();
+        } catch {}
     }
 
     // ===== RefreshMarkers =====
@@ -308,6 +364,8 @@ public class TeleportMapManager : MonoBehaviour
                 }
             } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Map] 关闭地图异常: {ex2.Message.Split('\n')[0]}"); }
             PendingConsole = null;
+            try { TeleportConsoleComputerFix.PendingConsoleForMap = null; TeleportConsoleComputerFix.CurrentConsole = null; } catch {}
+            try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] OnMarkerClick 异常: {ex.Message.Split('\n')[0]}"); }
     }
@@ -360,7 +418,9 @@ public class TeleportMapManager : MonoBehaviour
     public static void RequestOpenMap(TerrainObject console)
     {
         PendingConsole = console;
+        try { TeleportConsoleComputerFix.PendingConsoleForMap = console; TeleportConsoleComputerFix.CurrentConsole = console; } catch {}
         EnsureExists();
+        try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
         try
         {
             var pdaType = AccessTools.TypeByName("PDAPanel");

@@ -41,12 +41,8 @@ public class TeleportPadTrigger : MonoBehaviour
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
             _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
-            // 诊断：每 5s 打印一次扫描
-            if ((int)(now) % 5 == 0 && now - _nextScan < 0.6f)
-            {
-                var diagPads = FindAllPads();
-                Plugin.L?.LogInfo($"[TS][Teleport] 扫描 pads={diagPads.Count} player={(GetPlayer()!=null?"ok":"null")}");
-            }
+            // 诊断：已关闭高频扫描日志（原每5s刷屏，导致日志误判为错误）
+            // 仅在需要时手动打开：if ((int)(now) % 30 == 0) Log...
 
             // 若倒计时进行中，跳过新触发，让 CountdownUI 处理脱离取消
             if (TeleportCountdownUI.Instance != null && TeleportCountdownUI.Instance.IsCounting) return;

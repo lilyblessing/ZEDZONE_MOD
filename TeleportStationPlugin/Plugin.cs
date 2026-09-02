@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.42")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.43")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -352,11 +352,11 @@ public class Plugin : BasePlugin
         }
         catch (Exception e) { Log.LogError($"[TS] 源头注入 hook 异常: {e}"); }
 
-        // P6.1 旧劫持已退役（保留空壳兼容）
+        // P6.3 控制台劫持：屏蔽 900101 雇佣交互，改由 TeleportConsoleMenuUI 按F接管
         try { var h61 = new Harmony("com.zedzone.teleportstation.p61"); TeleportConsoleInteractFix.EnsurePatch(h61); } catch (Exception e) { Log.LogWarning($"[TS] 控制台劫持挂钩异常: {e.Message.Split('\n')[0]}"); }
-        // P6.2 控制台电脑菜单：E 原生保留，注入三项（命名/选点/退出）
+        // P6.2 控制台电脑菜单保留（兼容，但 900101 已不走 ComputerPanel，主路径为 MenuUI）
         try { var h62 = new Harmony("com.zedzone.teleportstation.p62"); TeleportConsoleComputerFix.EnsurePatch(h62); } catch (Exception e) { Log.LogWarning($"[TS] 控制台电脑菜单挂钩异常: {e.Message.Split('\n')[0]}"); }
-        // P6.2 地图标记：原生地图注入传送站图标
+        // P6.2 地图标记：仅传送模式显示
         try { var h63 = new Harmony("com.zedzone.teleportstation.p63"); TeleportMapManager.EnsurePatch(h63); } catch (Exception e) { Log.LogWarning($"[TS] 地图标记挂钩异常: {e.Message.Split('\n')[0]}"); }
 
         // v0.6.34：图标缓存提前到 Load（不等 20s 注册定时器），消除图标源头时序依赖
@@ -380,12 +380,14 @@ public class Plugin : BasePlugin
         try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportConsoleUI>(); Plugin.L.LogInfo("[TS] RegisterType TeleportConsoleUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportConsoleUI 失败: {e.Message}"); }
         try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportStationRenameUI>(); Plugin.L.LogInfo("[TS] RegisterType TeleportStationRenameUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportStationRenameUI 失败: {e.Message}"); }
         try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportMapManager>(); Plugin.L.LogInfo("[TS] RegisterType TeleportMapManager OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportMapManager 失败: {e.Message}"); }
+        try { Il2CppInterop.Runtime.Injection.ClassInjector.RegisterTypeInIl2Cpp<TeleportConsoleMenuUI>(); Plugin.L.LogInfo("[TS] RegisterType TeleportConsoleMenuUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] RegisterType TeleportConsoleMenuUI 失败: {e.Message}"); }
         try { AddComponent<TeleportPadTrigger>(); Plugin.L.LogInfo("[TS] AddComponent TeleportPadTrigger OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportPadTrigger 失败: {e.GetType().Name} {e.Message}"); }
         try { AddComponent<TeleportCountdownUI>(); Plugin.L.LogInfo("[TS] AddComponent TeleportCountdownUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportCountdownUI 失败: {e.GetType().Name} {e.Message}"); }
         try { AddComponent<TeleportAnchorTicker>(); Plugin.L.LogInfo("[TS] AddComponent TeleportAnchorTicker OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportAnchorTicker 失败: {e.GetType().Name} {e.Message}"); }
         try { AddComponent<TeleportConsoleUI>(); Plugin.L.LogInfo("[TS] AddComponent TeleportConsoleUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportConsoleUI 失败: {e.GetType().Name} {e.Message}"); }
         try { AddComponent<TeleportStationRenameUI>(); Plugin.L.LogInfo("[TS] AddComponent TeleportStationRenameUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportStationRenameUI 失败: {e.GetType().Name} {e.Message}"); }
         try { AddComponent<TeleportMapManager>(); Plugin.L.LogInfo("[TS] AddComponent TeleportMapManager OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportMapManager 失败: {e.GetType().Name} {e.Message}"); }
+        try { AddComponent<TeleportConsoleMenuUI>(); Plugin.L.LogInfo("[TS] AddComponent TeleportConsoleMenuUI OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] AddComponent TeleportConsoleMenuUI 失败: {e.GetType().Name} {e.Message}"); }
         try { TeleportExecutionManager.EnsurePatches(); Plugin.L.LogInfo("[TS] EnsurePatches P5 OK"); } catch (Exception e) { Plugin.L.LogWarning($"[TS] EnsurePatches 失败: {e.Message}"); }
         // P4 搬运放下主钩（探针实证：Build/Add 仅建/读档，搬运为已有实例位移 → HumanCharacterController.OnPlaceTerrainObject @0x18048A6F0 非虚 + TerrainObject.PlaceTerrainObject @0x18095A430 Slot27 双保险）
         try
@@ -400,7 +402,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.42 P6.2 控制台E/Q保留+三项菜单(命名/地图选点/退出)+20m自动互绑+地图图标 0.5s缓存");
+        Log.LogInfo("[TeleportStation] v0.9.43 P6.3 控制台F三项菜单(命名/地图选点/退出)+屏蔽雇佣+地图仅传送模式+日志降噪");
     }
 }
 
