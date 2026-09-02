@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.UI;
 using BepInEx;
@@ -34,6 +35,41 @@ public class TeleportMapManager : MonoBehaviour
     private bool _mapOpenLast = false;
     private float _pendingClearAt = -1f;
     private static bool _patched;
+    // 缓存 Type 避免每帧反射触发 GetTypesFromAssembly 刷日志
+    private static Type _mapPanelType;
+    private static Type _pdaPanelType;
+    private static Type _nameMgrType;
+    private static Type _basicCharType;
+    private static Type _humanCharType;
+    // 缓存 FieldInfo 避免每 pad 每 0.5s GetField
+    private static FieldInfo _fi_worldOffset;
+    private static FieldInfo _fi_mapScale;
+    private static FieldInfo _fi_center;
+    private static FieldInfo _fi_mapWidth;
+    private static FieldInfo _fi_mapHeight;
+    private static FieldInfo _fi_mapParent;
+    private static FieldInfo _fi_mapIconPrefab;
+    private static void EnsureTypeCache()
+    {
+        if (_mapPanelType == null) try { _mapPanelType = AccessTools.TypeByName("MapPanel"); } catch {}
+        if (_pdaPanelType == null) try { _pdaPanelType = AccessTools.TypeByName("PDAPanel"); } catch {}
+        if (_basicCharType == null) try { _basicCharType = AccessTools.TypeByName("BasicCharacterController"); } catch {}
+        if (_humanCharType == null && _basicCharType == null) try { _humanCharType = AccessTools.TypeByName("HumanCharacterController"); } catch {}
+        if (_nameMgrType == null) try { _nameMgrType = typeof(TeleportStationNameManager); } catch {}
+        try
+        {
+            if (_mapPanelType != null)
+            {
+                if (_fi_worldOffset == null) try { _fi_worldOffset = AccessTools.Field(_mapPanelType, "worldPositionOffset"); } catch {}
+                if (_fi_mapScale == null) try { _fi_mapScale = AccessTools.Field(_mapPanelType, "mapScaleFloat"); } catch {}
+                if (_fi_center == null) try { _fi_center = AccessTools.Field(_mapPanelType, "centerPoint"); } catch {}
+                if (_fi_mapWidth == null) try { _fi_mapWidth = AccessTools.Field(_mapPanelType, "mapWidth"); } catch {}
+                if (_fi_mapHeight == null) try { _fi_mapHeight = AccessTools.Field(_mapPanelType, "mapHeight"); } catch {}
+                if (_fi_mapParent == null) try { _fi_mapParent = AccessTools.Field(_mapPanelType, "mapParent"); } catch {}
+                if (_fi_mapIconPrefab == null) try { _fi_mapIconPrefab = AccessTools.Field(_mapPanelType, "mapIconPrefab_LocationMarker"); } catch {}
+            }
+        } catch {}
+    }
 
     // ===== 静态 patch =====
     public static void EnsurePatch(Harmony h)
@@ -42,7 +78,8 @@ public class TeleportMapManager : MonoBehaviour
         _patched = true;
         try
         {
-            var panelType = AccessTools.TypeByName("MapPanel");
+            EnsureTypeCache();
+            var panelType = _mapPanelType;
             if (panelType == null) { Plugin.L.LogWarning("[TS][Map] MapPanel 类型未找到"); return; }
             var init = AccessTools.Method(panelType, "Init");
             if (init != null)
@@ -68,6 +105,7 @@ public class TeleportMapManager : MonoBehaviour
     public static void MapGeneratePostfix(object __instance)
     {
         try { if (Instance != null) Instance._nextRefresh = 0f; } catch {}
+        try { Instance?.RefreshMarkers(); } catch {}
     }
 
     public static TeleportMapManager EnsureExists()
@@ -95,22 +133,23 @@ public class TeleportMapManager : MonoBehaviour
         {
             var mp = GetMapPanelInstance();
             bool isOpen = mp != null && IsMapOpen(mp);
-            if (isOpen && !_mapOpenLast) _nextRefresh = 0f;
+            if (isOpen && !_mapOpenLast)
+            {
+                // 事件驱动：地图刚打开时刷新一次
+                try { RefreshMarkers(); } catch {}
+            }
             bool wasOpen = _mapOpenLast;
             _mapOpenLast = isOpen;
             if (!isOpen)
             {
-                // 离开地图：若是传送模式，保留 Pending 直到选择完成；否则清理标记
-                if (!IsTeleportMapMode && _markers.Count > 0)
+                // 离开地图：始终清理标记（P6.4 允许 M 显示，但关闭时仍需清理避免残留）
+                if (_markers.Count > 0)
                 {
                     ClearAllMarkers();
                 }
                 if (wasOpen && IsTeleportMapMode)
                 {
-                    // 传送地图刚刚关闭：清标记，下次原生 M 不会误带
-                    if (_markers.Count > 0) ClearAllMarkers();
-                    // 若用户是按 ESC/关闭按钮且未选点，3s 后自动取消 Pending（防止下次 M 误判为传送模式）
-                    // 记录关闭时间
+                    // 传送地图刚刚关闭：若用户是按 ESC/关闭按钮且未选点，3s 后自动取消 Pending
                     try { _pendingClearAt = Time.unscaledTime + 3f; } catch { _pendingClearAt = -1f; }
                 }
                 // 处理 Pending 超时清理（地图已关 + 未选）
@@ -119,31 +158,19 @@ public class TeleportMapManager : MonoBehaviour
                     float now2 = 0f; try { now2 = Time.unscaledTime; } catch { now2 = Time.realtimeSinceStartup; }
                     if (now2 >= _pendingClearAt)
                     {
-                        // 超时仍未选：取消选点模式，避免污染下次原生 M
                         PendingConsole = null;
                         try { TeleportConsoleComputerFix.PendingConsoleForMap = null; TeleportConsoleComputerFix.CurrentConsole = null; } catch {}
                         _pendingClearAt = -1f;
                         Plugin.L.LogInfo("[TS][Map] 传送地图未选点超时，已自动取消选点模式");
                     }
                 }
-                // 若地图关闭且已选过（OnMarkerClick 已将 Pending 清空），则重置超时
                 if (!IsTeleportMapMode) _pendingClearAt = -1f;
                 return;
             }
-            // 地图打开时：仅传送模式才刷新标记，原生 M 直接跳过
-            if (!IsTeleportMapMode)
-            {
-                if (_markers.Count > 0) ClearAllMarkers();
-                _pendingClearAt = -1f;
-                return;
-            }
-            // 传送模式打开中：取消超时
+            // 地图打开时：P6.4 始终显示已绑 pad 的标记（不再按 IsTeleportMapMode 栅栏）
+            // 事件驱动：不再每 0.5s 轮询 Refresh，仅在 MapInit/Generate 或首次打开时刷新
             _pendingClearAt = -1f;
-            float now = 0f;
-            try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
-            if (now < _nextRefresh) return;
-            _nextRefresh = now + 0.5f;
-            RefreshMarkers();
+            // 保留 _nextRefresh 字段但不再用于高频轮询
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] Update 异常: {ex.Message.Split('\n')[0]}"); }
     }
@@ -165,6 +192,7 @@ public class TeleportMapManager : MonoBehaviour
         try
         {
             if (_markerSprite == null) LoadMarkerSprite();
+            else { /* 已缓存跳过 */ }
             var mp = GetMapPanelInstance();
             if (mp == null) return;
             var mapParent = GetMapParent(mp);
@@ -172,6 +200,15 @@ public class TeleportMapManager : MonoBehaviour
 
             var pads = CollectBoundPads();
             var alive = new HashSet<long>();
+
+            // 尝试获取原生 prefab 仅一次
+            GameObject prefab = null;
+            try
+            {
+                if (_fi_mapIconPrefab != null) prefab = _fi_mapIconPrefab.GetValue(mp) as GameObject;
+                if (prefab == null) prefab = Reflect.Get(mp, "mapIconPrefab_LocationMarker") as GameObject;
+            } catch {}
+
             foreach (var pad in pads)
             {
                 if (pad == null || pad.transform == null) continue;
@@ -184,67 +221,168 @@ public class TeleportMapManager : MonoBehaviour
 
                 if (!_markers.TryGetValue(padKey, out var go) || go == null)
                 {
-                    go = new GameObject($"TS_Marker_{padKey}");
-                    var rt = go.AddComponent<RectTransform>();
-                    rt.sizeDelta = new Vector2(36f, 36f);
-                    rt.anchorMin = new Vector2(0.5f, 0.5f);
-                    rt.anchorMax = new Vector2(0.5f, 0.5f);
-                    rt.pivot = new Vector2(0.5f, 0.5f);
-                    rt.anchoredPosition = anchoredPos;
-                    rt.localScale = Vector3.one;
+                    if (prefab != null)
+                    {
+                        try
+                        {
+                            go = UnityEngine.Object.Instantiate(prefab, mapParent);
+                            go.name = $"TS_Marker_{padKey}";
+                            var rt = go.GetComponent<RectTransform>();
+                            if (rt != null)
+                            {
+                                rt.anchorMin = new Vector2(0.5f, 0.5f);
+                                rt.anchorMax = new Vector2(0.5f, 0.5f);
+                                rt.pivot = new Vector2(0.5f, 0.5f);
+                                rt.anchoredPosition = anchoredPos;
+                                rt.localScale = Vector3.one;
+                                rt.sizeDelta = new Vector2(36f, 36f);
+                            }
+                            var img = go.GetComponent<Image>();
+                            if (img == null) try { img = go.GetComponentInChildren<Image>(true); } catch {}
+                            if (img != null)
+                            {
+                                if (_markerSprite != null) img.sprite = _markerSprite;
+                                img.preserveAspect = true;
+                                img.raycastTarget = false;
+                                img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+                            }
+                            // 非交互：移除 Button
+                            try { var btn = go.GetComponent<Button>(); if (btn != null) UnityEngine.Object.Destroy(btn); } catch {}
+                            try { var btns = go.GetComponentsInChildren<Button>(true); if (btns != null) foreach (var b in btns) if (b != null) UnityEngine.Object.Destroy(b); } catch {}
+                            var txt = go.GetComponentInChildren<Text>(true);
+                            if (txt != null)
+                            {
+                                txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                                txt.alignment = TextAnchor.UpperCenter;
+                                txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+                                txt.verticalOverflow = VerticalWrapMode.Overflow;
+                                txt.fontSize = 12;
+                                txt.fontStyle = FontStyle.Bold;
+                                txt.color = Color.white;
+                                ApplyFont(txt);
+                                // 去掉双特效：仅保留 Outline 或无，移除 Shadow
+                                try { var shadows = txt.GetComponents<Shadow>(); if (shadows != null) foreach (var s in shadows) if (s != null) UnityEngine.Object.Destroy(s); } catch {}
+                                try { var shadows2 = go.GetComponentsInChildren<Shadow>(true); if (shadows2 != null) foreach (var s in shadows2) if (s != null && s.gameObject == txt.gameObject) UnityEngine.Object.Destroy(s); } catch {}
+                                // 确保有 Outline（若无则添加一个），若已有则保留
+                                try
+                                {
+                                    var ol = txt.GetComponent<Outline>();
+                                    if (ol == null) { ol = txt.gameObject.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); }
+                                    else { ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); }
+                                } catch {}
+                                _labels[padKey] = txt;
+                            }
+                            else
+                            {
+                                // prefab 无 Text，回退创建一个 Label 子物体
+                                var labelGO = new GameObject("Label");
+                                labelGO.transform.SetParent(go.transform, false);
+                                var ntxt = labelGO.AddComponent<Text>();
+                                ntxt.alignment = TextAnchor.UpperCenter;
+                                ntxt.horizontalOverflow = HorizontalWrapMode.Overflow;
+                                ntxt.verticalOverflow = VerticalWrapMode.Overflow;
+                                ntxt.fontSize = 12;
+                                ntxt.fontStyle = FontStyle.Bold;
+                                ntxt.color = Color.white;
+                                ApplyFont(ntxt);
+                                var lrt = ntxt.rectTransform;
+                                lrt.anchorMin = new Vector2(0.5f, 0.5f);
+                                lrt.anchorMax = new Vector2(0.5f, 0.5f);
+                                lrt.pivot = new Vector2(0.5f, 1f);
+                                lrt.anchoredPosition = new Vector2(0f, -18f);
+                                lrt.sizeDelta = new Vector2(120f, 36f);
+                                ntxt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                                try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
+                                _labels[padKey] = ntxt;
+                            }
+                            _markers[padKey] = go;
+                            Plugin.L.LogInfo($"[TS][Map] 创建标记(prefab) pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
+                        }
+                        catch (Exception exPrefab)
+                        {
+                            Plugin.L.LogWarning($"[TS][Map] prefab Instantiate 失败回退自建: {exPrefab.Message.Split('\n')[0]}");
+                            prefab = null;
+                            // inline fallback（原 goto 跨 try 非法，改为内联自建）
+                            go = new GameObject($"TS_Marker_{padKey}");
+                            var rt2 = go.AddComponent<RectTransform>();
+                            rt2.sizeDelta = new Vector2(36f, 36f);
+                            rt2.anchorMin = new Vector2(0.5f, 0.5f); rt2.anchorMax = new Vector2(0.5f, 0.5f); rt2.pivot = new Vector2(0.5f, 0.5f); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
+                            var img2 = go.AddComponent<Image>(); img2.sprite = _markerSprite; img2.preserveAspect = true; img2.raycastTarget = false; img2.color = online ? Color.white : new Color(0.55f,0.55f,0.55f,1f);
+                            go.transform.SetParent(mapParent, false); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
+                            _markers[padKey] = go;
+                            var labelGO2 = new GameObject("Label"); labelGO2.transform.SetParent(go.transform, false);
+                            var txt2 = labelGO2.AddComponent<Text>(); txt2.alignment = TextAnchor.UpperCenter; txt2.horizontalOverflow = HorizontalWrapMode.Overflow; txt2.verticalOverflow = VerticalWrapMode.Overflow; txt2.fontSize = 12; txt2.fontStyle = FontStyle.Bold; txt2.supportRichText = true; txt2.color = Color.white; ApplyFont(txt2);
+                            var lrt2 = txt2.rectTransform; lrt2.anchorMin = new Vector2(0.5f,0.5f); lrt2.anchorMax = new Vector2(0.5f,0.5f); lrt2.pivot = new Vector2(0.5f,1f); lrt2.anchoredPosition = new Vector2(0f,-18f); lrt2.sizeDelta = new Vector2(120f,36f);
+                            txt2.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                            try { var ol = labelGO2.AddComponent<Outline>(); ol.effectColor = new Color(0f,0f,0f,0.5f); ol.effectDistance = new Vector2(1f,-1f); } catch {}
+                            _labels[padKey] = txt2;
+                            Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online} (prefab回退)");
+                        }
+                    }
+                    else
+                    {
+                        go = new GameObject($"TS_Marker_{padKey}");
+                        var rt = go.AddComponent<RectTransform>();
+                        rt.sizeDelta = new Vector2(36f, 36f);
+                        rt.anchorMin = new Vector2(0.5f, 0.5f);
+                        rt.anchorMax = new Vector2(0.5f, 0.5f);
+                        rt.pivot = new Vector2(0.5f, 0.5f);
+                        rt.anchoredPosition = anchoredPos;
+                        rt.localScale = Vector3.one;
 
-                    var img = go.AddComponent<Image>();
-                    img.sprite = _markerSprite;
-                    img.preserveAspect = true;
-                    img.raycastTarget = true;
-                    img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+                        var img = go.AddComponent<Image>();
+                        img.sprite = _markerSprite;
+                        img.preserveAspect = true;
+                        img.raycastTarget = false;
+                        img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
 
-                    var btn = go.AddComponent<Button>();
-                    btn.targetGraphic = img;
-                    var capturedPad = pad;
-                    btn.onClick.AddListener(new Action(() => OnMarkerClick(capturedPad)));
+                        // 非交互：不添加 Button
 
-                    go.transform.SetParent(mapParent, false);
-                    rt.anchoredPosition = anchoredPos;
-                    rt.localScale = Vector3.one;
+                        go.transform.SetParent(mapParent, false);
+                        rt.anchoredPosition = anchoredPos;
+                        rt.localScale = Vector3.one;
 
-                    _markers[padKey] = go;
+                        _markers[padKey] = go;
 
-                    var labelGO = new GameObject("Label");
-                    labelGO.transform.SetParent(go.transform, false);
-                    var txt = labelGO.AddComponent<Text>();
-                    txt.alignment = TextAnchor.UpperCenter;
-                    txt.horizontalOverflow = HorizontalWrapMode.Overflow;
-                    txt.verticalOverflow = VerticalWrapMode.Overflow;
-                    txt.fontSize = 12;
-                    txt.fontStyle = FontStyle.Bold;
-                    txt.supportRichText = true;
-                    txt.color = Color.white;
-                    ApplyFont(txt);
-                    var lrt = txt.rectTransform;
-                    lrt.anchorMin = new Vector2(0.5f, 0.5f);
-                    lrt.anchorMax = new Vector2(0.5f, 0.5f);
-                    lrt.pivot = new Vector2(0.5f, 1f);
-                    lrt.anchoredPosition = new Vector2(0f, -18f);
-                    lrt.sizeDelta = new Vector2(120f, 36f);
-                    txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
-                    try { var sh = labelGO.AddComponent<Shadow>(); sh.effectColor = new Color(0f, 0f, 0f, 0.85f); sh.effectDistance = new Vector2(1f, -1f); } catch {}
-                    // Outline 增强可读性
-                    try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
-                    _labels[padKey] = txt;
-                    Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
+                        var labelGO = new GameObject("Label");
+                        labelGO.transform.SetParent(go.transform, false);
+                        var txt = labelGO.AddComponent<Text>();
+                        txt.alignment = TextAnchor.UpperCenter;
+                        txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+                        txt.verticalOverflow = VerticalWrapMode.Overflow;
+                        txt.fontSize = 12;
+                        txt.fontStyle = FontStyle.Bold;
+                        txt.supportRichText = true;
+                        txt.color = Color.white;
+                        ApplyFont(txt);
+                        var lrt = txt.rectTransform;
+                        lrt.anchorMin = new Vector2(0.5f, 0.5f);
+                        lrt.anchorMax = new Vector2(0.5f, 0.5f);
+                        lrt.pivot = new Vector2(0.5f, 1f);
+                        lrt.anchoredPosition = new Vector2(0f, -18f);
+                        lrt.sizeDelta = new Vector2(120f, 36f);
+                        txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                        // 仅保留 Outline，不加 Shadow
+                        try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
+                        _labels[padKey] = txt;
+                        Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
+                    }
                 }
                 else
                 {
                     var rt = go.GetComponent<RectTransform>();
                     if (rt != null) rt.anchoredPosition = anchoredPos;
                     var img = go.GetComponent<Image>();
+                    if (img == null) try { img = go.GetComponentInChildren<Image>(true); } catch {}
                     if (img != null)
                     {
                         if (_markerSprite != null && img.sprite != _markerSprite) img.sprite = _markerSprite;
                         img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
                     }
-                    if (_labels.TryGetValue(padKey, out var txt) && txt != null)
+                    Text txt = null;
+                    if (_labels.TryGetValue(padKey, out var cachedTxt) && cachedTxt != null) txt = cachedTxt;
+                    else try { txt = go.GetComponentInChildren<Text>(true); if (txt != null) _labels[padKey] = txt; } catch {}
+                    if (txt != null)
                     {
                         string t = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
                         if (txt.text != t) txt.text = t;
@@ -268,6 +406,7 @@ public class TeleportMapManager : MonoBehaviour
     // ===== WorldToMapPos =====
     public Vector2 WorldToMapPos(Vector2 world)
     {
+        EnsureTypeCache();
         try
         {
             var mp = GetMapPanelInstance();
@@ -275,28 +414,36 @@ public class TeleportMapManager : MonoBehaviour
             Vector2 offset = Vector2.zero;
             try
             {
-                var mpType = mp.GetType();
-                var sf = mpType.GetField("worldPositionOffset", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                if (sf != null)
+                if (_fi_worldOffset != null)
                 {
-                    var v = sf.GetValue(null);
+                    var v = _fi_worldOffset.GetValue(null);
                     if (v is Vector2 vv) offset = vv;
                     else if (v is Vector3 v3) offset = new Vector2(v3.x, v3.y);
                     else try { offset = (Vector2)v; } catch {}
-                }
-                else
-                {
-                    var f2 = AccessTools.Field(typeof(MapPanel), "worldPositionOffset");
-                    if (f2 != null) { var v2 = f2.GetValue(null); if (v2 is Vector2 vv2) offset = vv2; }
                 }
             } catch {}
             float scale = 0f;
             Vector2 center = Vector2.zero;
             float mapWidth = 0f, mapHeight = 0f;
-            try { scale = Convert.ToSingle(RGet(mp, "mapScaleFloat")); } catch {}
-            try { center = (Vector2)RGet(mp, "centerPoint"); } catch { try { var c = RGet(mp, "centerPoint"); if (c is Vector3 cv3) center = new Vector2(cv3.x, cv3.y); } catch {} }
-            try { mapWidth = Convert.ToSingle(RGet(mp, "mapWidth")); } catch {}
-            try { mapHeight = Convert.ToSingle(RGet(mp, "mapHeight")); } catch {}
+            try { if (_fi_mapScale != null) scale = Convert.ToSingle(_fi_mapScale.GetValue(mp)); else scale = Convert.ToSingle(RGet(mp, "mapScaleFloat")); } catch {}
+            try
+            {
+                if (_fi_center != null)
+                {
+                    var c = _fi_center.GetValue(mp);
+                    if (c is Vector2 cv2) center = cv2;
+                    else if (c is Vector3 cv3) center = new Vector2(cv3.x, cv3.y);
+                    else try { center = (Vector2)c; } catch {}
+                }
+                else
+                {
+                    var c = RGet(mp, "centerPoint");
+                    if (c is Vector2 cv2) center = cv2;
+                    else if (c is Vector3 cv3) center = new Vector2(cv3.x, cv3.y);
+                }
+            } catch {}
+            try { if (_fi_mapWidth != null) mapWidth = Convert.ToSingle(_fi_mapWidth.GetValue(mp)); else mapWidth = Convert.ToSingle(RGet(mp, "mapWidth")); } catch {}
+            try { if (_fi_mapHeight != null) mapHeight = Convert.ToSingle(_fi_mapHeight.GetValue(mp)); else mapHeight = Convert.ToSingle(RGet(mp, "mapHeight")); } catch {}
             if (scale == 0f || float.IsNaN(scale) || float.IsInfinity(scale))
             {
                 if (mapWidth > 1f)
@@ -353,7 +500,8 @@ public class TeleportMapManager : MonoBehaviour
 
             try
             {
-                var pdaType = AccessTools.TypeByName("PDAPanel");
+                EnsureTypeCache();
+                var pdaType = _pdaPanelType;
                 var instProp = pdaType?.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
                 var pda = instProp?.GetValue(null);
                 if (pda != null)
@@ -423,7 +571,8 @@ public class TeleportMapManager : MonoBehaviour
         try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
         try
         {
-            var pdaType = AccessTools.TypeByName("PDAPanel");
+            EnsureTypeCache();
+            var pdaType = _pdaPanelType;
             if (pdaType == null) { ShowBubbleStatic("请按 M 手动打开地图选点"); return; }
             var instProp = pdaType.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             var pda = instProp?.GetValue(null);
@@ -450,9 +599,10 @@ public class TeleportMapManager : MonoBehaviour
     // ===== helpers =====
     private static object GetMapPanelInstance()
     {
+        EnsureTypeCache();
         try
         {
-            var t = AccessTools.TypeByName("MapPanel");
+            var t = _mapPanelType;
             if (t == null) return null;
             var prop = t.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             if (prop != null) return prop.GetValue(null);
@@ -464,16 +614,16 @@ public class TeleportMapManager : MonoBehaviour
 
     private static bool IsMapOpen(object mp)
     {
+        EnsureTypeCache();
         try
         {
             var comp = mp as Component;
             if (comp != null)
             {
                 if (!comp.gameObject.activeInHierarchy) return false;
-                // PDAPanel currentPanelName 校验可选项
                 try
                 {
-                    var pdaType = AccessTools.TypeByName("PDAPanel");
+                    var pdaType = _pdaPanelType;
                     var instProp = pdaType?.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                     var inst = instProp?.GetValue(null);
                     if (inst != null)
@@ -490,12 +640,19 @@ public class TeleportMapManager : MonoBehaviour
 
     private static Transform GetMapParent(object mp)
     {
+        EnsureTypeCache();
         try
         {
+            if (_fi_mapParent != null)
+            {
+                var v = _fi_mapParent.GetValue(mp);
+                if (v is RectTransform rtr) return rtr;
+                if (v is Transform tr) return tr;
+            }
             var rt = RGet(mp, "mapParent") as RectTransform;
             if (rt != null) return rt;
-            var tr = RGet(mp, "mapParent") as Transform;
-            if (tr != null) return tr;
+            var tr2 = RGet(mp, "mapParent") as Transform;
+            if (tr2 != null) return tr2;
             var t = mp.GetType();
             var f = t.GetField("mapParent", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
             if (f != null) return f.GetValue(mp) as Transform;
@@ -526,27 +683,9 @@ public class TeleportMapManager : MonoBehaviour
 
     private static string GetNameForPad(TerrainObject pad)
     {
+        EnsureTypeCache();
         if (pad == null) return "未知";
-        try
-        {
-            // 优先 TeleportStationNameManager.GetNameForPad / GetName 反射
-            var t = AccessTools.TypeByName("TeleportStationPlugin.TeleportStationNameManager");
-            if (t != null)
-            {
-                var m1 = t.GetMethod("GetNameForPad", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (m1 != null) { var r = m1.Invoke(null, new object[] { pad }) as string; if (!string.IsNullOrWhiteSpace(r)) return r; }
-                var m2 = t.GetMethod("GetName", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-                if (m2 != null)
-                {
-                    long pk = GetInstanceKey(pad);
-                    long ck = TeleportBindingManager.GetBoundConsole(pk);
-                    var c = ck != 0 ? FindByKey(ck) as TerrainObject : null;
-                    var arg = c ?? (object)pad;
-                    var r2 = m2.Invoke(null, new object[] { arg }) as string;
-                    if (!string.IsNullOrWhiteSpace(r2)) return r2;
-                }
-            }
-        } catch {}
+        try { var r = TeleportStationNameManager.GetName(pad); if (!string.IsNullOrWhiteSpace(r)) return r; } catch {}
         try { if (!string.IsNullOrWhiteSpace(pad.name)) return pad.name; } catch {}
         try { if (pad.attr != null) { var n = RGet(pad.attr, "itemName") as string; if (!string.IsNullOrWhiteSpace(n)) return n; } } catch {}
         return $"传送台 {GetInstanceKey(pad) % 1000}";
@@ -592,10 +731,10 @@ public class TeleportMapManager : MonoBehaviour
 
     private static void ShowBubble(string msg)
     {
+        EnsureTypeCache();
         try
         {
-            var t = AccessTools.TypeByName("BasicCharacterController");
-            if (t == null) t = AccessTools.TypeByName("HumanCharacterController");
+            var t = _basicCharType ?? _humanCharType;
             var m = t?.GetMethod("ShowDialogueBubble", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
             object player = null;
             try { var gc = GameController.instance; if (gc != null) { player = RGet(gc, "player"); if (player == null) player = RGet(gc, "localPlayer"); if (player == null) player = gc.playerCharacter; } } catch {}

@@ -152,19 +152,24 @@ public static class TeleportBatteryManager
         return result;
     }
 
+    private static Type _cachedFeatureType = null;
+    private static object _cachedBatteryFeature = null;
+    private static bool _featureInit = false;
+    private static void EnsureFeatureCache()
+    {
+        if (_featureInit) return;
+        _featureInit = true;
+        try { _cachedFeatureType = AccessTools.TypeByName("ItemFeatureType"); } catch {}
+        if (_cachedFeatureType != null)
+        {
+            try { _cachedBatteryFeature = Enum.Parse(_cachedFeatureType, "Battery"); return; } catch {}
+            try { foreach(var v in Enum.GetValues(_cachedFeatureType)) if(v.ToString().Contains("Battery")) { _cachedBatteryFeature = v; return; } } catch {}
+        }
+    }
     private static object GetBatteryFeatureType()
     {
-        try
-        {
-            var t = AccessTools.TypeByName("ItemFeatureType");
-            if (t!=null) return Enum.Parse(t, "Battery");
-        } catch {}
-        try
-        {
-            var t2 = AccessTools.TypeByName("ItemFeatureType");
-            if (t2!=null) foreach(var v in Enum.GetValues(t2)) if(v.ToString().Contains("Battery")) return v;
-        } catch {}
-        return null;
+        EnsureFeatureCache();
+        return _cachedBatteryFeature;
     }
 
     private static int GetItemId(object itemData)
@@ -244,7 +249,7 @@ public static class TeleportBatteryManager
             var m = itemData.GetType().GetMethod("GetFeature");
             if (m!=null)
             {
-                var t = AccessTools.TypeByName("ItemFeatureType");
+                EnsureFeatureCache();
                 var ft = GetBatteryFeatureType();
                 if (ft!=null) return m.Invoke(itemData, new object[]{ ft });
             }

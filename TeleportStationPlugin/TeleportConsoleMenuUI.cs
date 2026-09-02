@@ -1,4 +1,5 @@
 using System;
+using HarmonyLib;
 using UnityEngine;
 using UnityEngine.UI;
 using Il2CppInterop.Runtime.Attributes;
@@ -12,6 +13,11 @@ namespace TeleportStationPlugin;
 /// </summary>
 public class TeleportConsoleMenuUI : MonoBehaviour
 {
+    private static Type _mapPanelType;
+    private static Type _pdaPanelType;
+    private static bool _typeCacheInit;
+    private static void EnsureTypeCache() { if(_typeCacheInit) return; _typeCacheInit=true; try{_mapPanelType=AccessTools.TypeByName("MapPanel");}catch{} try{_pdaPanelType=AccessTools.TypeByName("PDAPanel");}catch{} }
+
     public static TeleportConsoleMenuUI Instance { get; private set; }
 
     private GameObject _canvasGO;
@@ -242,6 +248,7 @@ public class TeleportConsoleMenuUI : MonoBehaviour
     {
         try
         {
+            EnsureTypeCache();
             EnsureUI();
             // Menu ESC handling
             if (_isOpen)
@@ -305,7 +312,8 @@ public class TeleportConsoleMenuUI : MonoBehaviour
     {
         try
         {
-            var t = HarmonyLib.AccessTools.TypeByName("MapPanel");
+            EnsureTypeCache();
+            var t = _mapPanelType;
             if (t == null) return false;
             var prop = t.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
             var mp = prop?.GetValue(null) as Component;
@@ -314,7 +322,7 @@ public class TeleportConsoleMenuUI : MonoBehaviour
             // also check PDA currentPanelName contains Map
             try
             {
-                var pdaType = HarmonyLib.AccessTools.TypeByName("PDAPanel");
+                var pdaType = _pdaPanelType;
                 var instProp = pdaType?.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 var inst = instProp?.GetValue(null);
                 if (inst != null)
