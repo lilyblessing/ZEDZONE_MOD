@@ -106,7 +106,8 @@ public static class ChargerPadFix
             try { EnsurePadSprites(); } catch { }
             try { EnsureScales(); } catch { }
             try { EnsureConsumingFlag(); } catch { }
-            try { TeleportConsoleInteractFix.Tick(); } catch { }
+            // P6.8: 控制台外部已原生化，不再每 0.5s 轮询
+            // try { TeleportConsoleInteractFix.Tick(); } catch { }
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
             for (int i = 0; i < list.Count; i++)

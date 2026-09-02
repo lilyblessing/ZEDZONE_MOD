@@ -125,54 +125,71 @@ public static class TeleportConsoleInteractFix
 
     public static void CommuEnterPostfix(object __instance, object __0)
     {
+        // P6.8 原生化：外部交互完全交给克隆模板原生 OnPlayerEnterRange@0x180997AD0（F 打开通讯终端 / Q 拾起）
+        // 不再替换为三项，仅做一次性文本微调：通讯终端 -> 传送控制台（保持原生单 F + 单 Q）
         try
         {
-            Plugin.L.LogInfo($"[TS][Fix] Postfix 触发 __instance={__instance?.GetType().Name} attr={(__instance as TerrainObject)?.attr?.id}");
             var t = __instance as TerrainObject;
-            if (t == null || t.attr == null || t.attr.id != 900101) { Plugin.L.LogInfo($"[TS][Fix] 非900101 跳过 id={(t?.attr?.id.ToString()??"null")}"); return; }
+            if (t == null || t.attr == null || t.attr.id != 900101) return;
             _currentConsole = t;
-            Plugin.L.LogInfo($"[TS][Fix] Postfix 命中 900101 console={t.GetInstanceID()} 开始替换");
             EnsureTypeCache();
-            // 尝试定位并替换 InteractData
-            bool replaced = TryReplaceInteractData(t);
-            if (!replaced)
+            // 一次性外层文本修正（非轮询）：定位已存在的 InteractDataList 中“打开通讯终端”并改为“打开传送控制台”
+            try
             {
-                Plugin.L.LogWarning($"[TS][Fix] TryReplace 失败，进入 FallbackDirect");
-                bool fb = TryFallbackAddDirect(t);
-                Plugin.L.LogInfo($"[TS][Fix] FallbackDirect 结果={fb}");
-                if (!fb)
+                var im = GetInteractManagerInstance();
+                if (im != null)
                 {
-                    bool fb2 = TryFallbackAdd(t);
-                    Plugin.L.LogInfo($"[TS][Fix] FallbackAddEnter 结果={fb2}");
+                    object listObj = GetInteractList(im);
+                    if (listObj != null)
+                    {
+                        int count = 0;
+                        try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch {} }
+                        var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
+                        var tTrans = t.transform; int tId = 0; try { tId = tTrans!=null? tTrans.GetInstanceID():0; } catch {}
+                        for (int i=0;i<count;i++)
+                        {
+                            object data=null; try { if (getItem!=null) data=getItem.Invoke(listObj,new object[]{i}); } catch { continue; }
+                            if (data==null) continue;
+                            object io=null; try { io=Reflect.Get(data,"interactObject"); } catch { try { io=data.GetType().GetField("interactObject",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
+                            if (io==null) continue;
+                            bool isOurs=false;
+                            try { var ioTrans=GetTransformForIo(io); if (ioTrans!=null && tTrans!=null && ioTrans.GetInstanceID()==tId) isOurs=true; } catch {}
+                            if (!isOurs) continue;
+                            object dataList=null; try { dataList=Reflect.Get(data,"interactDataList"); } catch { try { dataList=data.GetType().GetField("interactDataList",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
+                            if (dataList==null) continue;
+                            int dc=0; try { dc=Convert.ToInt32(Reflect.Get(dataList,"Count")); } catch { try { dc=(int)dataList.GetType().GetProperty("Count").GetValue(dataList); } catch {} }
+                            var gItem=dataList.GetType().GetMethod("get_Item") ?? dataList.GetType().GetMethod("Get");
+                            for (int j=0;j<dc;j++)
+                            {
+                                object id=null; try { if (gItem!=null) id=gItem.Invoke(dataList,new object[]{j}); } catch { continue; }
+                                if (id==null) continue;
+                                string s=null; try { s=Reflect.Get(id,"interactStr") as string; } catch { try { s=id.GetType().GetField("interactStr")?.GetValue(id) as string; } catch {} }
+                                if (!string.IsNullOrEmpty(s) && s.Contains("通讯终端"))
+                                {
+                                    try { Reflect.Set(id,"interactStr","打开传送控制台"); } catch { try { id.GetType().GetField("interactStr")?.SetValue(id,"打开传送控制台"); } catch {} }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
                 }
-            }
-            else Plugin.L.LogInfo($"[TS][Fix] 900101 原版F菜单已替换为三项 console={t.GetInstanceID()}");
-        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Postfix 异常: {e.Message}"); }
+            } catch {}
+        } catch {}
     }
 
     public static void ClearAllPostfix()
     {
-        try
-        {
-            EnsureTypeCache();
-            Plugin.L.LogInfo("[TS][Fix] ClearAllInteract postfix 触发，尝试重建所有900101的F");
-            // 延迟一帧后检查，避免刚Clear后立刻Add被同帧其他逻辑覆盖？直接同步重建
-            ReAddAllMissing();
-        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllPostfix 异常: {e.Message.Split('\n')[0]}"); }
+        // P6.8 原生化：不再自动重建，ClearAllInteract 后由玩家重新进入范围时原生重建外部 F
+        return;
     }
 
-    /// <summary>0.5s 轮询由 ChargerPadFix.Tick 调用</summary>
+    /// <summary>0.5s 轮询由 ChargerPadFix.Tick 调用 — P6.8 原生化：已禁用，外部交互由原生实现，外层不再轮询</summary>
     public static void Tick()
     {
-        try
-        {
-            float now = 0f;
-            try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
-            if (now < _nextTick) return;
-            _nextTick = now + TickInterval;
-            EnsureTypeCache();
-            ReAddAllMissing();
-        } catch {}
+        // P6.8: 轮询禁用 — 外部 F 由克隆模板原生 OnPlayerEnterRange 提供，无需每帧重建
+        // 保留方法签名以兼容 ChargerPadFix 调用，但直接返回避免刷屏与 GC
+        return;
     }
 
     private static void ReAddAllMissing()
