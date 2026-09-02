@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.51")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.52")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -403,7 +403,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.51 P6.9 原生化重构：外部单F/Q原生(文本微调为传送控制台)+内部 ComputerPanel 三项原生替换(重命名/选点/退出)，P6.9 delegate hijack内部菜单+静默TypeByName根治日志风暴 移除0.5s轮询与重复Add，根治帧数骤降与刷屏");
+        Log.LogInfo("[TeleportStation] v0.9.52 P6.9 原生化重构：外部单F/Q原生(文本微调为传送控制台)+内部 ComputerPanel 三项原生替换(重命名/选点/退出)，P6.9 delegate hijack内部菜单+静默TypeByName根治日志风暴 移除0.5s轮询与重复Add，根治帧数骤降与刷屏+保留Q+避免重建NRE");
     }
 }
 

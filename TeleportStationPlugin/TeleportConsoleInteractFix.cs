@@ -188,6 +188,7 @@ public static class TeleportConsoleInteractFix
         {
             var t = __instance as TerrainObject;
             if (t == null || t.attr == null || t.attr.id != 900101) return;
+            if (t.transform == null || t.gameObject == null) { try { Plugin.L.LogWarning("[TS][Fix] t.transform/gameObject null, skip hijack"); } catch {} return; }
             _currentConsole = t;
             EnsureTypeCache();
             Plugin.L.LogInfo($"[TS][Fix] CommuEnterPostfix hit console={t.GetInstanceID()} pos={t.transform.position} delegateType={_interactDelegateType?.FullName ?? "null"}");
@@ -284,33 +285,56 @@ public static class TeleportConsoleInteractFix
                             }
                         } catch {}
                         if (needFullRebuild) {
-                            // rebuild to 1 entry -> our single F
-                            try { var clear = dataList.GetType().GetMethod("Clear"); clear?.Invoke(dataList, null); } catch {}
-                            var nd = CreateInteractData("打开传送控制台", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static), t);
-                            if (nd!=null) {
-                                var add = dataList.GetType().GetMethod("Add");
-                                add?.Invoke(dataList, new object[]{ nd });
-                                Plugin.L.LogInfo($"[TS][Fix] rebuilt to single 打开传送控制台 for console={t.GetInstanceID()}");
-                            } else {
-                                // fallback to legacy 3-item rebuild
-                                Plugin.L.LogWarning("[TS][Fix] Create single failed, fallback to hijack idx0");
-                                object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
-                                if (id0!=null) {
-                                    string s0=null; try { s0=Reflect.Get(id0,"interactStr") as string; } catch { try { s0=id0.GetType().GetField("interactStr")?.GetValue(id0) as string; } catch {} }
-                                    Plugin.L.LogInfo($"[TS][Fix] hijacking InteractData[0] origStr='{s0 ?? "null"}'");
-                                    try { Reflect.Set(id0,"interactStr","打开传送控制台"); } catch { try { id0.GetType().GetField("interactStr")?.SetValue(id0,"打开传送控制台"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] set interactStr fail {ex.Message.Split('\n')[0]}"); } }
-                                    try {
-                                        if (_interactDelegateType != null) {
-                                            var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                            if (m2 != null) {
-                                                var del = Delegate.CreateDelegate(_interactDelegateType, m2);
-                                                try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(id0, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
-                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked for console={t.GetInstanceID()} idx=0 orig='{s0}'");
-                                            } else Plugin.L.LogWarning("[TS][Fix] OnTeleportConsoleInteract method not found");
-                                        } else Plugin.L.LogWarning($"[TS][Fix] _interactDelegateType null cannot hijack");
-                                    } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
-                                }
+                            // 0.9.52 preserve Q + avoid NRE: hijack existing F entry in-place (keep its transform/range etc.)
+                            object targetF = null; int targetIdx = -1;
+                            for (int k=0;k<dc;k++) {
+                                object cand=null; try { if (gItem!=null) cand=gItem.Invoke(dataList,new object[]{k}); } catch { continue; }
+                                if (cand==null) continue;
+                                string cs=null; string btn=null; float ht=0f;
+                                try { cs=Reflect.Get(cand,"interactStr") as string; } catch { try { cs=cand.GetType().GetField("interactStr", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(cand) as string; } catch {} }
+                                try { btn=Reflect.Get(cand,"interactButtonName") as string; } catch { try { btn=cand.GetType().GetField("interactButtonName", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(cand) as string; } catch {} }
+                                try { var hv=Reflect.Get(cand,"holdingTime"); if (hv!=null) ht=Convert.ToSingle(hv); } catch { try { var fht=cand.GetType().GetField("holdingTime", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fht!=null) ht=Convert.ToSingle(fht.GetValue(cand)); } catch {} }
+                                bool isQ = false;
+                                if (cs!=null && (cs.Contains("抬起") || cs.Contains("拾取") || cs.Contains("拆除") || cs.Contains("回收"))) isQ=true;
+                                if (btn!=null && btn!="Object Interact") isQ=true;
+                                if (ht!=0f) isQ=true;
+                                if (isQ) continue;
+                                targetF=cand; targetIdx=k; break;
                             }
+                            if (targetF!=null) {
+                                string s0=null; try { s0=Reflect.Get(targetF,"interactStr") as string; } catch { try { s0=targetF.GetType().GetField("interactStr")?.GetValue(targetF) as string; } catch {} }
+                                Plugin.L.LogInfo($"[TS][Fix] hijack F idx={targetIdx} dc={dc} orig='{s0 ?? "null"}' -> 打开传送控制台 (Q preserved)");
+                                try { Reflect.Set(targetF,"interactStr","打开传送控制台"); } catch { try { targetF.GetType().GetField("interactStr")?.SetValue(targetF,"打开传送控制台"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] set interactStr fail {ex.Message.Split('\n')[0]}"); } }
+                                try {
+                                    if (_interactDelegateType != null) {
+                                        var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
+                                        if (m2 != null) {
+                                            var del = Delegate.CreateDelegate(_interactDelegateType, m2);
+                                            try { Reflect.Set(targetF, "interactAction", del); } catch { try { targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(targetF, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
+                                            Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved");
+                                        }
+                                    } else Plugin.L.LogWarning("[TS][Fix] _interactDelegateType null cannot hijack");
+                                } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
+                                try { var curTemp=Reflect.Get(targetF,"interactObjectTemp"); if (curTemp==null) Reflect.Set(targetF,"interactObjectTemp", t); } catch {}
+                            } else {
+                                // no F found (only Q present), create new F via cloning Q's valid fields if possible else Create
+                                var nd = CreateInteractData("打开传送控制台", "Object Interact", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static), t);
+                                if (nd!=null) {
+                                    // try to copy valid position/range fields from Q if available
+                                    try {
+                                        if (dc>0) {
+                                            object q=null; try { if (gItem!=null) q=gItem.Invoke(dataList,new object[]{0}); } catch {}
+                                            if (q!=null) {
+                                                try { var fPos=q.GetType().GetField("interactPosition", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fPos!=null) { var v=fPos.GetValue(q); nd.GetType().GetField("interactPosition", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(nd, v); } } catch {}
+                                                try { var fRange=q.GetType().GetField("interactRange", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fRange!=null) fRange.SetValue(nd, fRange.GetValue(q)); } catch {}
+                                            }
+                                        }
+                                    } catch {}
+                                    var add = dataList.GetType().GetMethod("Add");
+                                    if (add!=null) { add.Invoke(dataList, new object[]{ nd }); Plugin.L.LogInfo($"[TS][Fix] added new F for console={t.GetInstanceID()} dc was {dc} Q preserved"); } else Plugin.L.LogWarning("[TS][Fix] Add method null, cannot add F");
+                                } else Plugin.L.LogWarning("[TS][Fix] Create F failed, Q preserved but F not added");
+                            }
+
                         } else {
                             // just ensure delegate fresh
                             object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
