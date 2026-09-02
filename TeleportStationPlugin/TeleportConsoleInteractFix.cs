@@ -9,10 +9,13 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// P6.4 控制台劫持：复用原版通讯终端按F界面，仅替换三项菜单文字与行为。
+/// P6.6 修复：Fallback 走 InteractManager.AddInteractObjectData 直建（原 AddEnterInteract 在 TerrainObject 上不存在，fallback 始终失败导致无F）；
+///  + 挂钩 InteractManager.ClearAllInteract postfix 自动重建（Clear 后 OnPlayerEnterRange 不二次触发导致永久丢失，900101 非 Production 无补表覆盖）；
+///  + 0.5s Tick 巡检补注（场景切块/重载后兜底）。
 /// 根因：900101 克隆自 108 Furniture_Commu，其 OnPlayerEnterRange@0x180997AD0 会注册 3 个 InteractData（雇佣/上传/退出）。
 /// 修复：Postfix 在原版注册后，定位 InteractManager.interactObjectDataList 中对应 GameObject 的 InteractObjectData，
 ///    清空其 interactDataList 并重建为“重命名/选择目的地(列表)/退出”，保留原版 InteractUI 容器与按键提示。
-/// 回退：若定位失败，则 RemoveInteract + 反射调用 AddEnterInteract 三次创建。
+/// 回退：若定位失败，则直接构造 InteractObjectData + InteractData x3 并调用 AddInteractObjectData。
 /// </summary>
 public static class TeleportConsoleInteractFix
 {
@@ -20,12 +23,16 @@ public static class TeleportConsoleInteractFix
     private static Type _commuType;
     private static Type _interactMgrType;
     private static Type _interactDataType;
+    private static Type _interactObjDataType;
     private static Type _interactDelegateType;
     private static FieldInfo _fInteractList;
     private static FieldInfo _fDataList;
     private static MethodInfo _mAddEnter;
     private static MethodInfo _mRemove;
+    private static MethodInfo _mAddData;
     private static TerrainObject _currentConsole;
+    private static float _nextTick = -1f;
+    private const float TickInterval = 0.5f;
 
     public static void EnsurePatch(Harmony h)
     {
@@ -58,6 +65,20 @@ public static class TeleportConsoleInteractFix
                     Plugin.L.LogInfo("[TS][Fix] 已挂钩 OnPlayerExitRange (清理)");
                 } catch {}
             }
+            // ClearAllInteract postfix 自动重建
+            try
+            {
+                if (_interactMgrType != null)
+                {
+                    var clear = AccessTools.Method(_interactMgrType, "ClearAllInteract");
+                    if (clear != null)
+                    {
+                        var post = new HarmonyMethod(typeof(TeleportConsoleInteractFix).GetMethod(nameof(ClearAllPostfix), BindingFlags.Public | BindingFlags.Static));
+                        h.Patch(clear, postfix: post);
+                        Plugin.L.LogInfo("[TS][Fix] 已挂钩 InteractManager.ClearAllInteract postfix (自动重建F)");
+                    }
+                }
+            } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllInteract 挂钩异常: {e.Message.Split('\n')[0]}"); }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 挂钩异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -66,6 +87,7 @@ public static class TeleportConsoleInteractFix
     {
         try { if (_interactMgrType == null) _interactMgrType = AccessTools.TypeByName("InteractManager"); } catch {}
         try { if (_interactDataType == null) _interactDataType = AccessTools.TypeByName("InteractData"); } catch {}
+        try { if (_interactObjDataType == null) _interactObjDataType = AccessTools.TypeByName("InteractObjectData"); } catch {}
         try { if (_interactDelegateType == null) _interactDelegateType = AccessTools.TypeByName("InteractManager+InteractDelegate") ?? AccessTools.TypeByName("InteractManager.InteractDelegate"); } catch {}
         try
         {
@@ -74,8 +96,8 @@ public static class TeleportConsoleInteractFix
         } catch {}
         try
         {
-            if (_interactDataType != null)
-                _fDataList = AccessTools.Field(AccessTools.TypeByName("InteractObjectData"), "interactDataList");
+            if (_interactObjDataType != null)
+                _fDataList = _interactObjDataType.GetField("interactDataList", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (_fDataList == null) _fDataList = AccessTools.TypeByName("InteractObjectData")?.GetField("interactDataList", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
         } catch {}
         try
@@ -84,6 +106,13 @@ public static class TeleportConsoleInteractFix
             if (_mAddEnter == null && _commuType != null) _mAddEnter = AccessTools.Method(_commuType, "AddEnterInteract");
         } catch {}
         try { if (_mRemove == null && _interactMgrType != null) _mRemove = AccessTools.Method(_interactMgrType, "RemoveInteract", new Type[] { typeof(GameObject) }); } catch {}
+        try
+        {
+            if (_mAddData == null && _interactMgrType != null && _interactObjDataType != null)
+                _mAddData = AccessTools.Method(_interactMgrType, "AddInteractObjectData", new Type[] { _interactObjDataType });
+            if (_mAddData == null && _interactMgrType != null)
+                _mAddData = AccessTools.Method(_interactMgrType, "AddInteractObjectData");
+        } catch {}
     }
 
     public static void CommuEnterPostfix(object __instance, object __0)
@@ -100,12 +129,149 @@ public static class TeleportConsoleInteractFix
             bool replaced = TryReplaceInteractData(t);
             if (!replaced)
             {
-                Plugin.L.LogWarning($"[TS][Fix] TryReplace 失败，进入 Fallback");
-                bool fb = TryFallbackAdd(t);
-                Plugin.L.LogInfo($"[TS][Fix] Fallback 结果={fb}");
+                Plugin.L.LogWarning($"[TS][Fix] TryReplace 失败，进入 FallbackDirect");
+                bool fb = TryFallbackAddDirect(t);
+                Plugin.L.LogInfo($"[TS][Fix] FallbackDirect 结果={fb}");
+                if (!fb)
+                {
+                    bool fb2 = TryFallbackAdd(t);
+                    Plugin.L.LogInfo($"[TS][Fix] FallbackAddEnter 结果={fb2}");
+                }
             }
             else Plugin.L.LogInfo($"[TS][Fix] 900101 原版F菜单已替换为三项 console={t.GetInstanceID()}");
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] Postfix 异常: {e.Message}"); }
+    }
+
+    public static void ClearAllPostfix()
+    {
+        try
+        {
+            EnsureTypeCache();
+            Plugin.L.LogInfo("[TS][Fix] ClearAllInteract postfix 触发，尝试重建所有900101的F");
+            // 延迟一帧后检查，避免刚Clear后立刻Add被同帧其他逻辑覆盖？直接同步重建
+            ReAddAllMissing();
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllPostfix 异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    /// <summary>0.5s 轮询由 ChargerPadFix.Tick 调用</summary>
+    public static void Tick()
+    {
+        try
+        {
+            float now = 0f;
+            try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
+            if (now < _nextTick) return;
+            _nextTick = now + TickInterval;
+            EnsureTypeCache();
+            ReAddAllMissing();
+        } catch {}
+    }
+
+    private static void ReAddAllMissing()
+    {
+        try
+        {
+            EnsureTypeCache();
+            if (_interactMgrType == null || _mAddData == null) return;
+            List<TerrainObject> consoles = null;
+            try { consoles = TeleportObjectCache.FindAllById(900101); } catch { return; }
+            if (consoles == null || consoles.Count == 0) return;
+            // 检查 interactObjectDataList 中是否已有
+            var im = GetInteractManagerInstance();
+            if (im == null) return;
+            object listObj = GetInteractList(im);
+            if (listObj == null) return;
+            // 为每个 console 检查是否缺失
+            foreach (var c in consoles)
+            {
+                if (c == null || c.gameObject == null) continue;
+                bool has = HasInteractFor(listObj, c);
+                if (has) continue;
+                // 距离过滤：若玩家距离>30m则跳过，减少无意义注册
+                try
+                {
+                    var player = GetPlayerTransform();
+                    if (player != null)
+                    {
+                        float d2 = (c.transform.position - player.position).sqrMagnitude;
+                        if (d2 > 900f) continue; // 30m
+                    }
+                } catch {}
+                bool ok = TryFallbackAddDirect(c);
+                if (ok) Plugin.L.LogInfo($"[TS][Fix] Tick/Clear 重建F成功 console={c.GetInstanceID()} pos={c.transform.position}");
+            }
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ReAddAllMissing 异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    private static object GetInteractManagerInstance()
+    {
+        try
+        {
+            if (_interactMgrType == null) return null;
+            var im = AccessTools.Property(_interactMgrType, "instance")?.GetValue(null) ?? AccessTools.Field(_interactMgrType, "instance")?.GetValue(null);
+            if (im == null) im = _interactMgrType.GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            return im;
+        } catch { return null; }
+    }
+
+    private static object GetInteractList(object im)
+    {
+        try
+        {
+            object listObj = null;
+            try { listObj = _fInteractList?.GetValue(im); } catch {}
+            if (listObj == null) listObj = Reflect.Get(im, "interactObjectDataList");
+            return listObj;
+        } catch { return null; }
+    }
+
+    private static bool HasInteractFor(object listObj, TerrainObject t)
+    {
+        try
+        {
+            int count = 0;
+            try { count = Convert.ToInt32(Reflect.Get(listObj, "Count")); } catch { try { count = (int)listObj.GetType().GetProperty("Count").GetValue(listObj); } catch { return false; } }
+            var getItem = listObj.GetType().GetMethod("get_Item") ?? listObj.GetType().GetMethod("Get");
+            for (int i = 0; i < count; i++)
+            {
+                object data = null;
+                try { if (getItem != null) data = getItem.Invoke(listObj, new object[] { i }); } catch { continue; }
+                if (data == null) continue;
+                object io = null;
+                try { io = Reflect.Get(data, "interactObject"); } catch { try { io = data.GetType().GetField("interactObject").GetValue(data); } catch {} }
+                if (io == null) continue;
+                try { if (io is GameObject go && t.gameObject == go) return true; } catch {}
+                try { if (io == (object)t) return true; } catch {}
+                try { if (io is Component c && c.transform == t.transform) return true; } catch {}
+                try { if (io is GameObject g2 && g2.transform == t.transform) return true; } catch {}
+            }
+        } catch {}
+        return false;
+    }
+
+    private static Transform GetPlayerTransform()
+    {
+        try
+        {
+            var pcType = AccessTools.TypeByName("PlayerController") ?? AccessTools.TypeByName("HumanCharacterController");
+            if (pcType != null)
+            {
+                var inst = AccessTools.Property(pcType, "instance")?.GetValue(null) ?? AccessTools.Field(pcType, "instance")?.GetValue(null);
+                if (inst != null)
+                {
+                    var tr = AccessTools.Property(inst.GetType(), "transform")?.GetValue(inst) as Transform;
+                    if (tr != null) return tr;
+                    var go = (inst as Component)?.transform;
+                    if (go != null) return go;
+                }
+            }
+        } catch {}
+        try
+        {
+            var cam = Camera.main;
+            if (cam != null) return cam.transform;
+        } catch {}
+        return null;
     }
 
     private static bool TryReplaceInteractData(TerrainObject t)
@@ -113,12 +279,9 @@ public static class TeleportConsoleInteractFix
         try
         {
             if (_interactMgrType == null) { Plugin.L.LogWarning("[TS][Fix] _interactMgrType null"); return false; }
-            var im = AccessTools.Property(_interactMgrType, "instance")?.GetValue(null) ?? AccessTools.Field(_interactMgrType, "instance")?.GetValue(null);
-            if (im == null) im = _interactMgrType.GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
+            var im = GetInteractManagerInstance();
             if (im == null) { Plugin.L.LogWarning("[TS][Fix] InteractManager.instance null"); return false; }
-            object listObj = null;
-            try { listObj = _fInteractList?.GetValue(im); } catch {}
-            if (listObj == null) listObj = Reflect.Get(im, "interactObjectDataList");
+            object listObj = GetInteractList(im);
             if (listObj == null) { Plugin.L.LogWarning("[TS][Fix] interactObjectDataList null"); return false; }
 
             // 先创建3个新数据，成功后再清空旧列表（避免失败后留空）
@@ -194,6 +357,53 @@ public static class TeleportConsoleInteractFix
         } catch { return null; }
     }
 
+    private static bool TryFallbackAddDirect(TerrainObject t)
+    {
+        try
+        {
+            EnsureTypeCache();
+            if (_interactMgrType == null || _interactObjDataType == null || _mAddData == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect 类型缺失"); return false; }
+            var im = GetInteractManagerInstance();
+            if (im == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect instance null"); return false; }
+            object listObj = GetInteractList(im);
+            if (listObj != null && HasInteractFor(listObj, t)) { Plugin.L.LogInfo($"[TS][Fix] FallbackDirect 已存在，跳过 console={t.GetInstanceID()}"); return true; }
+            if (_mRemove != null)
+            {
+                try { _mRemove.Invoke(im, new object[] { t.gameObject }); } catch {}
+            }
+            var nd1 = CreateInteractData("重命名传送站", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static), t);
+            var nd2 = CreateInteractData("选择传送目的地", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static), t);
+            var nd3 = CreateInteractData("退出", "F", typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static), t);
+            if (nd1 == null || nd2 == null || nd3 == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect Create 失败"); return false; }
+            // 构造 InteractObjectData
+            object iod = null;
+            try { iod = Activator.CreateInstance(_interactObjDataType); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] InteractObjectData 创建失败 {e.Message.Split('\n')[0]}"); return false; }
+            // interactObject = t.gameObject
+            try { Reflect.Set(iod, "interactObject", t.gameObject); } catch { try { _interactObjDataType.GetField("interactObject", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(iod, t.gameObject); } catch {} }
+            // interactDataList
+            object dataList = null;
+            try { dataList = Reflect.Get(iod, "interactDataList"); } catch {}
+            if (dataList == null)
+            {
+                try { var f = _interactObjDataType.GetField("interactDataList", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); var listType = f.FieldType; dataList = Activator.CreateInstance(listType); Reflect.Set(iod, "interactDataList", dataList); } catch {}
+            }
+            if (dataList == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect dataList 仍null"); return false; }
+            var add = dataList.GetType().GetMethod("Add");
+            if (add == null) { Plugin.L.LogWarning("[TS][Fix] FallbackDirect dataList.Add 未找到"); return false; }
+            add.Invoke(dataList, new object[] { nd1 });
+            add.Invoke(dataList, new object[] { nd2 });
+            add.Invoke(dataList, new object[] { nd3 });
+            // 可选：设置 interactRange 等默认值（若字段存在）
+            try { var fR = _interactObjDataType.GetField("interactRange", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fR != null) fR.SetValue(iod, 3f); } catch {}
+            try { var fM = _interactObjDataType.GetField("maxPlayerInteractRange", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fM != null) fM.SetValue(iod, 5f); } catch {}
+            try { var fT = _interactObjDataType.GetField("interactType", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (fT != null) { var enumVal = Enum.ToObject(fT.FieldType, 0); fT.SetValue(iod, enumVal); } } catch {}
+            // 添加到管理器
+            try { _mAddData.Invoke(im, new object[] { iod }); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] AddInteractObjectData 异常 {e.Message.Split('\n')[0]}"); return false; }
+            Plugin.L.LogInfo($"[TS][Fix] FallbackDirect AddInteractObjectData 成功 console={t.GetInstanceID()}");
+            return true;
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] FallbackDirect 异常: {e.Message.Split('\n')[0]}"); return false; }
+    }
+
     private static bool TryFallbackAdd(TerrainObject t)
     {
         try
@@ -205,7 +415,7 @@ public static class TeleportConsoleInteractFix
             {
                 try { _mRemove.Invoke(im, new object[] { t.gameObject }); } catch {}
             }
-            if (_mAddEnter == null) return false;
+            if (_mAddEnter == null) { Plugin.L.LogWarning("[TS][Fix] Fallback AddEnterInteract 方法仍null"); return false; }
             var del1 = CreateDelegateFor(typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnRename), BindingFlags.Public|BindingFlags.Static));
             var del2 = CreateDelegateFor(typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnSelectList), BindingFlags.Public|BindingFlags.Static));
             var del3 = CreateDelegateFor(typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnExit), BindingFlags.Public|BindingFlags.Static));

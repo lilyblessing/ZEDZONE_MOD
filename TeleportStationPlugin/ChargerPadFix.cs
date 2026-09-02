@@ -104,6 +104,7 @@ public static class ChargerPadFix
             try { EnsurePadSprites(); } catch { }
             try { EnsureScales(); } catch { }
             try { EnsureConsumingFlag(); } catch { }
+            try { TeleportConsoleInteractFix.Tick(); } catch { }
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
             for (int i = 0; i < list.Count; i++)
