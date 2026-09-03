@@ -412,13 +412,19 @@ public class TeleportMapManager : MonoBehaviour
                 }
             }
             // v0.9.61 远站补齐：持久坐标表中有、活体未画的站（未绑定/未加载/玩家在远处）同样建标记。
-            // 在线态用上次实测值；点击因无活体对象仅提示（OnMarkerClick 空守卫）。
+            // v0.9.64 配对前置：pad 坐标无绑定坐标对记录 → 不建存量标记（未配对不进列表）；
+            // 在线态仅显示（最后已知态），点击选点无门控（OnOfflineMarkerClick）。
             try
             {
                 LoadPersisted();
                 foreach (var kv in _persisted)
                 {
                     if (liveCoords.Contains(kv.Key)) continue;
+                    if (!TeleportBindingManager.IsPadCoordPaired(kv.Key))
+                    {
+                        Plugin.L.LogInfo($"[TS][Map] 排除未配对存量标记 coord={kv.Key}({kv.Value?.name})（绑定坐标对无记录）");
+                        continue;
+                    }
                     string mkey = "c:" + kv.Key;
                     if (alive.Contains(mkey)) continue;
                     var rec = kv.Value;
@@ -775,7 +781,7 @@ public class TeleportMapManager : MonoBehaviour
             long pendingPadKey = TeleportBindingManager.GetBoundPad(ck);
             TerrainObject pendingPadObj = pendingPadKey != 0 ? FindByKey(pendingPadKey) as TerrainObject : null;
             if (pendingPadKey == 0 || pendingPadObj == null) { ShowBubble("本站未绑定圆盘"); return; }
-            // 发送方需 IsSenderReady(供电+电池≥10000)，接收方仅在线（活体或持久）
+            // 发送方需 IsSenderReady(供电+电池≥10000)；接收方无门控（用户定案 v0.9.64）
             if (!TeleportConsoleSelection.IsSenderReady(pendingPadObj))
             {
                 if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站离线（未通电或未绑定）");
@@ -783,7 +789,6 @@ public class TeleportMapManager : MonoBehaviour
                 return;
             }
             string targetUid = TeleportStationUid.UidFor(pad);
-            if (!TeleportConsoleSelection.IsOnlineUid(targetUid)) { ShowBubble("目的地离线"); return; }
             if (pad == pendingPadObj) { ShowBubble("不能选择本站"); return; }
             long targetKey = GetInstanceKey(pad);
             if (targetKey == pendingPadKey) { ShowBubble("不能选择本站"); return; }
@@ -822,18 +827,20 @@ public class TeleportMapManager : MonoBehaviour
                 else ShowBubble("本站电量不足（需≥10000）");
                 return;
             }
-            if (!TeleportConsoleSelection.IsOnlineUid(targetUid))
-            {
-                ShowBubble("目的地离线（从未观测到供电）");
-                Plugin.L.LogInfo($"[TS][Map] 存量选点拒绝 {cuid} -> {targetUid} persistedOnline=False");
-                return;
-            }
+            // v0.9.64 接收方无门控：persisted-online 仅显示，不拒绝。
             string selfUid = TeleportStationUid.UidFor(pendingPadObj);
             if (targetUid == selfUid) { ShowBubble("不能选择本站"); return; }
             TeleportConsoleSelection.SetSelectedByUid(cuid, targetUid);
             string disp = TeleportStationUid.DisplayForUid(targetUid);
+            if (disp == targetUid)
+            {
+                // UID 直查/活体自愈均未中 → 存量名兜底（保证“家”类命名跨站显示）
+                int qx, qy; string pn; bool pon;
+                if (QueryPersistedStation(TeleportStationUid.CoordFromUid(targetUid), out qx, out qy, out pn, out pon)
+                    && !string.IsNullOrWhiteSpace(pn)) disp = pn;
+            }
             ShowBubble($"已选择 {disp}");
-            Plugin.L.LogInfo($"[TS][Map] 存量选点 {cuid} -> {targetUid}({disp}) persistedOnline=True");
+            Plugin.L.LogInfo($"[TS][Map] 存量选点 {cuid} -> {targetUid}({disp})");
             CloseMapPanel();
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] OnOfflineMarkerClick 异常: {ex.Message.Split('\n')[0]}"); }

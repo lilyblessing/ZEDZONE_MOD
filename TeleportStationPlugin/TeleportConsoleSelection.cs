@@ -11,7 +11,7 @@ namespace TeleportStationPlugin;
 /// 持久化双轨（properties[1]=padUid 字符串 + JSON 信封 {"v":1,"byUid":{}}），跨读档稳定。
 /// 实例ID仅做运行时关联，永不做持久身份。旧数字键 JSON/property 读入时尽力换算，换算失败即丢弃并日志。
 /// 已上线 = 活体 IsPowered 实时判；无活体（未加载/读档后）→ 持久在线态（TeleportMapStations.json online）。
-/// 发送方可传 = 已绑 + 供电(AND) + 电池≥10000；接收方可选 = 在线（活体或持久）即可。
+/// 发送方可传 = 已绑 + 供电(AND) + 电池≥10000；接收方无门控（v0.9.64 用户定案），在线态仅显示。
 /// </summary>
 public static class TeleportConsoleSelection
 {
@@ -54,8 +54,8 @@ public static class TeleportConsoleSelection
     }
 
     // ===== v0.9.63 在线判两路：活体 IsPowered 实时判；无活体读持久在线态 =====
-    // 持久表由 TeleportMapManager 活体观测时写入（TeleportMapStations.json {"x,y":{...,"online":0/1}}），
-    // persisted-online=true 即允许按持久坐标传送；从未观测到在线的站视为离线。
+    // v0.9.64：仅作“最后已知在线态”显示查询，不再做任何发送/选点拒绝门控。
+    // 持久表由 TeleportMapManager 活体观测时写入（TeleportMapStations.json {"x,y":{...,"online":0/1}}）。
     public static bool IsOnlineUid(string padUid)
     {
         if (!TeleportStationUid.IsUid(padUid)) return false;

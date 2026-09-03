@@ -8,7 +8,8 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// P6 控制台选目的地 UI：全屏半透底 + 居中面板 + 滚动列表。
-/// 已上线=亮白可点，离线=灰不可点。点击后写入 TeleportConsoleSelection 并气泡提示。
+/// v0.9.64：目的地无在线门控（在线态仅显示：在线/上次在线/状态未知，全行可点即选）；
+/// 候选仅限已配对（活体绑定或坐标对回链成功），未配对 console/孤 pad 不进列表。
 /// </summary>
 public class TeleportConsoleUI : MonoBehaviour
 {
@@ -284,12 +285,14 @@ public class TeleportConsoleUI : MonoBehaviour
                 }
                 try
                 {
-                    string status = online ? "在线" : "离线";
-                    string label = $"{displayName} {status} 距{distStr} {padUid}";
+                    // v0.9.64 目的地无门控：在线态仅显示（在线/上次在线/状态未知），全行可点即选。
+                    string padCoord2 = "";
+                    try { padCoord2 = TeleportBindingManager.CoordKey(pad); } catch {}
+                    bool persistedOn = !string.IsNullOrEmpty(padCoord2) && TeleportConsoleSelection.QueryPersistedOnline(padCoord2);
+                    string state = online ? "在线" : (persistedOn ? "上次在线" : "状态未知");
+                    string label = $"{displayName} {state} 距{distStr} {padUid}";
                     if (online) label += " ★可传送";
-                    else label += " （离线，点击提示）";
 
-                    // v0.9.62 离线行可点：灰显保留，点击给气泡（不许静默无反应）
                     var padCap = pad;
                     var padUidCap = padUid;
                     var dispCap = displayName;
@@ -299,13 +302,7 @@ public class TeleportConsoleUI : MonoBehaviour
                         if (_currentConsole == null) return;
                         string cuid = TeleportStationUid.UidFor(_currentConsole);
                         string cdisp = TeleportStationUid.DisplayForConsole(_currentConsole);
-                        if (!TeleportConsoleSelection.IsOnline(padCap))
-                        {
-                            Plugin.L.LogInfo($"[TS][Sel] 点选离线 {cuid}({cdisp}) -> {padUidCap}({dispCap}) 已气泡提示");
-                            ShowBubble("目的地离线");
-                            return;
-                        }
-                        Plugin.L.LogInfo($"[TS][Sel] 点选 {cuid}({cdisp}) -> {padUidCap}({dispCap}) dist={distCap} online=True");
+                        Plugin.L.LogInfo($"[TS][Sel] 点选 {cuid}({cdisp}) -> {padUidCap}({dispCap}) dist={distCap} online={online}");
                         TeleportConsoleSelection.SetSelected(_currentConsole, padCap);
                         ShowBubble($"已选择 {dispCap}");
                         Close();
@@ -331,8 +328,9 @@ public class TeleportConsoleUI : MonoBehaviour
                 }
                 catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 行渲染失败 {padUid}({displayName}) ex={re}"); }
             }
-            // v0.9.63 读档/远站补齐：活体缺失但持久在线的站按持久坐标直接可选（在线即传，无走近门控）；
-            // 从未观测到在线的站灰显，点击气泡说明原因。
+            // v0.9.63 读档/远站补齐：活体缺失的站按持久坐标直接可选（无走近门控）。
+            // v0.9.64：目的地无在线门控（在线态仅显示）；存量行同样执行配对前置
+            // （pad 坐标须在绑定坐标对中有记录，否则不进列表）。
             string selfPadCoord = "";
             try
             {
@@ -414,7 +412,27 @@ public class TeleportConsoleUI : MonoBehaviour
                     } catch { return 0; }
                 });
             } catch {}
-            list = clean;
+            // v0.9.64 配对前置：仅保留“console+pad 已配对”（活体绑定或坐标对回链成功）；
+            // 未配对 console 的 pad / 孤 pad 不进选点列表（各补一行 debug 说明排除原因）。
+            list = new List<TerrainObject>();
+            foreach (var pad in clean)
+            {
+                try
+                {
+                    long k = GetInstanceKey(pad);
+                    string pu = TeleportStationUid.UidFor(pad);
+                    if (TeleportBindingManager.IsPadBound(k)) { list.Add(pad); continue; }
+                    string pck0 = "";
+                    try { pck0 = TeleportBindingManager.CoordKey(pad); } catch {}
+                    if (!string.IsNullOrEmpty(pck0) && TeleportBindingManager.IsPadCoordPaired(pck0))
+                    {
+                        list.Add(pad);
+                        Plugin.L.LogInfo($"[TS][UI] 候选(坐标对回链) {pu} coord={pck0}（活体未绑但配对文件有记录）");
+                        continue;
+                    }
+                    Plugin.L.LogInfo($"[TS][UI] 排除未配对圆盘 {pu} coord={pck0}（未绑定且坐标对无记录，不进列表）");
+                } catch {}
+            }
         } catch {}
         return list;
     }
@@ -655,31 +673,31 @@ public class TeleportConsoleUI : MonoBehaviour
                         Plugin.L.LogInfo($"[TS][UI] 跳过本站存量行 coord={st.coord}({st.name})");
                         continue; // 本站（坐标比对，跨读档稳定）
                     }
+                    // v0.9.64 配对前置（存量）：pad 坐标无配对记录 → 不进列表。
+                    if (!TeleportBindingManager.IsPadCoordPaired(st.coord))
+                    {
+                        Plugin.L.LogInfo($"[TS][UI] 排除未配对存量站 coord={st.coord}({st.name})（绑定坐标对无记录，不进列表）");
+                        continue;
+                    }
                     string distStr = FormatDistFromXY(cc, st.x, st.y);
-                    // v0.9.63 显示名优先（有名用名，无名用UID）；在线判走持久在线态，无走近门控。
+                    // v0.9.64 显示名优先（UID直查→活体自愈→存量名→UID）；在线态仅显示，无门控。
                     string staleUid = TeleportStationUid.UidFromCoord(st.coord);
                     string staleDisp = TeleportStationUid.DisplayForUid(staleUid);
+                    if (staleDisp == staleUid && !string.IsNullOrWhiteSpace(st.name)) staleDisp = st.name;
                     bool staleOnline = st.online;
-                    string label = staleOnline
-                        ? $"{staleDisp} 在线（存量） 距{distStr} {staleUid} ★可传送"
-                        : $"{staleDisp} 离线 距{distStr} {staleUid} （点击提示）";
+                    string staleState = staleOnline ? "在线（存量）" : "状态未知";
+                    string label = $"{staleDisp} {staleState} 距{distStr} {staleUid}";
+                    if (staleOnline) label += " ★可传送";
                     var staleUidCap = staleUid;
                     var staleDispCap = staleDisp;
                     var staleCoordCap = st.coord;
-                    var staleOnlineCap = staleOnline;
                     var btn = CreateRowButton(label, true, () =>
                     {
                         if (_currentConsole == null) return;
                         string cuid = TeleportStationUid.UidFor(_currentConsole);
                         string cdisp = TeleportStationUid.DisplayForConsole(_currentConsole);
                         if (string.IsNullOrEmpty(cuid)) return;
-                        if (!staleOnlineCap)
-                        {
-                            Plugin.L.LogInfo($"[TS][Sel] 点选离线存量 {cuid}({cdisp}) -> {staleUidCap}({staleDispCap}) 已气泡提示");
-                            ShowBubble("目的地离线（从未观测到供电）");
-                            return;
-                        }
-                        Plugin.L.LogInfo($"[TS][Sel] 点选存量 {cuid}({cdisp}) -> {staleUidCap}({staleDispCap}) coord={staleCoordCap} dist={distStr} persistedOnline=True");
+                        Plugin.L.LogInfo($"[TS][Sel] 点选存量 {cuid}({cdisp}) -> {staleUidCap}({staleDispCap}) coord={staleCoordCap} dist={distStr} lastOnline={staleOnline}");
                         TeleportConsoleSelection.SetSelectedByUid(cuid, staleUidCap);
                         ShowBubble($"已选择 {staleDispCap}");
                         Close();

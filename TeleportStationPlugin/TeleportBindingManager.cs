@@ -111,6 +111,68 @@ public static class TeleportBindingManager
         catch { return ""; }
     }
 
+    // ===== v0.9.64 配对坐标 truth 集（选点配对前置用）=====
+    // pad 坐标 "x,y" 集合：绑定成功/坐标回链/文件加载时维护。持久 truth=TeleportBindingCoords.json
+    // 的 "cc>pc" 对（实例ID跨读档必变，坐标对是唯一跨档配对证据）。
+    private static readonly HashSet<string> _pairedPadCoords = new();
+    private static bool _pairsLoaded = false; // true=至少加载过一次文件或执行过 SaveCoords
+    private static bool _pairsFailOpenLogged = false;
+
+    // pad 坐标是否配对过（unknown→fail-open：无配对信息时不过滤，避免旧档全灭）。
+    public static bool IsPadCoordPaired(string padCoord)
+    {
+        if (string.IsNullOrEmpty(padCoord)) return false;
+        try
+        {
+            if (_pairedPadCoords.Contains(padCoord)) return true;
+            if (!_pairsLoaded)
+            {
+                if (!_pairsFailOpenLogged)
+                {
+                    _pairsFailOpenLogged = true;
+                    Plugin.L.LogInfo($"[TS][Bind] 配对坐标集未加载，fail-open 放行 coord={padCoord}");
+                }
+                return true;
+            }
+            return false;
+        }
+        catch { return true; }
+    }
+
+    // 活体 pad 配对判定：活体绑定 或 坐标对回链成功（跨读档实例ID已变但坐标对在）。
+    public static bool IsPadPairedLiveOrLinked(TerrainObject pad)
+    {
+        if (pad == null) return false;
+        try
+        {
+            if (IsPadBound(GetInstanceKey(pad))) return true;
+            string pc = CoordKey(pad);
+            return IsPadCoordPaired(pc);
+        }
+        catch { return false; }
+    }
+
+    // v0.9.64 绑定成功时命名对齐（根因①治愈另一半）：console 有名 → 写透 pad 坐标键，
+    // 保证 DisplayForUid(padUid) 直查命中（改名早于绑定/改名时未绑定的场景）。
+    public static void HealPadCoordName(TerrainObject console, TerrainObject pad)
+    {
+        try
+        {
+            if (console == null || pad == null) return;
+            string n;
+            if (!TeleportStationNameManager.TryGetCustomName(console, out n) || string.IsNullOrWhiteSpace(n))
+            {
+                string cc = CoordKey(console);
+                if (!string.IsNullOrEmpty(cc)) n = TeleportStationNameManager.GetNameByCoord(cc);
+            }
+            if (string.IsNullOrWhiteSpace(n)) return;
+            string pc = CoordKey(pad);
+            if (string.IsNullOrEmpty(pc)) return;
+            string cur = TeleportStationNameManager.GetNameByCoord(pc);
+            if (cur != n) TeleportStationNameManager.SetCoordName(pc, n);
+        } catch {}
+    }
+
     // 激活判定（P4 精简→P6 完整）：已绑定 && 圆盘通电（pad ProductionData 有电） && 距离≤50m 附近有控制台；控制台本身无需供电
     public static bool IsActive(TerrainObject console)
     {
@@ -336,6 +398,7 @@ public static class TeleportBindingManager
                 _instanceIdToObjId[bestUnboundKey] = PadId;
                 SaveForInstance(console, nearestUnbound);
                 Save();
+                try { HealPadCoordName(console, nearestUnbound); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -384,6 +447,7 @@ public static class TeleportBindingManager
                 _instanceIdToObjId[bestUnboundKey] = PadId;
                 SaveForInstance(console, nearestUnbound);
                 Save();
+                try { HealPadCoordName(console, nearestUnbound); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind][Auto] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -648,6 +712,7 @@ public static class TeleportBindingManager
             var sb = new System.Text.StringBuilder("{\"v\":1,\"pairs\":[");
             bool first = true;
             int n = 0;
+            var paired = new HashSet<string>();
             foreach (var kv in _consoleToPad)
             {
                 var c = FindByKey(kv.Key) as TerrainObject;
@@ -659,9 +724,13 @@ public static class TeleportBindingManager
                 sb.Append($"\"{cc}>{pc}\"");
                 first = false;
                 n++;
+                paired.Add(pc);
             }
             sb.Append("]}");
             File.WriteAllText(CoordPath, sb.ToString());
+            _pairedPadCoords.Clear();
+            foreach (var pc in paired) _pairedPadCoords.Add(pc);
+            _pairsLoaded = true;
             if (n > 0) Plugin.L.LogInfo($"[TS][Bind] 保存坐标对 {CoordPath} {n} 对");
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Bind] 保存坐标对异常: {e.Message.Split('\n')[0]}"); }
     }
@@ -725,20 +794,29 @@ public static class TeleportBindingManager
                         var sep = pair.IndexOf('>');
                         if (sep < 0) continue;
                         string cc = pair.Substring(0, sep), pc = pair.Substring(sep + 1);
+                        // v0.9.64：文件对即配对证据，先入 truth 集（远站未加载也有记录）
+                        if (!string.IsNullOrEmpty(pc)) _pairedPadCoords.Add(pc);
+                        _pairsLoaded = true;
                         var c = FindByCoord(ConsoleId, cc);
                         var p = FindByCoord(PadId, pc);
                         if (c == null || p == null) continue;
                         long ck = GetInstanceKey(c), pk = GetInstanceKey(p);
-                        if (_consoleToPad.TryGetValue(ck, out var oldPk) && oldPk == pk) continue;
+                        if (_consoleToPad.TryGetValue(ck, out var oldPk) && oldPk == pk) { try { HealPadCoordName(c, p); } catch {} continue; }
                         // 若两端已被别的映射占用，不抢占（沿用“已有绑定”语义）
                         if (_consoleToPad.ContainsKey(ck) || _padToConsole.ContainsKey(pk)) continue;
                         _consoleToPad[ck] = pk;
                         _padToConsole[pk] = ck;
                         _instanceIdToObjId[ck] = ConsoleId;
                         _instanceIdToObjId[pk] = PadId;
+                        try { HealPadCoordName(c, p); } catch {}
                         linked++;
                     }
                     if (linked > 0) Plugin.L.LogInfo($"[TS][Bind] 坐标回链 {linked} 对，内存现 {_consoleToPad.Count} 对");
+                }
+                else
+                {
+                    // v0.9.64：无坐标对文件=无配对信息，选点不过滤（fail-open 由 IsPadCoordPaired 处理）
+                    Plugin.L.LogInfo("[TS][Bind] 无坐标对文件，配对前置 fail-open（不过滤存量）");
                 }
             } catch (Exception e2) { Plugin.L.LogWarning($"[TS][Bind] 坐标回链异常: {e2.Message.Split('\n')[0]}"); }
             // v0.9.61 Load 期不再做死键清理：启动时活体表不全（远处/未加载）且实例ID跨档必变，

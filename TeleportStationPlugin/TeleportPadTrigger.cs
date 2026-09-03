@@ -108,9 +108,8 @@ public class TeleportPadTrigger : MonoBehaviour
     {
         try
         {
-            // P6 发送方判定：已绑 + 供电(AND) + 电池≥10000；接收方只需在线（活体实时 or 持久在线）。
-            // v0.9.63 目的地以 UID 识别：有活体走活体坐标，无活体（未加载/读档后）且 persisted-online=true
-            // 即按持久坐标传送（坐标直传 P0 验证期已验证：加载存档后直接传送可行）。无走近/未加载门控。
+            // P6 发送方判定：已绑 + 供电(AND) + 电池≥10000；接收方无门控（用户定案 v0.9.64）。
+            // v0.9.64 目的地以 UID 识别：有活体走活体坐标，无活体走持久坐标（无在线/走近门控）。
             long padKey = GetInstanceKey(pad);
             string senderUid = TeleportStationUid.UidFor(pad);
             long consoleKey = TeleportBindingManager.GetBoundConsole(padKey);
@@ -139,11 +138,9 @@ public class TeleportPadTrigger : MonoBehaviour
             string dispTarget = TeleportStationUid.DisplayForUid(selectedUid);
             if (!ResolveTarget(selectedUid, pad, out var targetPos, out var targetLive, out var viaPersisted))
             {
-                if (targetLive == null && !viaPersisted)
-                {
-                    ShowBubble("目的地离线");
-                    Plugin.L?.LogInfo($"[TS][Teleport] 目的地离线 {selectedUid}({dispTarget}) live=无 persistedOnline=False");
-                }
+                // v0.9.64：目的地无在线门控；此处仅 UID 非法/无坐标记录才到（几乎不可达）。
+                ShowBubble("目的地未知，请重选");
+                Plugin.L?.LogInfo($"[TS][Teleport] 目标无法解析 {selectedUid}({dispTarget}) live=无 persistedPos=无");
                 return;
             }
             if (!string.IsNullOrEmpty(senderUid) && selectedUid == senderUid)
@@ -168,7 +165,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 } catch (Exception ex) { Plugin.L?.LogWarning($"[TS][Teleport] 通电判定异常: {ex.Message}"); }
             }
             else { diagSufficient = -999; diagListCount = -999; }
-            Plugin.L?.LogInfo($"[TS][Teleport] 发送方通电判定 {senderUid} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered} 目的地={selectedUid}({dispTarget})在线=True via={(viaPersisted ? "持久坐标" : "活体")}");
+            Plugin.L?.LogInfo($"[TS][Teleport] 发送方通电判定 {senderUid} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered} 目的地={selectedUid}({dispTarget}) via={(viaPersisted ? "持久坐标" : "活体")}");
             if (!powered)
             {
                 ShowBubble("未供电");
@@ -192,10 +189,10 @@ public class TeleportPadTrigger : MonoBehaviour
             ui.ShowCountdown(pad.transform, entrantTr, () =>
             {
                 Plugin.L?.LogInfo($"[TS][Teleport] 倒计时完成回调 {senderUidCap} sumBefore2={TeleportBatteryManager.GetTotalCharge(TeleportBatteryManager.GetBatteryInventory(pad)):F0}");
-                // 二次校验：选中仍在线 & 发送方仍满足
+                // 二次校验：选中可解析 & 发送方仍满足（目的地无在线门控，只验可解析）
                 if (!ResolveTarget(selUidCap, pad, out var targetPos2, out var live2, out var via2))
                 {
-                    ShowBubble("目的地离线");
+                    ShowBubble("目的地未知，请重选");
                     return;
                 }
                 if (!TeleportConsoleSelection.IsOnline(pad))
@@ -236,8 +233,9 @@ public class TeleportPadTrigger : MonoBehaviour
         catch (Exception e) { Plugin.L?.LogWarning($"[TS][Teleport] TryStart异常: {e.Message}"); }
     }
 
-    // v0.9.63 目标解析：有活体→活体坐标；无活体但 persisted-online → 持久坐标（+1.2m 偏移+地形高）。
-    // 返回 false = 离线/从未在线（调用方气泡"目的地离线"）。targetLive 仅供调用方区分日志。
+    // v0.9.64 目标解析（用户定案：放弃接收方在线/离线判断）：有活体→活体坐标；
+    // 无活体→持久坐标（TeleportMapStations.json 记录；无记录则 UID 自带坐标回退解析）。
+    // 返回 false 仅当 UID 非法且无任何坐标来源（调用方中性气泡）。targetLive 仅供日志区分。
     private bool ResolveTarget(string selectedUid, TerrainObject senderPad, out Vector3 targetPos, out TerrainObject targetLive, out bool viaPersisted)
     {
         targetPos = default;
@@ -249,7 +247,6 @@ public class TeleportPadTrigger : MonoBehaviour
             var live = TeleportConsoleSelection.ResolveLivePad(selectedUid);
             if (live != null)
             {
-                if (!TeleportConsoleSelection.IsOnlineUid(selectedUid)) return false;
                 if (senderPad != null && live == senderPad) { targetLive = live; targetPos = live.transform.position; return true; }
                 targetLive = live;
                 targetPos = live.transform.position + new Vector3(1.2f, 0f, 0f);
@@ -265,8 +262,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 catch { }
                 return true;
             }
-            // 无活体：持久在线即按持久坐标传送（删"走近/未加载"门控）
-            if (!TeleportConsoleSelection.IsOnlineUid(selectedUid)) return false;
+            // 无活体：按持久坐标传送（v0.9.64 删 persisted-online 门控；无记录则 UID 自带坐标回退）
             int px, py;
             if (!TeleportConsoleSelection.TryGetPersistedPos(selectedUid, out px, out py)) return false;
             Vector3 tp = new Vector3(px + 1.2f, py, 0f);

@@ -57,6 +57,10 @@ public static class TeleportStationUid
     }
 
     /// <summary>面向玩家的显示名：玩家命名优先，无名用 UID。永不返回 GO 名。</summary>
+    /// v0.9.64 显示自愈（根因①）：SetName 写 console 坐标键（+绑定时才双写 pad 坐标键），
+    /// 改名时未绑定 → pad 坐标键缺失 → DisplayForUid(padUid) 回退成 UID。
+    /// 现直查未中时走活体回退（pad→对端console命名 / console自身命名），命中即写透 pad/console
+    /// 坐标键，下次直查即中；无活体才回 UID（调用方可再用存量名兜底）。
     public static string DisplayForUid(string uid)
     {
         try
@@ -66,6 +70,38 @@ public static class TeleportStationUid
             {
                 string named = TeleportStationNameManager.GetNameByCoord(coord);
                 if (!string.IsNullOrWhiteSpace(named)) return named;
+                try
+                {
+                    string live = null;
+                    var pad = TeleportBindingManager.FindPadByUid(uid);
+                    if (pad != null)
+                    {
+                        long pk = GetInstanceKey(pad);
+                        long ck = TeleportBindingManager.GetBoundConsole(pk);
+                        if (ck != 0)
+                        {
+                            var console = TeleportBindingManager.FindConsoleByKey(ck);
+                            string n;
+                            if (console != null && TeleportStationNameManager.TryGetCustomName(console, out n) && !string.IsNullOrWhiteSpace(n))
+                                live = n;
+                        }
+                    }
+                    if (string.IsNullOrEmpty(live))
+                    {
+                        var console2 = TeleportBindingManager.FindConsoleByUid(uid);
+                        if (console2 != null)
+                        {
+                            string n2;
+                            if (TeleportStationNameManager.TryGetCustomName(console2, out n2) && !string.IsNullOrWhiteSpace(n2))
+                                live = n2;
+                        }
+                    }
+                    if (!string.IsNullOrWhiteSpace(live))
+                    {
+                        try { TeleportStationNameManager.SetCoordName(coord, live); } catch {}
+                        return live;
+                    }
+                } catch {}
             }
             return string.IsNullOrEmpty(uid) ? "未知站点" : uid;
         }

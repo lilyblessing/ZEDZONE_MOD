@@ -162,6 +162,17 @@ public static class TeleportStationNameManager
         return "";
     }
 
+    // v0.9.64 坐标键治愈写（DisplayForUid 活体回退写透 / 绑定成功对齐用；空名=删键）。
+    public static void SetCoordName(string coord, string name)
+    {
+        if (string.IsNullOrEmpty(coord)) return;
+        try
+        {
+            if (string.IsNullOrEmpty(name)) _namesByCoord.Remove(coord);
+            else _namesByCoord[coord] = name;
+        } catch {}
+    }
+
     public static void SetName(TerrainObject console, string newName)
     {
         if (console == null) return;
@@ -304,6 +315,20 @@ public static class TeleportStationNameManager
                     _names[ck] = pv;
                     over++;
                 }
+                // v0.9.64 坐标键回填（根因①治愈）：存档名只进了实例键表时，同步一份到
+                // console 当前坐标键，保证 DisplayForUid(uid→coord) 跨读档命中。
+                try
+                {
+                    if (!string.IsNullOrEmpty(pv))
+                    {
+                        string cck2 = CoordKey(c);
+                        if (!string.IsNullOrEmpty(cck2))
+                        {
+                            string old;
+                            if (!_namesByCoord.TryGetValue(cck2, out old) || old != pv) _namesByCoord[cck2] = pv;
+                        }
+                    }
+                } catch {}
                 // pv 为空时不删 JSON 残留（避免存档清空误删，外层 CleanupStale 负责）
             }
             if (over > 0) Plugin.L.LogInfo($"[TS][Name] properties[2]覆盖{over}条");
