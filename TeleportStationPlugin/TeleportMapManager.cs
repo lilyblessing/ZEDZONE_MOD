@@ -38,7 +38,9 @@ public class TeleportMapManager : MonoBehaviour
     private readonly Dictionary<string, StationRec> _persisted = new();
     private bool _persistedLoaded = false;
     private float _lastPersistedSave = -999f;
-    private class StationRec { public int x; public int y; public string name; public bool online; }
+    // v0.9.65 配对证据③：paired=观测到配对时写true+peer=对端console坐标；无paired字段=老文件缺信息；
+    // paired=false(有字段)=解绑后显式清除。门控：paired→放行；无字段→fail-open放行；paired=false→拦。
+    private class StationRec { public int x; public int y; public string name; public bool online; public bool paired; public string peer; public bool hasPairEvidence; }
     private Sprite _markerSprite;
     private float _nextRefresh = -1f;
     private bool _mapOpenLast = false;
@@ -224,10 +226,26 @@ public class TeleportMapManager : MonoBehaviour
                 bool online = TeleportConsoleSelection.IsOnline(pad);
                 string name = GetNameForPad(pad);
                 // v0.9.61 活体实测写入持久坐标表（远站补齐的数据源）
+                // v0.9.65：pads 来自 CollectBoundPads（已配对），同步写入配对证据③（对端 console 坐标）。
                 try
                 {
                     string ck = TeleportStationNameManager.CoordKey(pad);
-                    if (!string.IsNullOrEmpty(ck)) { liveCoords.Add(ck); RecordPersisted(ck, worldPos, name, online); }
+                    if (!string.IsNullOrEmpty(ck))
+                    {
+                        liveCoords.Add(ck);
+                        string peer = "";
+                        try
+                        {
+                            long pk2 = GetInstanceKey(pad);
+                            long ck2 = TeleportBindingManager.GetBoundConsole(pk2);
+                            if (ck2 != 0)
+                            {
+                                var cobj = FindByKey(ck2) as TerrainObject;
+                                if (cobj != null) peer = TeleportStationNameManager.CoordKey(cobj);
+                            }
+                        } catch {}
+                        RecordPersisted(ck, worldPos, name, online, peer);
+                    }
                 } catch {}
 
                 if (!_markers.TryGetValue(padKey, out var go) || go == null)
@@ -412,8 +430,8 @@ public class TeleportMapManager : MonoBehaviour
                 }
             }
             // v0.9.61 远站补齐：持久坐标表中有、活体未画的站（未绑定/未加载/玩家在远处）同样建标记。
-            // v0.9.64 配对前置：pad 坐标无绑定坐标对记录 → 不建存量标记（未配对不进列表）；
-            // 在线态仅显示（最后已知态），点击选点无门控（OnOfflineMarkerClick）。
+            // v0.9.65 配对三选一即放行：①活体已列（上游已过滤）②绑定坐标对 ③存量配对证据；
+            // 缺信息（无②无③记录/老文件）fail-open 放行；仅③显式 paired=false 才拦。
             try
             {
                 LoadPersisted();
@@ -422,8 +440,14 @@ public class TeleportMapManager : MonoBehaviour
                     if (liveCoords.Contains(kv.Key)) continue;
                     if (!TeleportBindingManager.IsPadCoordPaired(kv.Key))
                     {
-                        Plugin.L.LogInfo($"[TS][Map] 排除未配对存量标记 coord={kv.Key}({kv.Value?.name})（绑定坐标对无记录）");
-                        continue;
+                        bool hasEv;
+                        bool pairedEv = QueryPairEvidence(kv.Key, out hasEv);
+                        if (!pairedEv && hasEv)
+                        {
+                            Plugin.L.LogInfo($"[TS][Map] 排除已解绑存量标记 coord={kv.Key}({kv.Value?.name})（配对证据paired=false）");
+                            continue;
+                        }
+                        if (!hasEv) Plugin.L.LogInfo($"[TS][Map] 存量标记缺配对信息 fail-open coord={kv.Key}({kv.Value?.name})");
                     }
                     string mkey = "c:" + kv.Key;
                     if (alive.Contains(mkey)) continue;
@@ -623,7 +647,8 @@ public class TeleportMapManager : MonoBehaviour
         } catch { return null; }
     }
 
-    private void RecordPersisted(string coord, Vector2 worldPos, string name, bool online)
+    // v0.9.65：peerCoord=对端 console 坐标（配对证据③；调用方仅传已绑定 pad，故 paired恒true）。
+    private void RecordPersisted(string coord, Vector2 worldPos, string name, bool online, string peerCoord)
     {
         try
         {
@@ -634,8 +659,46 @@ public class TeleportMapManager : MonoBehaviour
                 rec.y = Mathf.RoundToInt(worldPos.y);
                 rec.name = name;
                 rec.online = online;
+                rec.paired = true;
+                rec.hasPairEvidence = true;
+                if (!string.IsNullOrEmpty(peerCoord)) rec.peer = peerCoord;
             }
-            else _persisted[coord] = new StationRec { x = Mathf.RoundToInt(worldPos.x), y = Mathf.RoundToInt(worldPos.y), name = name, online = online };
+            else _persisted[coord] = new StationRec { x = Mathf.RoundToInt(worldPos.x), y = Mathf.RoundToInt(worldPos.y), name = name, online = online, paired = true, peer = peerCoord ?? "", hasPairEvidence = true };
+        } catch {}
+    }
+
+    // v0.9.65 解绑清除配对证据（故意拆散后列表/标记消失；peer 保留供诊断）。
+    public static void MarkStationUnpaired(string padCoord, string consoleCoord)
+    {
+        try
+        {
+            var inst = Instance;
+            if (inst == null) { Plugin.L.LogInfo($"[TS][Map] 解绑清证据跳过（实例未就绪） pad={padCoord}"); return; }
+            inst.LoadPersisted();
+            bool touched = false;
+            if (!string.IsNullOrEmpty(padCoord) && inst._persisted.TryGetValue(padCoord, out var rec) && rec != null)
+            {
+                rec.paired = false;
+                rec.hasPairEvidence = true;
+                touched = true;
+            }
+            if (!string.IsNullOrEmpty(consoleCoord))
+            {
+                foreach (var kv in inst._persisted)
+                {
+                    if (kv.Value != null && kv.Value.peer == consoleCoord && kv.Value.paired)
+                    {
+                        kv.Value.paired = false;
+                        kv.Value.hasPairEvidence = true;
+                        touched = true;
+                    }
+                }
+            }
+            if (touched)
+            {
+                inst.SavePersistedThrottled(force: true);
+                Plugin.L.LogInfo($"[TS][Map] 解绑清配对证据 pad={padCoord} peer={consoleCoord}");
+            }
         } catch {}
     }
 
@@ -686,7 +749,11 @@ public class TeleportMapManager : MonoBehaviour
                         x = ParseIntField(body, "\"x\""),
                         y = ParseIntField(body, "\"y\""),
                         name = ParseStrField(body, "\"name\""),
-                        online = ParseIntField(body, "\"online\"") != 0
+                        online = ParseIntField(body, "\"online\"") != 0,
+                        // v0.9.65 老文件无 paired 字段 → hasPairEvidence=false（缺信息，门控 fail-open）
+                        paired = ParseIntField(body, "\"paired\"") != 0,
+                        peer = ParseStrField(body, "\"peer\""),
+                        hasPairEvidence = body.Contains("\"paired\"")
                     };
                     if (!string.IsNullOrEmpty(coord) && !string.IsNullOrEmpty(rec.name)) _persisted[coord] = rec;
                 } catch {}
@@ -760,7 +827,8 @@ public class TeleportMapManager : MonoBehaviour
                 if (kv.Value == null || string.IsNullOrEmpty(kv.Value.name)) continue;
                 if (!first) sb.Append(",");
                 string en = kv.Value.name.Replace("\\", "\\\\").Replace("\"", "\\\"");
-                sb.Append($"\"{kv.Key}\":{{\"x\":{kv.Value.x},\"y\":{kv.Value.y},\"name\":\"{en}\",\"online\":{(kv.Value.online ? 1 : 0)}}}");
+                string epeer = (kv.Value.peer ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+                sb.Append($"\"{kv.Key}\":{{\"x\":{kv.Value.x},\"y\":{kv.Value.y},\"name\":\"{en}\",\"online\":{(kv.Value.online ? 1 : 0)},\"paired\":{(kv.Value.paired ? 1 : 0)},\"peer\":\"{epeer}\"}}");
                 first = false;
             }
             sb.Append("}");
@@ -922,6 +990,52 @@ public class TeleportMapManager : MonoBehaviour
         }
         catch { }
         return false;
+    }
+
+    // ===== v0.9.65 配对证据③静态查询（内存优先，文件兜底；老文件无 paired 字段）=====
+    // 返回 paired；hasEvidence=false 表示无记录或老格式（缺信息 → 调用方 fail-open 放行并记 debug）。
+    public static bool QueryPairEvidence(string coord, out bool hasEvidence)
+    {
+        hasEvidence = false;
+        if (string.IsNullOrEmpty(coord)) return false;
+        try
+        {
+            var inst = Instance;
+            if (inst != null)
+            {
+                inst.LoadPersisted();
+                if (inst._persisted.TryGetValue(coord, out var rec) && rec != null)
+                {
+                    hasEvidence = rec.hasPairEvidence;
+                    return rec.paired;
+                }
+            }
+            string path = PersistedPath();
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return false;
+            string txt = System.IO.File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(txt)) return false;
+            string key = "\"" + coord + "\"";
+            int ki = txt.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return false;
+            int bo = txt.IndexOf('{', ki + key.Length);
+            if (bo < 0) return false;
+            int depth = 0;
+            bool inStr = false;
+            int be = -1;
+            for (int j = bo; j < txt.Length; j++)
+            {
+                char ch = txt[j];
+                if (inStr) { if (ch == '\\') j++; else if (ch == '"') inStr = false; continue; }
+                if (ch == '"') inStr = true;
+                else if (ch == '{') depth++;
+                else if (ch == '}') { depth--; if (depth == 0) { be = j; break; } }
+            }
+            if (be < 0) return false;
+            string body = txt.Substring(bo, be - bo + 1);
+            hasEvidence = body.Contains("\"paired\"");
+            return ParseIntFieldStatic(body, "\"paired\"") != 0;
+        }
+        catch { return false; }
     }
 
     private static int ParseIntFieldStatic(string body, string key)

@@ -520,6 +520,7 @@ public class TeleportConsoleUI : MonoBehaviour
     }
 
     // ===== v0.9.62 存量回退（读档/远站）：只读地图存量文件，不改其他文件 =====
+    // v0.9.65：解析配对证据③（paired/peer；老文件无 paired 字段=缺信息）。
     private class StaleStation
     {
         public string coord;
@@ -527,9 +528,12 @@ public class TeleportConsoleUI : MonoBehaviour
         public int y;
         public string name;
         public bool online;
+        public bool paired;
+        public string peer;
+        public bool hasPairEvidence;
     }
 
-    // 存量表与地图侧同文件同格式：Config/TeleportMapStations.json {"x,y":{"x":..,"y":..,"name":"..","online":0/1}}
+    // 存量表与地图侧同文件同格式：Config/TeleportMapStations.json {"x,y":{"x":..,"y":..,"name":"..","online":0/1,"paired":0/1,"peer":".."}}（后两字段可选）
     private static List<StaleStation> LoadStaleStations()
     {
         var res = new List<StaleStation>();
@@ -571,7 +575,10 @@ public class TeleportConsoleUI : MonoBehaviour
                         x = ParseStaleInt(body, "\"x\""),
                         y = ParseStaleInt(body, "\"y\""),
                         name = ParseStaleStr(body, "\"name\""),
-                        online = ParseStaleInt(body, "\"online\"") != 0
+                        online = ParseStaleInt(body, "\"online\"") != 0,
+                        paired = ParseStaleInt(body, "\"paired\"") != 0,
+                        peer = ParseStaleStr(body, "\"peer\""),
+                        hasPairEvidence = body.Contains("\"paired\"")
                     };
                     if (!string.IsNullOrEmpty(coord) && !string.IsNullOrEmpty(st.name)) res.Add(st);
                 } catch {}
@@ -673,11 +680,17 @@ public class TeleportConsoleUI : MonoBehaviour
                         Plugin.L.LogInfo($"[TS][UI] 跳过本站存量行 coord={st.coord}({st.name})");
                         continue; // 本站（坐标比对，跨读档稳定）
                     }
-                    // v0.9.64 配对前置（存量）：pad 坐标无配对记录 → 不进列表。
+                    // v0.9.65 配对三选一即放行：②绑定坐标对 ③存量配对证据；
+                    // 缺信息（无②且存量无 paired 字段/老文件）fail-open 放行；仅③显式 paired=false 才拦。
                     if (!TeleportBindingManager.IsPadCoordPaired(st.coord))
                     {
-                        Plugin.L.LogInfo($"[TS][UI] 排除未配对存量站 coord={st.coord}({st.name})（绑定坐标对无记录，不进列表）");
-                        continue;
+                        if (st.hasPairEvidence && !st.paired)
+                        {
+                            Plugin.L.LogInfo($"[TS][UI] 排除已解绑存量站 coord={st.coord}({st.name})（配对证据paired=false）");
+                            continue;
+                        }
+                        if (st.paired) Plugin.L.LogInfo($"[TS][UI] 存量站配对证据放行 coord={st.coord}({st.name}) peer={st.peer}");
+                        else Plugin.L.LogInfo($"[TS][UI] 存量站缺配对信息 fail-open coord={st.coord}({st.name})");
                     }
                     string distStr = FormatDistFromXY(cc, st.x, st.y);
                     // v0.9.64 显示名优先（UID直查→活体自愈→存量名→UID）；在线态仅显示，无门控。

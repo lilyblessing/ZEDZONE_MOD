@@ -476,6 +476,13 @@ public static class TeleportBindingManager
             catch { }
             Save();
             try { TeleportConsoleSelection.ClearByKey(cid); } catch {}
+            // v0.9.65：解绑清除存量配对证据（故意拆散后选点/标记消失）
+            try
+            {
+                string padCoord = pad != null ? CoordKey(pad) : "";
+                string conCoord = CoordKey(console);
+                TeleportMapManager.MarkStationUnpaired(padCoord, conCoord);
+            } catch {}
             ShowHint("已解绑", isError: false);
             Plugin.L.LogInfo($"[TS][Bind] 解绑 console={cid} pad={pid} 并清空选择");
             return true;
