@@ -26,6 +26,9 @@ namespace TeleportStationPlugin;
 /// v0.9.58（LogOutput.log 实证修）：<>c 从未挂上——L1-L6 全失败，L2 names=[__c] / L4 +__c 实证嵌套实际名是 `__c`
 /// （Il2CppInterop 把 <> 改写为下划线，硬查 "<>c" 永不命中）；加 L7 按 `__c` 精确命中 + M3 方法宽松匹配；
 /// postfix 删 TryCreateDelegate 调用（R1-R4 死路刷屏），原生委托原样保留只改 interactStr，F 分派唯一走 <>c prefix。
+/// v0.9.59（prefix挂上但不拦截修）：route=L7 挂上 _OnPlayerEnterRange_b__0_0，但 __0 == GameObject 走近距兜底后静默放行（944/951 行无日志）；
+/// 加 ResolveConsoleFromGameObject（GetComponent地访/InstanceID/0.5m，复用 postfix io==go 判据）+ GetLiveConsole + DescribeObj，
+/// 全部放行分支必记日志（明确非console/近距无console/超距带 objType/objVal/候选数/d2），禁静默放行。
 /// TryRegisterConsoleSelf 整段休眠（R-all-fail），不再向 list 写 null 委托。
 /// </summary>
 public static class TeleportConsoleInteractFix
@@ -901,8 +904,10 @@ public static class TeleportConsoleInteractFix
     /// <>c 分派：F 按下时 b__0_0 回调入口。判别一律先走回调 obj 链（编译期直访，禁反射读游戏字段）：
     /// 主路 obj as InteractObjectData → interactObject@0x10 → TerrainObject.attr.id；
     /// 次路 obj as InteractData → interactObjectTemp@0x30（Furniture_Commu 注册时 == this）→ attr.id。
-    /// 命中 900101 才 return false 弹自建菜单；obj 链可解析但非 900101 → return true 放原生 DOS；
-    /// obj 不可解析（null/未知类型）→ 沿用 v0.9.55 近距门控兜底（_currentConsole + 6m）并打 fallback 日志。
+    /// v0.9.59 新增 GameObject 直判：实机 __0 == UnityEngine.GameObject（兜底日志实证），postfix 实证
+    /// InteractObjectData.interactObject == console gameObject（io==go/ioId==goId），故 __0 直判拥有者（GetComponent/InstanceID/0.5m，postfix 同判据）。
+    /// 命中 900101 才 return false 弹自建菜单；obj 可解析但非 900101 → return true 放原生 DOS（记日志，禁静默）；
+    /// obj 不可解析（null/未知类型）→ 近距兜底（_currentConsole + 6m），每条放行分支必 warn（带 objType/objVal/候选数/d2），禁静默放行。
     /// 旧问题：纯距离门控下，传送台旁的原生终端按 F 也会被吞；现仅未知 payload 才走此兜底。
     /// </summary>
     private static bool CommuDelegatePrefix(object __instance, object __0)
@@ -910,23 +915,43 @@ public static class TeleportConsoleInteractFix
         try
         {
             object obj = __0;
+            string objType = "null"; string objVal = "null";
+            try { objType = obj != null ? obj.GetType().FullName : "null"; } catch { objType = "?"; }
+            try { objVal = DescribeObj(obj); } catch { objVal = "?"; }
             // 主判别：回调 obj 链（编译期直访，禁反射读游戏字段）
             TerrainObject hit = ResolveConsoleFromCallback(obj);
             if (hit != null)
             {
                 _currentConsole = hit;
                 try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(hit); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
-                Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (obj链) console={hit.GetInstanceID()} objType={obj?.GetType().FullName ?? "null"}");
+                Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (obj链) console={hit.GetInstanceID()} objType={objType}");
                 return false; // 900101：吞原生 DOS，弹自建菜单
             }
-            if (obj != null && IsKnownInteractPayload(obj)) return true; // 链可解析但非传送台：原生终端，放原生 DOS
-            try { Plugin.L.LogInfo($"[TS][Fix] <>c obj不可解析走近距兜底 objType={obj?.GetType().FullName ?? "null"}"); } catch {}
-            var c = _currentConsole;
-            if (c == null || c.attr == null || c.attr.id != 900101)
+            // v0.9.59 GameObject 直判：复用 postfix 已验证的 io==go 判据，不再忽略 __0
+            TerrainObject goHit = ResolveConsoleFromGameObject(obj);
+            if (goHit != null)
+            {
+                _currentConsole = goHit;
+                try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(goHit); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
+                Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (GameObject链) console={goHit.GetInstanceID()} objType={objType} objVal={objVal}");
+                return false;
+            }
+            // 明确可解析但非传送台（原生终端/原生条目）→ 放原生 DOS，但必须打日志，禁静默
+            if (obj != null && (IsKnownInteractPayload(obj) || obj is GameObject || obj is Component))
+            {
+                try { Plugin.L.LogInfo($"[TS][Fix] <>c 放行(明确非console) objType={objType} objVal={objVal}"); } catch {}
+                return true;
+            }
+            // 不可解析（null/未知类型）→ 近距兜底；每条放行分支必 warn，禁静默
+            try { Plugin.L.LogInfo($"[TS][Fix] <>c obj不可解析走近距兜底 objType={objType} objVal={objVal}"); } catch {}
+            var c = GetLiveConsole();
+            int candCount = -1;
+            if (c == null)
             {
                 try
                 {
                     var list = TeleportObjectCache.FindAllById(900101);
+                    try { candCount = list != null ? list.Count : -1; } catch {}
                     var player = GetPlayerTransform();
                     if (player != null && list != null && list.Count > 0)
                     {
@@ -939,20 +964,21 @@ public static class TeleportConsoleInteractFix
                         }
                         if (best != null) c = best;
                     }
+                    else { try { Plugin.L.LogWarning($"[TS][Fix] <>c 近距搜索无候选 objType={objType} candidates={candCount} playerNull={player == null}"); } catch {} }
                 } catch {}
             }
-            if (c == null || c.attr == null || c.attr.id != 900101) return true;
+            if (c == null) { try { Plugin.L.LogWarning($"[TS][Fix] <>c 放行(近距无console) objType={objType} objVal={objVal} candidates={candCount}"); } catch {} return true; }
             try
             {
                 var player = GetPlayerTransform();
                 if (player != null)
                 {
                     float d2 = (c.transform.position - player.position).sqrMagnitude;
-                    if (d2 > 36f) return true;
+                    if (d2 > 36f) { try { Plugin.L.LogWarning($"[TS][Fix] <>c 放行(超距) objType={objType} console={c.GetInstanceID()} d2={d2}"); } catch {} return true; }
                 }
             } catch {}
             try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(c); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
-            Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (近距兜底) console={c.GetInstanceID()} pos={c.transform.position} objParam={obj?.GetType().FullName ?? "null"}");
+            Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (近距兜底) console={c.GetInstanceID()} pos={c.transform.position} objParam={objType}");
             return false;
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix err {e.Message.Split('\n')[0]}"); return true; }
     }
@@ -988,6 +1014,98 @@ public static class TeleportConsoleInteractFix
             }
         } catch {}
         return null;
+    }
+
+    /// <summary>v0.9.59：__0 GameObject 直判。实机 __0 == UnityEngine.GameObject（兜底日志实证×2）；
+    /// postfix 实证 InteractObjectData.interactObject == console gameObject（io==go / ioId==goId），故 __0 极可能就是 console 的 gameObject。
+    /// 复用 postfix 已验证判据：A) GetComponent编译期直访 attr.id==900101；B) _currentConsole 的 gameObject/InstanceID/0.5m 比对；
+    /// C) 缓存全扫同判据。全程编译期直访 + 自家类型判断，零反射读游戏实例字段。</summary>
+    private static TerrainObject ResolveConsoleFromGameObject(object obj)
+    {
+        if (obj == null) return null;
+        GameObject go = null;
+        try { go = obj as GameObject; } catch {}
+        if (go == null) try { var comp = obj as Component; if (comp != null) go = comp.gameObject; } catch {}
+        if (go == null) try { if (obj is Il2CppObjectBase il) { go = il.TryCast<GameObject>(); if (go == null) { var c2 = il.TryCast<Component>(); if (c2 != null) go = c2.gameObject; } } } catch {}
+        if (go == null) return null;
+        // A) 编译期直访拥有者（postfix 972/985 行同模式）
+        try
+        {
+            var to = go.GetComponent<TerrainObject>();
+            if (to != null && to.attr != null && to.attr.id == 900101) return to;
+        } catch {}
+        // B) 与 _currentConsole 比对（postfix io==go / transId / pos0.5 同判据）
+        try
+        {
+            var c = GetLiveConsole();
+            if (c != null && c.gameObject != null)
+            {
+                int goId = 0, cGoId = 0;
+                try { goId = go.GetInstanceID(); } catch {}
+                try { cGoId = c.gameObject.GetInstanceID(); } catch {}
+                if (goId != 0 && goId == cGoId) return c;
+                try { if (ReferenceEquals(c.gameObject, (object)go)) return c; } catch {}
+                try
+                {
+                    var gt = go.transform; var ct = c.transform;
+                    if (gt != null && ct != null && (gt.position - ct.position).sqrMagnitude < 0.25f) return c;
+                } catch {}
+            }
+        } catch {}
+        // C) 缓存全扫（postfix ioId==goId 即此路）
+        try
+        {
+            var list = TeleportObjectCache.FindAllById(900101);
+            if (list != null && list.Count > 0)
+            {
+                int goId2 = 0; Vector3 gp = Vector3.zero; bool hasP = false;
+                try { goId2 = go.GetInstanceID(); } catch {}
+                try { var gt2 = go.transform; if (gt2 != null) { gp = gt2.position; hasP = true; } } catch {}
+                foreach (var t in list)
+                {
+                    if (t == null) continue;
+                    try
+                    {
+                        var tgo = t.gameObject; if (tgo == null) continue;
+                        if (ReferenceEquals(tgo, (object)go)) return t;
+                        if (goId2 != 0 && tgo.GetInstanceID() == goId2) return t;
+                        if (hasP) { var tt = t.transform; if (tt != null && (tt.position - gp).sqrMagnitude < 0.25f) return t; }
+                    } catch {}
+                }
+            }
+        } catch {}
+        return null;
+    }
+
+    /// <summary>v0.9.59：_currentConsole 有效性校验（stale wrapper → null）。Il2Cpp 代理 == 重载 + attr 地访异常一律判死，不抛。</summary>
+    private static TerrainObject GetLiveConsole()
+    {
+        var c = _currentConsole;
+        if (c == null) return null;
+        try
+        {
+            var a = c.attr;
+            if (a == null || a.id != 900101) return null;
+        } catch { return null; }
+        return c;
+    }
+
+    /// <summary>v0.9.59：__0 描述（类型+名/id），只用于 warn 日志字段。编译期直访 + 自家 ToString，零反射。</summary>
+    private static string DescribeObj(object obj)
+    {
+        if (obj == null) return "null";
+        try
+        {
+            var uo = obj as UnityEngine.Object;
+            if (uo != null)
+            {
+                string n = "?"; int id = 0;
+                try { n = uo.name; } catch {}
+                try { id = uo.GetInstanceID(); } catch {}
+                return $"name='{n}' id={id}";
+            }
+        } catch {}
+        try { return obj.ToString(); } catch { return "?"; }
     }
 
     /// <summary>obj 是否为可解析的交互 payload（任一链可走通类型判断）。用于区分“明确非传送台”（放原生 DOS）与“不可解析”（走近距兜底）。只读自家类型判断，零反射读游戏字段。</summary>
