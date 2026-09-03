@@ -7,7 +7,7 @@ using Il2CppInterop.Runtime.Attributes;
 namespace TeleportStationPlugin;
 
 /// <summary>
-/// P6.3 控制台三项菜单：命名 / 选择目的地(地图) / 退出
+/// A方案自建面板栈三项菜单：重命名 / 选择传送目的地(站列表) / 退出（不碰DOS单例，不调OpenDOSPanel/QuitDOS）
 /// 接管 900101 (克隆自 108 Furniture_Commu) 的原生雇佣交互（按F）改为传送专用菜单。
 /// 另提供靠近提示“按 [F] 打开传送控制台”。
 /// </summary>
@@ -128,17 +128,15 @@ public class TeleportConsoleMenuUI : MonoBehaviour
             try { TeleportStationRenameUI.EnsureExists().Show(c); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Menu] Rename fail {e.Message.Split('\n')[0]}"); }
         });
         y -= 62f;
-        CreateMenuButton(panelGO.transform, "选择传送目的地 (打开地图)", new Vector2(0f, y), () =>
+        CreateMenuButton(panelGO.transform, "选择传送目的地", new Vector2(0f, y), () =>
         {
             var c = _currentConsole;
             Close();
             if (c == null) return;
             try
             {
-                TeleportConsoleComputerFix.PendingConsoleForMap = c;
-                TeleportConsoleComputerFix.CurrentConsole = c;
-                TeleportMapManager.RequestOpenMap(c);
-            } catch (Exception e) { Plugin.L.LogWarning($"[TS][Menu] Map fail {e.Message.Split('\n')[0]}"); }
+                TeleportConsoleUI.EnsureExists().ShowForConsole(c);
+            } catch (Exception e) { Plugin.L.LogWarning($"[TS][Menu] List fail {e.Message.Split('\n')[0]}"); }
         });
         y -= 62f;
         CreateMenuButton(panelGO.transform, "退出", new Vector2(0f, y), () => Close(), new Color(0.55f, 0.22f, 0.22f, 1f));

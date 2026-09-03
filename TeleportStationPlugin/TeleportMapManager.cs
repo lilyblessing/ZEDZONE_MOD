@@ -13,7 +13,9 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// PDA 地图传送标：在原生 MapPanel 上为已绑定圆盘注入可点击图标。
-/// 贴图 textures/marker.png 730x730(60864B) 缩至 36x36, scale 0.35-0.6 区间。
+/// 图标 48x48 小图优先（传送点标志-48.png → textures/marker48.png 系列），prefab 分支沿用
+/// prefab 自带 rect（不硬编码 36），自建回退 36x36；localScale 恒 Vector3.one 保留
+/// CreateSimpleMapMarker（基准×param_4）scale 语义；Button 保留可点（选点闭环不断）。
 /// 参考 dump.cs:103696 MapPanel 字段 mapParent(0x30) mapIconPrefab_LocationMarker(0x118) mapScaleFloat(0x128)
 /// centerPoint(0x12C) worldPositionOffset static(0x8) mapWidth(0x144) mapHeight(0x148)
 /// 方法 CreateSimpleMapMarker VA0x180BE6390 Init 0x180BEB280 Update 0x180BF0690 LateUpdate 0x180BEBE70
@@ -227,8 +229,9 @@ public class TeleportMapManager : MonoBehaviour
                                 rt.anchorMax = new Vector2(0.5f, 0.5f);
                                 rt.pivot = new Vector2(0.5f, 0.5f);
                                 rt.anchoredPosition = anchoredPos;
+                                // 沿用 prefab 自带 rect（无实测证据不硬编码 sizeDelta；scale 语义保留 One，
+                                // 对应 CreateSimpleMapMarker 基准×param_4 由原生 prefab 侧决定）。
                                 rt.localScale = Vector3.one;
-                                rt.sizeDelta = new Vector2(36f, 36f);
                             }
                             var img = go.GetComponent<Image>();
                             if (img == null) try { img = go.GetComponentInChildren<Image>(true); } catch {}
@@ -236,12 +239,19 @@ public class TeleportMapManager : MonoBehaviour
                             {
                                 if (_markerSprite != null) img.sprite = _markerSprite;
                                 img.preserveAspect = true;
-                                img.raycastTarget = false;
+                                img.raycastTarget = true;
                                 img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
                             }
-                            // 非交互：移除 Button
-                            try { var btn = go.GetComponent<Button>(); if (btn != null) UnityEngine.Object.Destroy(btn); } catch {}
-                            try { var btns = go.GetComponentsInChildren<Button>(true); if (btns != null) foreach (var b in btns) if (b != null) UnityEngine.Object.Destroy(b); } catch {}
+                            // 可点击：保留 Button 并接选点闭环（不再 Destroy，保证选点不断）。
+                            try
+                            {
+                                var btn = go.GetComponent<Button>();
+                                if (btn == null) btn = go.AddComponent<Button>();
+                                btn.interactable = true;
+                                var capturedPad = pad;
+                                btn.onClick.RemoveAllListeners();
+                                btn.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capturedPad); } catch {} }));
+                            } catch {}
                             var txt = go.GetComponentInChildren<Text>(true);
                             if (txt != null)
                             {
@@ -300,8 +310,9 @@ public class TeleportMapManager : MonoBehaviour
                             var rt2 = go.AddComponent<RectTransform>();
                             rt2.sizeDelta = new Vector2(36f, 36f);
                             rt2.anchorMin = new Vector2(0.5f, 0.5f); rt2.anchorMax = new Vector2(0.5f, 0.5f); rt2.pivot = new Vector2(0.5f, 0.5f); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
-                            var img2 = go.AddComponent<Image>(); img2.sprite = _markerSprite; img2.preserveAspect = true; img2.raycastTarget = false; img2.color = online ? Color.white : new Color(0.55f,0.55f,0.55f,1f);
+                            var img2 = go.AddComponent<Image>(); img2.sprite = _markerSprite; img2.preserveAspect = true; img2.raycastTarget = true; img2.color = online ? Color.white : new Color(0.55f,0.55f,0.55f,1f);
                             go.transform.SetParent(mapParent, false); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
+                            try { var btnFb = go.AddComponent<Button>(); btnFb.interactable = true; var capFb = pad; btnFb.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capFb); } catch {} })); } catch {}
                             _markers[padKey] = go;
                             var labelGO2 = new GameObject("Label"); labelGO2.transform.SetParent(go.transform, false);
                             var txt2 = labelGO2.AddComponent<Text>(); txt2.alignment = TextAnchor.UpperCenter; txt2.horizontalOverflow = HorizontalWrapMode.Overflow; txt2.verticalOverflow = VerticalWrapMode.Overflow; txt2.fontSize = 12; txt2.fontStyle = FontStyle.Bold; txt2.supportRichText = true; txt2.color = Color.white; ApplyFont(txt2);
@@ -326,10 +337,11 @@ public class TeleportMapManager : MonoBehaviour
                         var img = go.AddComponent<Image>();
                         img.sprite = _markerSprite;
                         img.preserveAspect = true;
-                        img.raycastTarget = false;
+                        img.raycastTarget = true;
                         img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
 
-                        // 非交互：不添加 Button
+                        // 可点击：自建标记同样保留 Button（选点闭环不断）。
+                        try { var btnNew = go.AddComponent<Button>(); btnNew.interactable = true; var capNew = pad; btnNew.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capNew); } catch {} })); } catch {}
 
                         go.transform.SetParent(mapParent, false);
                         rt.anchoredPosition = anchoredPos;
@@ -515,11 +527,17 @@ public class TeleportMapManager : MonoBehaviour
     private void LoadMarkerSprite()
     {
         if (_markerSprite != null) return;
+        // 48x48 小图优先（源文件：传送点标志-48.png，用户手动小图），部署落点 textures/marker48.png 系列；
+        // 旧 730 大图仅作回退。实际尺寸以贴图本身为准，显示侧不硬编码缩放。
+        string p0a = Path.Combine(Plugin.PluginDir, "textures/marker48.png");
+        string p0b = Path.Combine(Plugin.PluginDir, "textures/marker-48.png");
+        string p0c = Path.Combine(Plugin.PluginDir, "textures/teleport-marker-48.png");
+        string p0d = Path.Combine(Plugin.PluginDir, "marker48.png");
         string p1 = Path.Combine(Plugin.PluginDir, "textures/marker.png");
         string p2 = Path.Combine(Plugin.PluginDir, "textures/mapmarker.png");
         string p3 = Path.Combine(Plugin.PluginDir, "marker.png");
         string chosen = null;
-        foreach (var p in new[] { p1, p2, p3 }) { try { if (File.Exists(p)) { chosen = p; break; } } catch {} }
+        foreach (var p in new[] { p0a, p0b, p0c, p0d, p1, p2, p3 }) { try { if (File.Exists(p)) { chosen = p; break; } } catch {} }
         if (chosen != null)
         {
             try
@@ -533,7 +551,7 @@ public class TeleportMapManager : MonoBehaviour
                     var sp = Sprite.Create(tex, new Rect(0, 0, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
                     sp.name = "TP_Marker";
                     _markerSprite = sp;
-                    Plugin.L.LogInfo($"[TS][Map] 贴图载入 {chosen} {tex.width}x{tex.height} -> {sp.name} (730→36 需 scale≈0.05, 实际按 sizeDelta 36)");
+                    Plugin.L.LogInfo($"[TS][Map] 贴图载入 {chosen} {tex.width}x{tex.height} -> {sp.name}（48小图优先，显示沿 prefab rect / 自建36）");
                     return;
                 }
                 else Plugin.L.LogWarning($"[TS][Map] LoadImage 失败 {chosen}");

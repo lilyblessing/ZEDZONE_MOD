@@ -198,7 +198,7 @@ public class TeleportConsoleUI : MonoBehaviour
         try
         {
             if (Time.unscaledTime - _openTime < 0.3f) return; // 防刚打开就 ESC 误关
-            if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.F10))
+            if (Input.GetKeyDown(KeyCode.Escape) || Input.GetKeyDown(KeyCode.F) || Input.GetKeyDown(KeyCode.F10))
             {
                 Close();
             }
@@ -241,7 +241,9 @@ public class TeleportConsoleUI : MonoBehaviour
                 bool isSelfPad = pk == boundPad;
                 string suffix = isSelfPad ? " [本站]" : "";
                 string status = online ? "在线" : "离线";
-                string label = $"{pad.name} {status}{suffix}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
+                string displayName = ResolvePadDisplayName(pad, pk);
+                string distStr = FormatDistXY(_currentConsole, pad);
+                string label = $"{displayName} {status}{suffix} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
                 if (online && !isSelfPad) label += " ★可传送";
                 else if (!online) label += " （不可选）";
 
@@ -403,6 +405,51 @@ public class TeleportConsoleUI : MonoBehaviour
     private static Component FindTerrainObject(Transform tr)
     {
         int d=0; while(tr!=null && d++<16){ foreach(var c in tr.GetComponents<Component>()) if(c!=null && c.GetType().Name.Contains("TerrainObject")) return c; tr=tr.parent; }
+        return null;
+    }
+
+    // A方案：站名解析（pad 900102 无独立命名 → 取其绑定控制台 900101 的 NameManager 名；未绑定回退 pad.name）
+    private static string ResolvePadDisplayName(TerrainObject pad, long padKey)
+    {
+        try
+        {
+            long consoleKey = TeleportBindingManager.GetBoundConsole(padKey);
+            if (consoleKey != 0)
+            {
+                var console = FindConsoleByKey(consoleKey);
+                if (console != null)
+                {
+                    string n = TeleportStationNameManager.GetName(console);
+                    if (!string.IsNullOrWhiteSpace(n)) return n;
+                }
+            }
+        } catch {}
+        try { if (pad != null && !string.IsNullOrEmpty(pad.name)) return pad.name; } catch {}
+        return "传送站?";
+    }
+
+    // A方案距离公式（与绑定 BindRangeSqr 同口径：XY 平面欧氏距离，忽略 z 高度）：
+    //   dist = sqrt((px-cx)^2 + (py-cy)^2)；任一端 transform 缺失 → "未知"（不编造坐标）
+    private static string FormatDistXY(TerrainObject console, TerrainObject pad)
+    {
+        try
+        {
+            if (console == null || console.transform == null || pad == null || pad.transform == null) return "未知";
+            var a = console.transform.position;
+            var b = pad.transform.position;
+            float dx = b.x - a.x; float dy = b.y - a.y;
+            return $"{Mathf.Sqrt(dx * dx + dy * dy):F0}m";
+        } catch { return "未知"; }
+    }
+
+    // A方案：按实例键找控制台（走 TeleportObjectCache 缓存，不自建扫描、不轮询）
+    private static TerrainObject FindConsoleByKey(long key)
+    {
+        try
+        {
+            var all = TeleportObjectCache.FindAllById(900101);
+            if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
+        } catch {}
         return null;
     }
 

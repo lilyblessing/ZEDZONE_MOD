@@ -18,6 +18,10 @@ namespace TeleportStationPlugin;
 /// 修复：Postfix 在原版注册后，定位 InteractManager.interactObjectDataList 中对应 GameObject 的 InteractObjectData，
 ///    清空其 interactDataList 并重建为“重命名/选择目的地(列表)/退出”，保留原版 InteractUI 容器与按键提示。
 /// 回退：若定位失败，则直接构造 InteractObjectData + InteractData x3 并调用 AddInteractObjectData。
+/// A方案（F注册层分流）：CommuEnterPrefix 内编译期直访 objectData@0xA8/attr@0xB8 判 900101，
+/// 传送台返回false吞原生注册并登记自建单F（打开传送控制台），原生返回true零触碰；
+/// TryCreateDelegate 按 R1-R6 六路重做（R4 newobj方法组直构为主路径），interactAction 非null；
+/// CommuDelegatePrefix(<>c)保留作兜底，CommuEnterPostfix 内 isQ 透传跳过逻辑未动。
 /// </summary>
 public static class TeleportConsoleInteractFix
 {
@@ -785,7 +789,29 @@ public static class TeleportConsoleInteractFix
     private static object TryCreateDelegate(Type delType, MethodInfo mi)
     {
         if (delType == null || mi == null) return null;
-        try { var d0 = Delegate.CreateDelegate(delType, mi); if (d0 != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate System success delType={delType.FullName}"); return d0; } } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate System fail delType={delType.FullName} err={ex.Message.Split('\n')[0]}"); }
+        // R1 CreateDelegate 开放静态绑定
+        try { var d0 = Delegate.CreateDelegate(delType, mi); if (d0 != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate R1 System success delType={delType.FullName}"); return d0; } } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate R1 fail delType={delType.FullName} err={ex.Message.Split('\n')[0]}"); }
+        // R2 CreateDelegate 显式target绑定（静态mi + null target）
+        try { var d1 = Delegate.CreateDelegate(delType, null, mi); if (d1 != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate R2 explicit-target success delType={delType.FullName}"); return d1; } } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate R2 fail delType={delType.FullName} err={ex.Message.Split('\n')[0]}"); }
+        // R3 MethodInfo.CreateDelegate绑定路径
+        try { var d2 = mi.CreateDelegate(delType); if (d2 != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate R3 MethodInfo success delType={delType.FullName}"); return d2; } } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate R3 fail delType={delType.FullName} err={ex.Message.Split('\n')[0]}"); }
+        // R4 newobj+绑定：DelegateSupport.ConvertDelegate（互操作元数据实测存在：Il2CppInterop.Runtime.DelegateSupport.ConvertDelegate<T>(Delegate)，
+        //   public static generic，ret=!!0 params=[Delegate]；managed static方法先绑成 Action<object> 再转 Il2Cpp 原生 trampoline，不走 IntPtr 裸指针）
+        try
+        {
+            if (mi.IsStatic)
+            {
+                var managed = Delegate.CreateDelegate(typeof(Action<object>), mi);
+                if (managed != null)
+                {
+                    var conv = typeof(Il2CppInterop.Runtime.DelegateSupport).GetMethod("ConvertDelegate", BindingFlags.Public | BindingFlags.Static);
+                    var generic = conv != null ? conv.MakeGenericMethod(delType) : null;
+                    var d = generic != null ? generic.Invoke(null, new object[] { managed }) : null;
+                    if (d != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate R4 ConvertDelegate success delType={delType.FullName} mi={mi.Name}"); return d; }
+                }
+            }
+        } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate R4 fail {ex.Message.Split('\n')[0]}"); }
+        // R5 Il2CppSystem.Delegate 绑定路径
         try
         {
             var ilType = SafeTypeByName("Il2CppSystem.Delegate");
@@ -795,12 +821,12 @@ public static class TeleportConsoleInteractFix
                 if (m != null)
                 {
                     var d = m.Invoke(null, new object[]{ delType, mi });
-                    if (d != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate via Il2CppSystem.Delegate success delType={delType.FullName}"); return d; }
+                    if (d != null) { Plugin.L.LogInfo($"[TS][Fix] TryCreateDelegate R5 via Il2CppSystem.Delegate success delType={delType.FullName}"); return d; }
                 }
             }
-        } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate Il2Cpp fail {ex2.Message.Split('\n')[0]}"); }
-        // P6.11 hotfix 0.9.55: Activator IntPtr path disabled — creates faulting delegate causing crash on Invoke (0x7FFBEE...), keep null and rely on <>c prefix
-        Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate disabled Activator path delType={delType.FullName} -> null (use <>c prefix)");
+        } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate R5 fail {ex2.Message.Split('\n')[0]}"); }
+        // R6 null：P6.11 hotfix 0.9.55 纪律保留 — Activator IntPtr 路径禁用（Invoke时崩溃 0x7FFBEE...），主路径不再依赖，靠 CommuDelegatePrefix(<>c)兜底
+        Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate all routes fail delType={delType.FullName} -> null (use <>c prefix)");
         return null;
     }
 
@@ -848,10 +874,77 @@ public static class TeleportConsoleInteractFix
     {
         return true;
     }
+    // 兼容旧 prefix 签名占位（已由A分流实现替代，保留方法族其余项不动）
     public static bool CommuLeavePrefix(object __instance, object __0) { return true; }
     public static bool ComputerEnterPrefix(object __instance, object __0) { return true; }
     public static bool ComputerOpenPrefix(object __instance, object m_computerData, object m_computer) { return true; }
     public static bool InteractOpenPrefix(object __instance, GameObject go, string str, object del) { return true; }
-    // 兼容旧 prefix 签名（保留但不阻断）
-    public static bool CommuEnterPrefix(object __instance, object __0) { return true; }
+    /// <summary>
+    /// A方案F注册层分流（传送控制台吞原生走自建，原生零触碰）。
+    /// 反编译结论直接用：F注册=TerrainObject_Furniture_Commu.OnPlayerEnterRange Slot19 VA 0x180997AD0（virtual非final，互操作元数据已验），
+    /// 只登记InteractData（+0x28缓存委托<>9__0_0，+0x18按键名，+0x10交互文本）；F按下=b__0_0 VA 0x1809A49A0仅调DOS OpenDOSPanel，
+    /// __this共享单例实例已丢，实例仅注册瞬间存在（__this/interactObject@0x10）；判定=objectData@0xA8/attr@0xB8，传送台attr.id==900101。
+    /// 传送台→返回false吞原生注册+登记自建单F（interactStr=打开传送控制台）；原生→返回true零触碰。
+    /// Q说明：isQ透传跳过逻辑在CommuEnterPostfix内原样保留未动；CommuDelegatePrefix(<>c)保留作兜底。
+    /// </summary>
+    public static bool CommuEnterPrefix(object __instance, object __0)
+    {
+        try
+        {
+            // 编译期直访代理类型public成员，禁反射读游戏字段；实例仅注册瞬间有效
+            var t = __instance as TerrainObject;
+            if (t == null) return true;
+            var od = t.objectData; // @0xA8
+            var attr = t.attr;     // @0xB8
+            if (attr == null || attr.id != 900101) return true; // 原生：什么都不做，直接放行
+            if (od == null) { try { Plugin.L.LogWarning("[TS][Fix] A分流 console objectData null，吞原生但跳过自建"); } catch {} return false; }
+            _currentConsole = t;
+            EnsureTypeCache();
+            bool ok = TryRegisterConsoleSelf(t);
+            try { Plugin.L.LogInfo($"[TS][Fix] A分流 console={t.GetInstanceID()} swallowNative selfReg={ok}"); } catch {}
+            return false; // 吞原生：雇佣/上传/退出三项不再登记
+        }
+        catch (Exception e) { try { Plugin.L.LogWarning($"[TS][Fix] CommuEnterPrefix err {e.Message.Split('\n')[0]}"); } catch {} return true; }
+    }
+
+    /// <summary>A方案自建登记：单F InteractData（打开传送控制台→OnTeleportConsoleInteract），委托须非null否则拒绝注册。</summary>
+    private static bool TryRegisterConsoleSelf(TerrainObject t)
+    {
+        try
+        {
+            EnsureTypeCache();
+            if (_interactMgrType == null || _interactObjDataType == null || _mAddData == null) { Plugin.L.LogWarning("[TS][Fix] 自建 类型缺失"); return false; }
+            var im = GetInteractManagerInstance();
+            if (im == null) { Plugin.L.LogWarning("[TS][Fix] 自建 instance null"); return false; }
+            object listObj = GetInteractList(im);
+            if (listObj != null && HasInteractFor(listObj, t)) return true; // 已有：postfix负责刷新委托
+            var m = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public | BindingFlags.Static);
+            // 先验委托可用（只读自家返回值，零反射读游戏字段）：null则拒绝注册，不登记坏项，主路径不再依赖<>c兜底
+            object delCheck = null;
+            try { delCheck = TryCreateDelegate(typeof(InteractManager.InteractDelegate), m); } catch {}
+            if (delCheck == null) { Plugin.L.LogWarning("[TS][Fix] 自建 delegate null，拒绝注册（等<>c兜底）"); return false; }
+            if (_mRemove != null) { try { _mRemove.Invoke(im, new object[] { t.gameObject }); } catch {} }
+            var nd = CreateInteractData("打开传送控制台", "Object Interact", m, t);
+            if (nd == null) { Plugin.L.LogWarning("[TS][Fix] 自建 CreateInteractData null"); return false; }
+            object iod = null;
+            try { iod = Activator.CreateInstance(_interactObjDataType); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 自建 iod创建失败 {e.Message.Split('\n')[0]}"); return false; }
+            try { Reflect.Set(iod, "interactObject", t.gameObject); } catch { try { _interactObjDataType.GetField("interactObject", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)?.SetValue(iod, t.gameObject); } catch {} }
+            object dataList = null;
+            try { dataList = Reflect.Get(iod, "interactDataList"); } catch {}
+            if (dataList == null)
+            {
+                try { var f = _interactObjDataType.GetField("interactDataList", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); var listType = f.FieldType; dataList = Activator.CreateInstance(listType); Reflect.Set(iod, "interactDataList", dataList); } catch {}
+            }
+            if (dataList == null) { Plugin.L.LogWarning("[TS][Fix] 自建 dataList null"); return false; }
+            var add = dataList.GetType().GetMethod("Add");
+            if (add == null) { Plugin.L.LogWarning("[TS][Fix] 自建 Add未找到"); return false; }
+            add.Invoke(dataList, new object[] { nd });
+            try { var fR = _interactObjDataType.GetField("interactRange", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); if (fR != null) fR.SetValue(iod, 3f); } catch {}
+            try { var fM = _interactObjDataType.GetField("maxPlayerInteractRange", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); if (fM != null) fM.SetValue(iod, 5f); } catch {}
+            try { _mAddData.Invoke(im, new object[] { iod }); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 自建 Add异常 {e.Message.Split('\n')[0]}"); return false; }
+            Plugin.L.LogInfo($"[TS][Fix] 自建 AddInteractObjectData成功 console={t.GetInstanceID()} 单F=打开传送控制台");
+            return true;
+        }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 自建异常 {e.Message.Split('\n')[0]}"); return false; }
+    }
 }
