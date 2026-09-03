@@ -113,9 +113,12 @@ public class TeleportConsoleUI : MonoBehaviour
         viewportGO.AddComponent<Mask>().showMaskGraphic = false;
 
         var contentGO = new GameObject("Content");
+        // v0.9.61 修空列表：先加 RectTransform（会替换掉默认 Transform），再缓存 _contentTr。
+        // 旧顺序先缓存后替换，_contentTr 成 stale 引用(fake-null)，行 SetParent 到空→场景根，
+        // 列表恒空且全程无异常（与“候选俱全、无重建异常、界面空”逐项吻合）。
+        var contentRT = contentGO.AddComponent<RectTransform>();
         _contentTr = contentGO.transform;
         _contentTr.SetParent(viewportGO.transform, false);
-        var contentRT = contentGO.AddComponent<RectTransform>();
         contentRT.anchorMin = new Vector2(0f, 1f); contentRT.anchorMax = new Vector2(1f, 1f);
         contentRT.pivot = new Vector2(0.5f, 1f);
         contentRT.anchoredPosition = Vector2.zero;
@@ -249,35 +252,54 @@ public class TeleportConsoleUI : MonoBehaviour
                 string distStr = FormatDistXY(_currentConsole, pad);
                 // 取证日志：每条候选一行（含console id/name/dist/online；本站行亦留痕后跳过）
                 Plugin.L.LogInfo($"[TS][UI] 候选 console={ck}({consoleName0}) pad={pk}({displayName}) online={online} dist={distStr} self={isSelfPad}");
-                if (isSelfPad) continue; // 定案需求：仅显示除本机外的其他传送站
-                string status = online ? "在线" : "离线";
-                string label = $"{displayName} {status} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
-                if (online && !isSelfPad) label += " ★可传送";
-                else if (!online) label += " （不可选）";
-
-                var btn = CreateRowButton(label, online && !isSelfPad, () =>
+                if (isSelfPad)
                 {
-                    if (_currentConsole == null) return;
-                    // 仅在线非本站可点，按钮已拦截，但双保险
-                    if (!TeleportConsoleSelection.IsOnline(pad)) { ShowBubble("目的地离线"); return; }
-                    if (isSelfPad) { ShowBubble("不能选择本站"); return; }
-                    Plugin.L.LogInfo($"[TS][Sel] 点选 console={ck}({consoleName0}) -> pad={pk}({displayName}) dist={distStr} online={online}");
-                    TeleportConsoleSelection.SetSelected(_currentConsole, pad);
-                    ShowBubble($"已选择 {pad.name}");
-                    Close();
-                });
-                // 已选中的高亮
-                long sel = ck != 0 ? TeleportConsoleSelection.GetSelectedKey(ck) : 0;
-                if (sel == pk)
-                {
-                    var img = btn.GetComponent<Image>();
-                    if (img != null) img.color = new Color(0.2f, 0.55f, 0.85f, 1f);
+                    Plugin.L.LogInfo($"[TS][UI] 跳过本站行 pad={pk}({displayName})");
+                    continue; // 定案需求：仅显示除本机外的其他传送站
                 }
+                try
+                {
+                    string status = online ? "在线" : "离线";
+                    string label = $"{displayName} {status} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
+                    if (online && !isSelfPad) label += " ★可传送";
+                    else if (!online) label += " （不可选）";
+
+                    var btn = CreateRowButton(label, online && !isSelfPad, () =>
+                    {
+                        if (_currentConsole == null) return;
+                        // 仅在线非本站可点，按钮已拦截，但双保险
+                        if (!TeleportConsoleSelection.IsOnline(pad)) { ShowBubble("目的地离线"); return; }
+                        if (isSelfPad) { ShowBubble("不能选择本站"); return; }
+                        Plugin.L.LogInfo($"[TS][Sel] 点选 console={ck}({consoleName0}) -> pad={pk}({displayName}) dist={distStr} online={online}");
+                        TeleportConsoleSelection.SetSelected(_currentConsole, pad);
+                        ShowBubble($"已选择 {pad.name}");
+                        Close();
+                    });
+                    // 已选中的高亮
+                    long sel = ck != 0 ? TeleportConsoleSelection.GetSelectedKey(ck) : 0;
+                    if (sel == pk)
+                    {
+                        var img = btn.GetComponent<Image>();
+                        if (img != null) img.color = new Color(0.2f, 0.55f, 0.85f, 1f);
+                    }
+                    bool parentOk = false;
+                    try { parentOk = btn != null && btn.transform != null && btn.transform.parent == _contentTr; } catch {}
+                    int cc = -1;
+                    try { if (_contentTr != null) cc = _contentTr.childCount; } catch {}
+                    Plugin.L.LogInfo($"[TS][UI] 行渲染成功 pad={pk}({displayName}) parentOk={parentOk} childCount={cc}");
+                }
+                catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 行渲染失败 pad={pk}({displayName}) ex={re}"); }
             }
             // 底部 清除选择 按钮
             CreateClearRow();
+            try
+            {
+                int total = -1;
+                if (_contentTr != null) total = _contentTr.childCount;
+                Plugin.L.LogInfo($"[TS][UI] 列表重建完成 console={ck0} 行数={total}");
+            } catch {}
         }
-        catch (Exception e) { Plugin.L.LogWarning($"[TS][UI] 重建列表异常: {e.Message}"); }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS][UI] 重建列表异常: {e}"); }
     }
 
     // P6.4 修空列表：先逐项清洗（坏项跳过，不毒化全表），排序独立 try（失败保序返回）。

@@ -30,8 +30,15 @@ public class TeleportMapManager : MonoBehaviour
     // 兼容 ComputerFix 的 pending
     public static bool IsTeleportActive => PendingConsole != null || TeleportConsoleComputerFix.PendingConsoleForMap != null;
 
-    private Dictionary<long, GameObject> _markers = new();
-    private Dictionary<long, Text> _labels = new();
+    // v0.9.61 标记键改为字符串：活体 "i:{instanceId}"，持久补齐 "c:{x,y}"（实例ID只做运行时关联）。
+    private Dictionary<string, GameObject> _markers = new();
+    private Dictionary<string, Text> _labels = new();
+    // v0.9.61 远站持久坐标表（复用木牌“存量数据而非活体”思想，自建表不污染原生木牌）：
+    // coord "x,y" -> 站记录（静态坐标+上次实测名/在线态），存 TeleportMapStations.json。
+    private readonly Dictionary<string, StationRec> _persisted = new();
+    private bool _persistedLoaded = false;
+    private float _lastPersistedSave = -999f;
+    private class StationRec { public int x; public int y; public string name; public bool online; }
     private Sprite _markerSprite;
     private float _nextRefresh = -1f;
     private bool _mapOpenLast = false;
@@ -196,7 +203,8 @@ public class TeleportMapManager : MonoBehaviour
             if (mapParent == null) return;
 
             var pads = CollectBoundPads();
-            var alive = new HashSet<long>();
+            var alive = new HashSet<string>();
+            var liveCoords = new HashSet<string>();
 
             // 尝试获取原生 prefab 仅一次
             GameObject prefab = null;
@@ -209,12 +217,18 @@ public class TeleportMapManager : MonoBehaviour
             foreach (var pad in pads)
             {
                 if (pad == null || pad.transform == null) continue;
-                long padKey = GetInstanceKey(pad);
+                string padKey = "i:" + GetInstanceKey(pad);
                 alive.Add(padKey);
                 Vector2 worldPos = new Vector2(pad.transform.position.x, pad.transform.position.y);
                 Vector2 anchoredPos = WorldToMapPos(worldPos);
                 bool online = TeleportConsoleSelection.IsOnline(pad);
                 string name = GetNameForPad(pad);
+                // v0.9.61 活体实测写入持久坐标表（远站补齐的数据源）
+                try
+                {
+                    string ck = TeleportStationNameManager.CoordKey(pad);
+                    if (!string.IsNullOrEmpty(ck)) { liveCoords.Add(ck); RecordPersisted(ck, worldPos, name, online); }
+                } catch {}
 
                 if (!_markers.TryGetValue(padKey, out var go) || go == null)
                 {
@@ -397,7 +411,44 @@ public class TeleportMapManager : MonoBehaviour
                     if (go.transform.parent != mapParent) go.transform.SetParent(mapParent, false);
                 }
             }
-            var toRemove = new List<long>();
+            // v0.9.61 远站补齐：持久坐标表中有、活体未画的站（未绑定/未加载/玩家在远处）同样建标记。
+            // 在线态用上次实测值；点击因无活体对象仅提示（OnMarkerClick 空守卫）。
+            try
+            {
+                LoadPersisted();
+                foreach (var kv in _persisted)
+                {
+                    if (liveCoords.Contains(kv.Key)) continue;
+                    string mkey = "c:" + kv.Key;
+                    if (alive.Contains(mkey)) continue;
+                    var rec = kv.Value;
+                    if (rec == null || string.IsNullOrEmpty(rec.name)) continue;
+                    Vector2 worldPos = new Vector2(rec.x, rec.y);
+                    Vector2 anchoredPos = WorldToMapPos(worldPos);
+                    alive.Add(mkey);
+                    if (!_markers.TryGetValue(mkey, out var pgo) || pgo == null)
+                    {
+                        pgo = BuildOfflineMarker(mkey, anchoredPos, rec.name, rec.online, mapParent);
+                        if (pgo != null) Plugin.L.LogInfo($"[TS][Map] 补齐标记(存量) coord={kv.Key} world={rec.x},{rec.y} online={rec.online}");
+                    }
+                    else
+                    {
+                        var rt = pgo.GetComponent<RectTransform>();
+                        if (rt != null) rt.anchoredPosition = anchoredPos;
+                        Text txt = null;
+                        if (_labels.TryGetValue(mkey, out var cachedTxt) && cachedTxt != null) txt = cachedTxt;
+                        else try { txt = pgo.GetComponentInChildren<Text>(true); if (txt != null) _labels[mkey] = txt; } catch {}
+                        if (txt != null)
+                        {
+                            string t = $"{rec.name}\n{(rec.online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                            if (txt.text != t) txt.text = t;
+                        }
+                        if (pgo.transform.parent != mapParent) pgo.transform.SetParent(mapParent, false);
+                    }
+                }
+                try { SavePersistedThrottled(); } catch {}
+            } catch {}
+            var toRemove = new List<string>();
             foreach (var kv in _markers) if (!alive.Contains(kv.Key)) toRemove.Add(kv.Key);
             foreach (var k in toRemove)
             {
@@ -461,12 +512,261 @@ public class TeleportMapManager : MonoBehaviour
     // 兼容 spec 命名：WorldToMapPos(Vector2) 的包装
     private Vector2 WorldToMap(Vector2 world, object mapPanel) => WorldToMapPos(world);
 
+    // ===== v0.9.61 改名即时同步 + 存量表持久化 =====
+    // 改名回调：即时改已建标记文本（根因①：创建时文本只写一次，改名后无更新路径）。
+    // 由 TeleportStationRenameUI.OnConfirm 在 SetName 后调用；地图关闭时仅更新存量表，下次打开即新名。
+    public static void NotifyRenamed(TerrainObject console, string newName)
+    {
+        try
+        {
+            if (console == null || string.IsNullOrEmpty(newName)) return;
+            var inst = Instance;
+            if (inst == null) return;
+            var keys = new List<string>();
+            try
+            {
+                long ck = GetInstanceKey(console);
+                long pk = TeleportBindingManager.GetBoundPad(ck);
+                if (pk != 0) keys.Add("i:" + pk);
+                string cck = TeleportStationNameManager.CoordKey(console);
+                if (!string.IsNullOrEmpty(cck)) keys.Add("c:" + cck);
+                if (pk != 0)
+                {
+                    var pad = FindByKey(pk) as TerrainObject;
+                    if (pad != null)
+                    {
+                        string pck = TeleportStationNameManager.CoordKey(pad);
+                        if (!string.IsNullOrEmpty(pck)) keys.Add("c:" + pck);
+                    }
+                }
+            } catch {}
+            foreach (var k in keys)
+            {
+                try
+                {
+                    if (inst._labels.TryGetValue(k, out var txt) && txt != null)
+                    {
+                        string cur = txt.text ?? "";
+                        int nl = cur.IndexOf('\n');
+                        string suffix = nl >= 0 ? cur.Substring(nl) : "\n<color=#7CFF7C>在线</color>";
+                        txt.text = newName + suffix;
+                    }
+                } catch {}
+                try
+                {
+                    string bare = k.StartsWith("c:") ? k.Substring(2) : null;
+                    if (bare != null && inst._persisted.TryGetValue(bare, out var rec) && rec != null) rec.name = newName;
+                } catch {}
+            }
+            try { inst.SavePersistedThrottled(force: true); } catch {}
+        } catch {}
+    }
+
+    [HideFromIl2Cpp]
+    private GameObject BuildOfflineMarker(string mkey, Vector2 anchoredPos, string name, bool online, Transform mapParent)
+    {
+        try
+        {
+            var go = new GameObject(mkey.StartsWith("TS_Marker_") ? mkey : $"TS_Marker_{mkey}");
+            var rt = go.AddComponent<RectTransform>();
+            rt.sizeDelta = new Vector2(36f, 36f);
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = anchoredPos;
+            rt.localScale = Vector3.one;
+            var img = go.AddComponent<Image>();
+            img.sprite = _markerSprite;
+            img.preserveAspect = true;
+            img.raycastTarget = true;
+            img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+            try
+            {
+                var btn = go.AddComponent<Button>();
+                btn.interactable = true;
+                btn.onClick.AddListener(new System.Action(() => { try { ShowBubble("该站当前未加载（走近后重试）"); } catch {} }));
+            } catch {}
+            go.transform.SetParent(mapParent, false);
+            rt.anchoredPosition = anchoredPos;
+            rt.localScale = Vector3.one;
+            _markers[mkey] = go;
+            var labelGO = new GameObject("Label");
+            labelGO.transform.SetParent(go.transform, false);
+            var txt = labelGO.AddComponent<Text>();
+            txt.alignment = TextAnchor.UpperCenter;
+            txt.horizontalOverflow = HorizontalWrapMode.Overflow;
+            txt.verticalOverflow = VerticalWrapMode.Overflow;
+            txt.fontSize = 12;
+            txt.fontStyle = FontStyle.Bold;
+            txt.supportRichText = true;
+            txt.color = Color.white;
+            ApplyFont(txt);
+            var lrt = txt.rectTransform;
+            lrt.anchorMin = new Vector2(0.5f, 0.5f);
+            lrt.anchorMax = new Vector2(0.5f, 0.5f);
+            lrt.pivot = new Vector2(0.5f, 1f);
+            lrt.anchoredPosition = new Vector2(0f, -18f);
+            lrt.sizeDelta = new Vector2(120f, 36f);
+            txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+            try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
+            _labels[mkey] = txt;
+            return go;
+        } catch { return null; }
+    }
+
+    private void RecordPersisted(string coord, Vector2 worldPos, string name, bool online)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(coord) || string.IsNullOrEmpty(name)) return;
+            if (_persisted.TryGetValue(coord, out var rec) && rec != null)
+            {
+                rec.x = Mathf.RoundToInt(worldPos.x);
+                rec.y = Mathf.RoundToInt(worldPos.y);
+                rec.name = name;
+                rec.online = online;
+            }
+            else _persisted[coord] = new StationRec { x = Mathf.RoundToInt(worldPos.x), y = Mathf.RoundToInt(worldPos.y), name = name, online = online };
+        } catch {}
+    }
+
+    private static string PersistedPath()
+    {
+        try { return System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "TeleportMapStations.json"); }
+        catch { return null; }
+    }
+
+    private void LoadPersisted()
+    {
+        if (_persistedLoaded) return;
+        _persistedLoaded = true;
+        try
+        {
+            string path = PersistedPath();
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
+            string txt = System.IO.File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(txt)) return;
+            // {"coord":{"x":1,"y":2,"name":"..","online":1},...} 极简解析
+            int i = 0;
+            while (i < txt.Length)
+            {
+                int q1 = txt.IndexOf('"', i);
+                if (q1 < 0) break;
+                int q2 = txt.IndexOf('"', q1 + 1);
+                if (q2 < 0) break;
+                string coord = txt.Substring(q1 + 1, q2 - q1 - 1);
+                int bo = txt.IndexOf('{', q2);
+                if (bo < 0) break;
+                int depth = 0;
+                bool inStr = false;
+                int be = -1;
+                for (int j = bo; j < txt.Length; j++)
+                {
+                    char ch = txt[j];
+                    if (inStr) { if (ch == '\\') j++; else if (ch == '"') inStr = false; continue; }
+                    if (ch == '"') inStr = true;
+                    else if (ch == '{') depth++;
+                    else if (ch == '}') { depth--; if (depth == 0) { be = j; break; } }
+                }
+                if (be < 0) break;
+                string body = txt.Substring(bo, be - bo + 1);
+                try
+                {
+                    var rec = new StationRec
+                    {
+                        x = ParseIntField(body, "\"x\""),
+                        y = ParseIntField(body, "\"y\""),
+                        name = ParseStrField(body, "\"name\""),
+                        online = ParseIntField(body, "\"online\"") != 0
+                    };
+                    if (!string.IsNullOrEmpty(coord) && !string.IsNullOrEmpty(rec.name)) _persisted[coord] = rec;
+                } catch {}
+                i = be + 1;
+            }
+            if (_persisted.Count > 0) Plugin.L.LogInfo($"[TS][Map] 存量站载入 {_persisted.Count} 条");
+        } catch {}
+    }
+
+    private static int ParseIntField(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return 0;
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return 0;
+            int s = ci + 1;
+            while (s < body.Length && (char.IsWhiteSpace(body[s]) || body[s] == '"')) s++;
+            int e = s;
+            while (e < body.Length && (char.IsDigit(body[e]) || body[e] == '-')) e++;
+            if (int.TryParse(body.Substring(s, e - s), out var v)) return v;
+        } catch {}
+        return 0;
+    }
+
+    private static string ParseStrField(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return "";
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return "";
+            int q1 = body.IndexOf('"', ci);
+            if (q1 < 0) return "";
+            var sb = new System.Text.StringBuilder();
+            for (int j = q1 + 1; j < body.Length; j++)
+            {
+                char ch = body[j];
+                if (ch == '\\' && j + 1 < body.Length)
+                {
+                    char n = body[j + 1];
+                    if (n == '"') sb.Append('"');
+                    else if (n == '\\') sb.Append('\\');
+                    else if (n == 'n') sb.Append('\n');
+                    else sb.Append(n);
+                    j++;
+                }
+                else if (ch == '"') break;
+                else sb.Append(ch);
+            }
+            return sb.ToString();
+        } catch { return ""; }
+    }
+
+    private void SavePersistedThrottled(bool force = false)
+    {
+        try
+        {
+            float now = 0f;
+            try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
+            if (!force && now - _lastPersistedSave < 5f) return;
+            _lastPersistedSave = now;
+            string path = PersistedPath();
+            if (string.IsNullOrEmpty(path) || _persisted.Count == 0) return;
+            var sb = new System.Text.StringBuilder("{");
+            bool first = true;
+            foreach (var kv in _persisted)
+            {
+                if (kv.Value == null || string.IsNullOrEmpty(kv.Value.name)) continue;
+                if (!first) sb.Append(",");
+                string en = kv.Value.name.Replace("\\", "\\\\").Replace("\"", "\\\"");
+                sb.Append($"\"{kv.Key}\":{{\"x\":{kv.Value.x},\"y\":{kv.Value.y},\"name\":\"{en}\",\"online\":{(kv.Value.online ? 1 : 0)}}}");
+                first = false;
+            }
+            sb.Append("}");
+            System.IO.File.WriteAllText(path, sb.ToString());
+        } catch {}
+    }
+
     // ===== OnMarkerClick =====
     [HideFromIl2Cpp]
     public void OnMarkerClick(TerrainObject pad)
     {
         try
         {
+            // v0.9.61 存量补齐标记无活体对象（走近加载后重试）
+            if (pad == null) { ShowBubble("该站当前未加载（走近后重试）"); return; }
             if (PendingConsole == null) { ShowBubble("请先在控制台选择传送"); return; }
             long ck = GetInstanceKey(PendingConsole);
             long pendingPadKey = TeleportBindingManager.GetBoundPad(ck);
@@ -682,7 +982,8 @@ public class TeleportMapManager : MonoBehaviour
     {
         EnsureTypeCache();
         if (pad == null) return "未知";
-        try { var r = TeleportStationNameManager.GetName(pad); if (!string.IsNullOrWhiteSpace(r)) return r; } catch {}
+        // v0.9.61 改名写在 console 键下，标记按 pad 查必须先走对端活体 console（根因①修复）。
+        try { var r = TeleportStationNameManager.GetNameForPadObject(pad); if (!string.IsNullOrWhiteSpace(r)) return r; } catch {}
         try { if (!string.IsNullOrWhiteSpace(pad.name)) return pad.name; } catch {}
         try { if (pad.attr != null) { var n = RGet(pad.attr, "itemName") as string; if (!string.IsNullOrWhiteSpace(n)) return n; } } catch {}
         return $"传送台 {GetInstanceKey(pad) % 1000}";

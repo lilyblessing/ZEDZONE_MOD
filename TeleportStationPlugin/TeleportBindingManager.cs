@@ -24,6 +24,10 @@ public static class TeleportBindingManager
     private static readonly Dictionary<long, long> _consoleToPad = new(); // console instanceId -> pad instanceId
     private static readonly Dictionary<long, long> _padToConsole = new(); // pad -> console
     private static readonly Dictionary<long, int> _instanceIdToObjId = new(); // instanceId -> attr id (for debug)
+    // v0.9.61 清理宽限：连续 _staleGraceTick 次不见才删（远处未加载≠已销毁；纯运行时策略数，非游戏常数）
+    private static readonly Dictionary<long, int> _staleMiss = new();
+    private const int StaleGraceTicks = 3;
+    private static string CoordPath => Path.Combine(Paths.ConfigPath, "TeleportBindingCoords.json");
     private static float _lastSave = -999f;
     private static float _lastHint = -999f;
     private static bool _hooksPatched = false;
@@ -574,8 +578,57 @@ public static class TeleportBindingManager
             var json = SimpleJson.Serialize(data);
             File.WriteAllText(SavePath, json);
             Plugin.L.LogInfo($"[TS][Bind] 保存 JSON {SavePath} {_consoleToPad.Count} 对");
+            try { SaveCoords(); } catch {}
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Bind] 保存异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    // v0.9.61 坐标对持久化：实例ID跨读档必变，坐标不变。存 "ccx,ccy>pcx,pcy" 列表；Load 时按坐标回链活体。
+    // 坐标经 transform.position 编译期直访，无反射。
+    public static string CoordKey(TerrainObject t)
+    {
+        try { var p = t.transform.position; return $"{Mathf.RoundToInt(p.x)},{Mathf.RoundToInt(p.y)}"; }
+        catch { return ""; }
+    }
+
+    private static void SaveCoords()
+    {
+        try
+        {
+            var sb = new System.Text.StringBuilder("{\"v\":1,\"pairs\":[");
+            bool first = true;
+            int n = 0;
+            foreach (var kv in _consoleToPad)
+            {
+                var c = FindByKey(kv.Key) as TerrainObject;
+                var p = FindByKey(kv.Value) as TerrainObject;
+                if (c == null || p == null) continue;
+                string cc = CoordKey(c), pc = CoordKey(p);
+                if (string.IsNullOrEmpty(cc) || string.IsNullOrEmpty(pc)) continue;
+                if (!first) sb.Append(",");
+                sb.Append($"\"{cc}>{pc}\"");
+                first = false;
+                n++;
+            }
+            sb.Append("]}");
+            File.WriteAllText(CoordPath, sb.ToString());
+            if (n > 0) Plugin.L.LogInfo($"[TS][Bind] 保存坐标对 {CoordPath} {n} 对");
+        } catch (Exception e) { Plugin.L.LogWarning($"[TS][Bind] 保存坐标对异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    // 按坐标找活体（attr 匹配 + 坐标匹配），用于跨读档回链。
+    private static TerrainObject FindByCoord(int attrId, string coord)
+    {
+        if (string.IsNullOrEmpty(coord)) return null;
+        try
+        {
+            foreach (var t in FindAllTerrainObjectsById(attrId))
+            {
+                if (t == null) continue;
+                if (CoordKey(t) == coord) return t;
+            }
+        } catch {}
+        return null;
     }
 
     private static class SimpleJson
@@ -610,22 +663,58 @@ public static class TeleportBindingManager
                 }
             }
             Plugin.L.LogInfo($"[TS][Bind] 载入 JSON {_consoleToPad.Count} 对");
-            // 死键清理：仅保留当前场景活体（全量扫描，含非 Production 控制台）
+            // v0.9.61 坐标对回链（跨读档：实例ID已变，用坐标找回活体对，重建内存映射）
             try
             {
-                var alive = new HashSet<long>();
-                foreach(var t in FindAllTerrainObjectsById(ConsoleId)) alive.Add(GetInstanceKey(t));
-                foreach(var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
-                if (alive.Count>0)
+                if (File.Exists(CoordPath))
                 {
-                    var dead = new List<long>();
-                    foreach(var kv in _consoleToPad) if(!alive.Contains(kv.Key) || !alive.Contains(kv.Value)) dead.Add(kv.Key);
-                    foreach(var k in dead){ if(_consoleToPad.TryGetValue(k,out var v)){ _padToConsole.Remove(v); } _consoleToPad.Remove(k); }
-                    if(dead.Count>0) Plugin.L.LogInfo($"[TS][Bind] 清理死键 {dead.Count} 对，余 {_consoleToPad.Count} 对");
+                    var ctxt = File.ReadAllText(CoordPath);
+                    int linked = 0;
+                    foreach (var pair in ParsePairs(ctxt))
+                    {
+                        var sep = pair.IndexOf('>');
+                        if (sep < 0) continue;
+                        string cc = pair.Substring(0, sep), pc = pair.Substring(sep + 1);
+                        var c = FindByCoord(ConsoleId, cc);
+                        var p = FindByCoord(PadId, pc);
+                        if (c == null || p == null) continue;
+                        long ck = GetInstanceKey(c), pk = GetInstanceKey(p);
+                        if (_consoleToPad.TryGetValue(ck, out var oldPk) && oldPk == pk) continue;
+                        // 若两端已被别的映射占用，不抢占（沿用“已有绑定”语义）
+                        if (_consoleToPad.ContainsKey(ck) || _padToConsole.ContainsKey(pk)) continue;
+                        _consoleToPad[ck] = pk;
+                        _padToConsole[pk] = ck;
+                        _instanceIdToObjId[ck] = ConsoleId;
+                        _instanceIdToObjId[pk] = PadId;
+                        linked++;
+                    }
+                    if (linked > 0) Plugin.L.LogInfo($"[TS][Bind] 坐标回链 {linked} 对，内存现 {_consoleToPad.Count} 对");
                 }
-            } catch {}
+            } catch (Exception e2) { Plugin.L.LogWarning($"[TS][Bind] 坐标回链异常: {e2.Message.Split('\n')[0]}"); }
+            // v0.9.61 Load 期不再做死键清理：启动时活体表不全（远处/未加载）且实例ID跨档必变，
+            // 此处清理即“载入2条→清理死键2→余0”（日志铁证），清理由运行时 CleanupStale（带宽限）负责。
         }
         catch { }
+    }
+
+    // 解析 {"v":1,"pairs":["1,2>3,4",...]} 中的 pair 串
+    private static List<string> ParsePairs(string json)
+    {
+        var res = new List<string>();
+        try
+        {
+            if (string.IsNullOrWhiteSpace(json)) return res;
+            int bi = json.IndexOf('[');
+            int ei = json.LastIndexOf(']');
+            if (bi < 0 || ei < 0 || ei <= bi) return res;
+            string inner = json.Substring(bi + 1, ei - bi - 1);
+            foreach (var part in inner.Split(','))
+            {
+                string s = part.Trim().Trim('"').Trim();
+                if (!string.IsNullOrEmpty(s) && s.Contains(">")) res.Add(s);
+            }
+        } catch {}
+        return res;
     }
 
     public static void CleanupStale()
@@ -637,9 +726,19 @@ public static class TeleportBindingManager
             foreach(var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
             if(alive.Count==0) return;
             var dead=new List<long>();
-            foreach(var kv in _consoleToPad) if(!alive.Contains(kv.Key) || !alive.Contains(kv.Value)) dead.Add(kv.Key);
-            foreach(var k in dead){ if(_consoleToPad.TryGetValue(k,out var v)) _padToConsole.Remove(v); _consoleToPad.Remove(k); }
-            if(dead.Count>0) Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对");
+            // v0.9.61 宽限：连续 StaleGraceTicks 次不见才删；见一次清零（远处未加载≠销毁）。
+            foreach(var kv in _consoleToPad)
+            {
+                bool hit = alive.Contains(kv.Key) && alive.Contains(kv.Value);
+                if (hit) { _staleMiss.Remove(kv.Key); continue; }
+                int m = 0;
+                _staleMiss.TryGetValue(kv.Key, out m);
+                m++;
+                if (m >= StaleGraceTicks) dead.Add(kv.Key);
+                else _staleMiss[kv.Key] = m;
+            }
+            foreach(var k in dead){ if(_consoleToPad.TryGetValue(k,out var v)) _padToConsole.Remove(v); _consoleToPad.Remove(k); _staleMiss.Remove(k); }
+            if(dead.Count>0) Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对（宽限{StaleGraceTicks}轮）");
         } catch {}
     }
 }

@@ -273,7 +273,11 @@ public class TeleportStationRenameUI : MonoBehaviour
         try
         {
             if (_targetConsole != null)
+            {
                 TeleportStationNameManager.SetName(_targetConsole, name);
+                // v0.9.61 改名即时同步已建标记文本/存量表（根因①）
+                try { TeleportMapManager.NotifyRenamed(_targetConsole, name); } catch {}
+            }
         }
         catch (Exception ex)
         {

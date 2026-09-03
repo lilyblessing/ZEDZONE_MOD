@@ -22,10 +22,24 @@ public static class TeleportStationNameManager
     private const int ConsoleId = 900101;
     private const int PadId = 900102;
     private static readonly Dictionary<long, string> _names = new();
+    // v0.9.61 坐标稳定键：key="x,y"（建筑不动坐标不变，跨读档稳定；实例ID只做运行时关联）。
+    // SetName 双写（实例键+坐标键+对端pad实例键/坐标键）；GetName 按 实例键→存档property[2]→坐标键 顺序回退。
+    private static readonly Dictionary<string, string> _namesByCoord = new();
     private static float _lastSave = -999f;
     private static string NamePath => Path.Combine(Paths.ConfigPath, "TeleportStationNames.json");
 
     // ---- 对外：获取/设置 ----
+    // 坐标稳定键（编译期直访 transform.position，无反射；四舍五入到整数格）。
+    public static string CoordKey(TerrainObject t)
+    {
+        try
+        {
+            var p = t.transform.position;
+            return $"{Mathf.RoundToInt(p.x)},{Mathf.RoundToInt(p.y)}";
+        }
+        catch { return ""; }
+    }
+
     public static string GetName(TerrainObject console)
     {
         if (console == null) return "";
@@ -47,9 +61,50 @@ public static class TeleportStationNameManager
                     }
                 }
             } catch {}
+            // v0.9.61 坐标键回退（跨读档：实例ID已变但坐标未变时命中）
+            try
+            {
+                string ck = CoordKey(console);
+                if (!string.IsNullOrEmpty(ck) && _namesByCoord.TryGetValue(ck, out var cn) && !string.IsNullOrEmpty(cn))
+                {
+                    _names[k] = cn;
+                    return cn;
+                }
+            } catch {}
             try { if (!string.IsNullOrEmpty(console.name)) return console.name; } catch {}
             return "传送站" + Math.Abs(k % 10000).ToString("D4");
         } catch { try { return console != null && !string.IsNullOrEmpty(console.name) ? console.name : ""; } catch { return ""; } }
+    }
+
+    // v0.9.61 供地图标记用：pad→对端活体console取命名（改名写在console键下，查必须走console）。
+    // 对端不活时回退 pad 自身实例键/坐标键（SetName 双写保证）。
+    public static string GetNameForPadObject(TerrainObject pad)
+    {
+        if (pad == null) return "";
+        try
+        {
+            long pk = GetInstanceKey(pad);
+            try
+            {
+                long ck = TeleportBindingManager.GetBoundConsole(pk);
+                if (ck != 0)
+                {
+                    var console = FindByKey(ck) as TerrainObject;
+                    if (console != null)
+                    {
+                        string n = GetName(console);
+                        if (!string.IsNullOrWhiteSpace(n)) return n;
+                    }
+                }
+            } catch {}
+            if (_names.TryGetValue(pk, out var pn) && !string.IsNullOrEmpty(pn)) return pn;
+            try
+            {
+                string ck2 = CoordKey(pad);
+                if (!string.IsNullOrEmpty(ck2) && _namesByCoord.TryGetValue(ck2, out var cn2) && !string.IsNullOrEmpty(cn2)) return cn2;
+            } catch {}
+        } catch {}
+        return "";
     }
 
     public static void SetName(TerrainObject console, string newName)
@@ -62,6 +117,36 @@ public static class TeleportStationNameManager
             long k = GetInstanceKey(console);
             if (string.IsNullOrEmpty(newName)) _names.Remove(k);
             else _names[k] = newName;
+            // v0.9.61 双写坐标键（跨读档稳定）
+            try
+            {
+                string ck = CoordKey(console);
+                if (!string.IsNullOrEmpty(ck))
+                {
+                    if (string.IsNullOrEmpty(newName)) _namesByCoord.Remove(ck);
+                    else _namesByCoord[ck] = newName;
+                }
+            } catch {}
+            // v0.9.61 双写对端 pad（地图按 pad 查名；改名时双方活体，双写必中）
+            try
+            {
+                long padKey = TeleportBindingManager.GetBoundPad(k);
+                if (padKey != 0)
+                {
+                    var pad = FindByKey(padKey) as TerrainObject;
+                    if (pad != null)
+                    {
+                        if (string.IsNullOrEmpty(newName)) _names.Remove(padKey);
+                        else _names[padKey] = newName;
+                        string pck = CoordKey(pad);
+                        if (!string.IsNullOrEmpty(pck))
+                        {
+                            if (string.IsNullOrEmpty(newName)) _namesByCoord.Remove(pck);
+                            else _namesByCoord[pck] = newName;
+                        }
+                    }
+                }
+            } catch {}
             // 写存档 property[2]（反射 GetMethod("SetProperty")）
             try
             {
@@ -78,6 +163,7 @@ public static class TeleportStationNameManager
     }
 
     // ---- 持久化：Save/Load ----
+    // v0.9.61 信封格式 {"v":1,"byId":{...},"byCoord":{...}}；旧扁平 {"id":"name"} 按 byId 读入（兼容）。
     private static void Save()
     {
         try
@@ -86,7 +172,7 @@ public static class TeleportStationNameManager
             try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
             if (now - _lastSave < 1f) return;
             _lastSave = now;
-            var sb = new System.Text.StringBuilder("{");
+            var sb = new System.Text.StringBuilder("{\"v\":1,\"byId\":{");
             bool first = true;
             foreach (var kv in _names)
             {
@@ -94,9 +180,17 @@ public static class TeleportStationNameManager
                 sb.Append($"\"{kv.Key}\":\"{Escape(kv.Value)}\"");
                 first = false;
             }
-            sb.Append("}");
+            sb.Append("},\"byCoord\":{");
+            first = true;
+            foreach (var kv in _namesByCoord)
+            {
+                if (!first) sb.Append(",");
+                sb.Append($"\"{Escape(kv.Key)}\":\"{Escape(kv.Value)}\"");
+                first = false;
+            }
+            sb.Append("}}");
             File.WriteAllText(NamePath, sb.ToString());
-            Plugin.L.LogInfo($"[TS][Name] 保存 {NamePath} {_names.Count}条");
+            Plugin.L.LogInfo($"[TS][Name] 保存 {NamePath} byId={_names.Count} byCoord={_namesByCoord.Count}");
         } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Name] Save {ex.Message.Split('\n')[0]}"); }
     }
 
@@ -113,9 +207,21 @@ public static class TeleportStationNameManager
                 var txt = File.ReadAllText(NamePath);
                 if (!string.IsNullOrWhiteSpace(txt))
                 {
-                    var parsed = ParseJson(txt);
-                    foreach (var kv in parsed) _names[kv.Key] = kv.Value;
-                    Plugin.L.LogInfo($"[TS][Name] 载入JSON {_names.Count}条(文件{parsed.Count})");
+                    if (txt.Contains("\"byId\"") || txt.Contains("\"byCoord\""))
+                    {
+                        string byId = ExtractSection(txt, "\"byId\"");
+                        string byCoord = ExtractSection(txt, "\"byCoord\"");
+                        int n1 = 0, n2 = 0;
+                        if (byId != null) foreach (var kv in ParseJson(byId)) { _names[kv.Key] = kv.Value; n1++; }
+                        if (byCoord != null) foreach (var kv in ParseStrMap(byCoord)) { _namesByCoord[kv.Key] = kv.Value; n2++; }
+                        Plugin.L.LogInfo($"[TS][Name] 载入JSON byId={n1} byCoord={n2}");
+                    }
+                    else
+                    {
+                        var parsed = ParseJson(txt);
+                        foreach (var kv in parsed) _names[kv.Key] = kv.Value;
+                        Plugin.L.LogInfo($"[TS][Name] 载入JSON(旧扁平) {_names.Count}条(文件{parsed.Count})");
+                    }
                 }
             }
         } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Name] Load {ex.Message.Split('\n')[0]}"); return; }
@@ -153,14 +259,16 @@ public static class TeleportStationNameManager
     {
         try
         {
+            // v0.9.61：只清理实例键表；坐标表是跨读档锚点，永不清（建筑拆除后由改名/覆盖自然更新）。
             var alive = new HashSet<long>();
             foreach (var t in FindAllTerrainObjectsById(ConsoleId)) alive.Add(GetInstanceKey(t));
+            foreach (var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
             if (alive.Count == 0) return;
             var dead = new List<long>();
             foreach (var kv in _names)
                 if (!alive.Contains(kv.Key)) dead.Add(kv.Key);
             foreach (var k in dead) _names.Remove(k);
-            if (dead.Count > 0) Plugin.L.LogInfo($"[TS][Name] 清理死键{dead.Count} 余{_names.Count}");
+            if (dead.Count > 0) Plugin.L.LogInfo($"[TS][Name] 清理死键{dead.Count} 余{_names.Count} (byCoord保留{_namesByCoord.Count})");
         } catch {}
     }
 
@@ -203,6 +311,41 @@ public static class TeleportStationNameManager
     }
 
     // ---- 工具 ----
+    private static TerrainObject FindByKey(long key)
+    {
+        try
+        {
+            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var list = f?.GetValue(null) as List<object>;
+            if (list != null) foreach (var o in list) { var comp = o as Component; if (comp == null) continue; var t = FindTerrainObject(comp.transform) as TerrainObject; if (t != null && GetInstanceKey(t) == key) return t; }
+            var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
+            if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
+        } catch {}
+        return null;
+    }
+
+    // 取信封中 "key":{...} 的 {...} 子串（含括号），找不到返回 null。
+    private static string ExtractSection(string json, string quotedKey)
+    {
+        try
+        {
+            int ki = json.IndexOf(quotedKey, StringComparison.Ordinal);
+            if (ki < 0) return null;
+            int bi = json.IndexOf('{', ki + quotedKey.Length);
+            if (bi < 0) return null;
+            int depth = 0;
+            bool inStr = false;
+            for (int i = bi; i < json.Length; i++)
+            {
+                char ch = json[i];
+                if (inStr) { if (ch == '\\') i++; else if (ch == '"') inStr = false; continue; }
+                if (ch == '"') inStr = true;
+                else if (ch == '{') depth++;
+                else if (ch == '}') { depth--; if (depth == 0) return json.Substring(bi, i - bi + 1); }
+            }
+        } catch {}
+        return null;
+    }
     private static long GetInstanceKey(TerrainObject t)
     {
         try { return (long)t.GetInstanceID(); }
@@ -284,6 +427,39 @@ public static class TeleportStationNameManager
             string val = Unescape(json.Substring(vs, ve - vs));
             i = ve + 1;
             if (long.TryParse(key, out var ck)) d[ck] = val;
+        }
+        return d;
+    }
+
+    // 字符串键版（byCoord 段复用同一对 `"k":"v"` 形状，键为 "x,y" 坐标串）。
+    private static Dictionary<string, string> ParseStrMap(string json)
+    {
+        var d = new Dictionary<string, string>();
+        if (string.IsNullOrWhiteSpace(json)) return d;
+        json = json.Trim();
+        if (json.Length < 2 || json[0] != '{' || json[json.Length - 1] != '}') return d;
+        int i = 1, len = json.Length;
+        while (i < len - 1)
+        {
+            while (i < len && (char.IsWhiteSpace(json[i]) || json[i] == ',')) i++;
+            if (i >= len - 1 || json[i] == '}') break;
+            if (json[i] != '"') { i++; continue; }
+            int ks = i + 1, ke = -1;
+            for (int j = ks; j < len; j++) { if (json[j] == '\\') { j++; continue; } if (json[j] == '"') { ke = j; break; } }
+            if (ke < 0) break;
+            string key = Unescape(json.Substring(ks, ke - ks));
+            i = ke + 1;
+            while (i < len && char.IsWhiteSpace(json[i])) i++;
+            if (i >= len || json[i] != ':') break;
+            i++;
+            while (i < len && char.IsWhiteSpace(json[i])) i++;
+            if (i >= len || json[i] != '"') break;
+            int vs = i + 1, ve = -1;
+            for (int j = vs; j < len; j++) { if (json[j] == '\\') { j++; continue; } if (json[j] == '"') { ve = j; break; } }
+            if (ve < 0) break;
+            string val = Unescape(json.Substring(vs, ve - vs));
+            i = ve + 1;
+            d[key] = val;
         }
         return d;
     }
