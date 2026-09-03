@@ -238,6 +238,27 @@ public static class TeleportStationNameManager
             try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
             if (now - _lastSave < 1f) return;
             _lastSave = now;
+            SaveNow();
+        } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Name] Save {ex.Message.Split('\n')[0]}"); }
+    }
+
+    // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    public static int FlushForIdentity()
+    {
+        try
+        {
+            if (_names.Count == 0 && _namesByCoord.Count == 0) return 0;
+            _lastSave = -999f;
+            SaveNow();
+            return _names.Count + _namesByCoord.Count;
+        }
+        catch { return 0; }
+    }
+
+    private static void SaveNow()
+    {
+        try
+        {
             var sb = new System.Text.StringBuilder("{\"v\":1,\"byId\":{");
             bool first = true;
             foreach (var kv in _names)

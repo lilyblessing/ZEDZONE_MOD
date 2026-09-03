@@ -694,6 +694,28 @@ public static class TeleportBindingManager
             float now = Time.unscaledTime;
             if (now - _lastSave < 1f) return;
             _lastSave = now;
+            SaveNow();
+        }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS][Bind] 保存异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key；含坐标对）。
+    public static int FlushForIdentity()
+    {
+        try
+        {
+            if (_consoleToPad.Count == 0) return 0;
+            _lastSave = -999f;
+            SaveNow();
+            return _consoleToPad.Count;
+        }
+        catch { return 0; }
+    }
+
+    private static void SaveNow()
+    {
+        try
+        {
             var data = new Dictionary<string, long>();
             foreach (var kv in _consoleToPad) data[kv.Key.ToString()] = kv.Value;
             var json = SimpleJson.Serialize(data);

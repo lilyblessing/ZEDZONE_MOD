@@ -296,6 +296,28 @@ public static class TeleportConsoleSelection
             float now = Time.unscaledTime;
             if (now - _lastSave < 1f) return;
             _lastSave = now;
+            SaveNow();
+        }
+        catch { }
+    }
+
+    // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    public static int FlushForIdentity()
+    {
+        try
+        {
+            if (_selByUid.Count == 0) return 0;
+            _lastSave = -999f;
+            SaveNow();
+            return _selByUid.Count;
+        }
+        catch { return 0; }
+    }
+
+    private static void SaveNow()
+    {
+        try
+        {
             var sb = new System.Text.StringBuilder("{\"v\":1,\"byUid\":{");
             bool first = true;
             foreach (var kv in _selByUid)

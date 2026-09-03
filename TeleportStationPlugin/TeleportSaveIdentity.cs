@@ -111,13 +111,28 @@ public static class TeleportSaveIdentity
             if (newKey == _current) return;
             string old = _current;
             int n0 = CountAll();
+            // v0.9.68 切换先落盘：_current 仍是旧 key，路径函数仍指旧 namespace；
+            // old 为空（主菜单/legacy 态）跳过，legacy 保持 pristine 种子不动。
+            int flushed = 0;
+            if (!string.IsNullOrEmpty(old) && n0 > 0) flushed = FlushAll();
             ResetAll();
+            _current = newKey; // 先切 key，LoadAll 才读新 namespace
             LoadAll();
             int n1 = CountAll();
-            _current = newKey;
-            Plugin.L.LogInfo($"[TS][SaveId] 身份切换 {(string.IsNullOrEmpty(old) ? "主菜单/未知" : old)}({n0}条) -> {(string.IsNullOrEmpty(newKey) ? "主菜单/未知" : newKey)}({n1}条)");
+            Plugin.L.LogInfo($"[TS][SaveId] 身份切换 {(string.IsNullOrEmpty(old) ? "主菜单/未知" : old)}({n0}条{(flushed > 0 ? $"，已落盘旧key{flushed}条" : "")}) -> {(string.IsNullOrEmpty(newKey) ? "主菜单/未知" : newKey)}({n1}条)");
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][SaveId] 切换异常: {ex.Message.Split('\n')[0]}"); }
+    }
+
+    // 四表强制落盘（绕过节流；返回落盘条目数）。
+    private static int FlushAll()
+    {
+        int n = 0;
+        try { n += TeleportBindingManager.FlushForIdentity(); } catch {}
+        try { n += TeleportConsoleSelection.FlushForIdentity(); } catch {}
+        try { n += TeleportStationNameManager.FlushForIdentity(); } catch {}
+        try { n += TeleportMapManager.FlushForIdentity(); } catch {}
+        return n;
     }
 
     private static int CountAll()

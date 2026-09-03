@@ -808,6 +808,20 @@ public class TeleportMapManager : MonoBehaviour
         } catch { return ""; }
     }
 
+    // v0.9.68 切换落盘：强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    public static int FlushForIdentity()
+    {
+        try
+        {
+            var inst = Instance;
+            if (inst == null || inst._persisted.Count == 0) return 0;
+            int n = inst._persisted.Count;
+            inst.SavePersistedThrottled(force: true);
+            return n;
+        }
+        catch { return 0; }
+    }
+
     private void SavePersistedThrottled(bool force = false)
     {
         try
