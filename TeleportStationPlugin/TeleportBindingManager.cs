@@ -27,12 +27,12 @@ public static class TeleportBindingManager
     // v0.9.61 清理宽限：连续 _staleGraceTick 次不见才删（远处未加载≠已销毁；纯运行时策略数，非游戏常数）
     private static readonly Dictionary<long, int> _staleMiss = new();
     private const int StaleGraceTicks = 3;
-    private static string CoordPath => Path.Combine(Paths.ConfigPath, "TeleportBindingCoords.json");
+    private static string CoordPath => TeleportSaveIdentity.SavePath("TeleportBindingCoords.json");
     private static float _lastSave = -999f;
     private static float _lastHint = -999f;
     private static bool _hooksPatched = false;
     private static object _lastPlayerForHint = null;
-    private static string SavePath => Path.Combine(Paths.ConfigPath, "TeleportBinding.json");
+    private static string SavePath => TeleportSaveIdentity.SavePath("TeleportBinding.json");
 
     // 延迟钩：搬运放下主钩需在 Il2Cpp 程序集加载后（GameController 存在时）再 patch，否则 TypeByName 为 null
     public static void EnsureP4Hooks()
@@ -772,8 +772,10 @@ public static class TeleportBindingManager
     {
         try
         {
-            if (!File.Exists(SavePath)) return;
-            var txt = File.ReadAllText(SavePath);
+            // v0.9.67 存档隔离：读 namespaced，缺失则 legacy 只读一次兜底。
+            string loadPath = TeleportSaveIdentity.LoadPath("TeleportBinding.json");
+            if (!File.Exists(loadPath)) return;
+            var txt = File.ReadAllText(loadPath);
             txt = txt.Trim().Trim('{', '}');
             if (string.IsNullOrWhiteSpace(txt)) return;
             var parts = txt.Split(',');
@@ -792,9 +794,10 @@ public static class TeleportBindingManager
             // v0.9.61 坐标对回链（跨读档：实例ID已变，用坐标找回活体对，重建内存映射）
             try
             {
-                if (File.Exists(CoordPath))
+                string coordLoad = TeleportSaveIdentity.LoadPath("TeleportBindingCoords.json");
+                if (File.Exists(coordLoad))
                 {
-                    var ctxt = File.ReadAllText(CoordPath);
+                    var ctxt = File.ReadAllText(coordLoad);
                     int linked = 0;
                     foreach (var pair in ParsePairs(ctxt))
                     {
@@ -830,6 +833,28 @@ public static class TeleportBindingManager
             // 此处清理即“载入2条→清理死键2→余0”（日志铁证），清理由运行时 CleanupStale（带宽限）负责。
         }
         catch { }
+    }
+
+    // v0.9.67 存档隔离：Flush 内存旧表（返回旧条目数供切换日志）。
+    public static int ResetForIdentity()
+    {
+        try
+        {
+            int n = _consoleToPad.Count;
+            _consoleToPad.Clear();
+            _padToConsole.Clear();
+            _instanceIdToObjId.Clear();
+            _staleMiss.Clear();
+            _pairedPadCoords.Clear();
+            _pairsLoaded = false;
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    public static int CountEntries()
+    {
+        try { return _consoleToPad.Count; } catch { return 0; }
     }
 
     // 解析 {"v":1,"pairs":["1,2>3,4",...]} 中的 pair 串

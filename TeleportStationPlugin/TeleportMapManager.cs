@@ -662,10 +662,48 @@ public class TeleportMapManager : MonoBehaviour
         try { Plugin.L.LogInfo($"[TS][Map] MarkStationUnpaired no-op pad={padCoord} peer={consoleCoord}（门控已拆）"); } catch {}
     }
 
+    // v0.9.67 存档隔离：写 namespaced（无身份回退 legacy）。
     private static string PersistedPath()
     {
-        try { return System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "TeleportMapStations.json"); }
+        try { return TeleportSaveIdentity.SavePath("TeleportMapStations.json"); }
         catch { return null; }
+    }
+
+    // v0.9.67 读 namespaced，缺失则 legacy 只读一次兜底。
+    private static string PersistedLoadPath()
+    {
+        try { return TeleportSaveIdentity.LoadPath("TeleportMapStations.json"); }
+        catch { return PersistedPath(); }
+    }
+
+    // v0.9.67 存档隔离：Flush 存量旧表 + 允许重载（返回旧条目数供切换日志）。
+    public static int ResetPersistedForIdentity()
+    {
+        try
+        {
+            var inst = Instance;
+            if (inst == null) return 0;
+            int n = inst._persisted.Count;
+            inst._persisted.Clear();
+            inst._persistedLoaded = false;
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    public static int CountPersisted()
+    {
+        try
+        {
+            var inst = Instance;
+            return inst != null ? inst._persisted.Count : 0;
+        }
+        catch { return 0; }
+    }
+
+    public static void ReloadPersisted()
+    {
+        try { Instance?.LoadPersisted(); } catch {}
     }
 
     private void LoadPersisted()
@@ -674,7 +712,7 @@ public class TeleportMapManager : MonoBehaviour
         _persistedLoaded = true;
         try
         {
-            string path = PersistedPath();
+            string path = PersistedLoadPath();
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return;
             string txt = System.IO.File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(txt)) return;
@@ -910,7 +948,7 @@ public class TeleportMapManager : MonoBehaviour
                 x = rec.x; y = rec.y; name = rec.name ?? ""; online = rec.online;
                 return !string.IsNullOrEmpty(name);
             }
-            string path = PersistedPath();
+            string path = PersistedLoadPath();
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return false;
             string txt = System.IO.File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(txt)) return false;

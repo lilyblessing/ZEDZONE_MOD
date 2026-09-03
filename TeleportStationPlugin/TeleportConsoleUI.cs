@@ -540,7 +540,7 @@ public class TeleportConsoleUI : MonoBehaviour
         try
         {
             string path = null;
-            try { path = System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "TeleportMapStations.json"); } catch {}
+            try { path = TeleportSaveIdentity.LoadPath("TeleportMapStations.json"); } catch {}
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return res;
             string txt = System.IO.File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(txt)) return res;

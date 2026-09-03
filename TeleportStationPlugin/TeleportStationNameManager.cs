@@ -26,7 +26,7 @@ public static class TeleportStationNameManager
     // SetName 双写（实例键+坐标键+对端pad实例键/坐标键）；GetName 按 实例键→存档property[2]→坐标键 顺序回退。
     private static readonly Dictionary<string, string> _namesByCoord = new();
     private static float _lastSave = -999f;
-    private static string NamePath => Path.Combine(Paths.ConfigPath, "TeleportStationNames.json");
+    private static string NamePath => TeleportSaveIdentity.SavePath("TeleportStationNames.json");
 
     // ---- 对外：获取/设置 ----
     // 坐标稳定键（编译期直访 transform.position，无反射；四舍五入到整数格）。
@@ -264,13 +264,15 @@ public static class TeleportStationNameManager
     {
         try
         {
-            if (!File.Exists(NamePath))
+            // v0.9.67 存档隔离：读 namespaced，缺失则 legacy 只读一次兜底。
+            string loadPath = TeleportSaveIdentity.LoadPath("TeleportStationNames.json");
+            if (!File.Exists(loadPath))
             {
                 // 首次运行无文件，等待活体覆盖
             }
             else
             {
-                var txt = File.ReadAllText(NamePath);
+                var txt = File.ReadAllText(loadPath);
                 if (!string.IsNullOrWhiteSpace(txt))
                 {
                     if (txt.Contains("\"byId\"") || txt.Contains("\"byCoord\""))
@@ -333,6 +335,24 @@ public static class TeleportStationNameManager
             }
             if (over > 0) Plugin.L.LogInfo($"[TS][Name] properties[2]覆盖{over}条");
         } catch {}
+    }
+
+    // v0.9.67 存档隔离：Flush 内存旧表（返回旧条目数供切换日志）。
+    public static int ResetForIdentity()
+    {
+        try
+        {
+            int n = _names.Count + _namesByCoord.Count;
+            _names.Clear();
+            _namesByCoord.Clear();
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    public static int CountEntries()
+    {
+        try { return _names.Count + _namesByCoord.Count; } catch { return 0; }
     }
 
     public static void CleanupStale()

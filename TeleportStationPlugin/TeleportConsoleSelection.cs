@@ -19,7 +19,7 @@ public static class TeleportConsoleSelection
     private const int PadId = 900102;
     private static readonly Dictionary<string, string> _selByUid = new(); // consoleUid -> padUid（唯一真相源）
     private static float _lastSave = -999f;
-    private static string SelPath => Path.Combine(Paths.ConfigPath, "TeleportSelection.json");
+    private static string SelPath => TeleportSaveIdentity.SavePath("TeleportSelection.json");
 
     // ===== 供电 AND 判定（与 PadTrigger 一致：consuming && sufficient>0.01 && list.Count>0） =====
     public static bool IsPowered(TerrainObject pad)
@@ -315,8 +315,10 @@ public static class TeleportConsoleSelection
     {
         try
         {
-            if (!File.Exists(SelPath)) return;
-            var txt = File.ReadAllText(SelPath).Trim();
+            // v0.9.67 存档隔离：读 namespaced，缺失则 legacy 只读一次兜底。
+            string loadPath = TeleportSaveIdentity.LoadPath("TeleportSelection.json");
+            if (!File.Exists(loadPath)) return;
+            var txt = File.ReadAllText(loadPath).Trim();
             if (string.IsNullOrWhiteSpace(txt)) return;
             int adopted = 0, dropped = 0;
             if (txt.Contains("\"byUid\""))
@@ -392,6 +394,23 @@ public static class TeleportConsoleSelection
             }
         }
         catch { }
+    }
+
+    // v0.9.67 存档隔离：Flush 内存旧表（返回旧条目数供切换日志）。
+    public static int ResetForIdentity()
+    {
+        try
+        {
+            int n = _selByUid.Count;
+            _selByUid.Clear();
+            return n;
+        }
+        catch { return 0; }
+    }
+
+    public static int CountEntries()
+    {
+        try { return _selByUid.Count; } catch { return 0; }
     }
 
     public static void CleanupStale()
