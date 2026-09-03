@@ -430,25 +430,13 @@ public class TeleportMapManager : MonoBehaviour
                 }
             }
             // v0.9.61 远站补齐：持久坐标表中有、活体未画的站（未绑定/未加载/玩家在远处）同样建标记。
-            // v0.9.65 配对三选一即放行：①活体已列（上游已过滤）②绑定坐标对 ③存量配对证据；
-            // 缺信息（无②无③记录/老文件）fail-open 放行；仅③显式 paired=false 才拦。
+            // v0.9.66 配对门控已拆（入表即已配对，门控零收益且自造 paired=false 误拦）。
             try
             {
                 LoadPersisted();
                 foreach (var kv in _persisted)
                 {
                     if (liveCoords.Contains(kv.Key)) continue;
-                    if (!TeleportBindingManager.IsPadCoordPaired(kv.Key))
-                    {
-                        bool hasEv;
-                        bool pairedEv = QueryPairEvidence(kv.Key, out hasEv);
-                        if (!pairedEv && hasEv)
-                        {
-                            Plugin.L.LogInfo($"[TS][Map] 排除已解绑存量标记 coord={kv.Key}({kv.Value?.name})（配对证据paired=false）");
-                            continue;
-                        }
-                        if (!hasEv) Plugin.L.LogInfo($"[TS][Map] 存量标记缺配对信息 fail-open coord={kv.Key}({kv.Value?.name})");
-                    }
                     string mkey = "c:" + kv.Key;
                     if (alive.Contains(mkey)) continue;
                     var rec = kv.Value;
@@ -667,39 +655,11 @@ public class TeleportMapManager : MonoBehaviour
         } catch {}
     }
 
-    // v0.9.65 解绑清除配对证据（故意拆散后列表/标记消失；peer 保留供诊断）。
+    // v0.9.66 no-op：配对门控已拆，门控不再读 paired（字段读写保留防文件断层）。
+    // 保留签名供 TryUnbind（死代码，未来接线不断）；TryUnbind 仍可调用，无副作用。
     public static void MarkStationUnpaired(string padCoord, string consoleCoord)
     {
-        try
-        {
-            var inst = Instance;
-            if (inst == null) { Plugin.L.LogInfo($"[TS][Map] 解绑清证据跳过（实例未就绪） pad={padCoord}"); return; }
-            inst.LoadPersisted();
-            bool touched = false;
-            if (!string.IsNullOrEmpty(padCoord) && inst._persisted.TryGetValue(padCoord, out var rec) && rec != null)
-            {
-                rec.paired = false;
-                rec.hasPairEvidence = true;
-                touched = true;
-            }
-            if (!string.IsNullOrEmpty(consoleCoord))
-            {
-                foreach (var kv in inst._persisted)
-                {
-                    if (kv.Value != null && kv.Value.peer == consoleCoord && kv.Value.paired)
-                    {
-                        kv.Value.paired = false;
-                        kv.Value.hasPairEvidence = true;
-                        touched = true;
-                    }
-                }
-            }
-            if (touched)
-            {
-                inst.SavePersistedThrottled(force: true);
-                Plugin.L.LogInfo($"[TS][Map] 解绑清配对证据 pad={padCoord} peer={consoleCoord}");
-            }
-        } catch {}
+        try { Plugin.L.LogInfo($"[TS][Map] MarkStationUnpaired no-op pad={padCoord} peer={consoleCoord}（门控已拆）"); } catch {}
     }
 
     private static string PersistedPath()
@@ -990,52 +950,6 @@ public class TeleportMapManager : MonoBehaviour
         }
         catch { }
         return false;
-    }
-
-    // ===== v0.9.65 配对证据③静态查询（内存优先，文件兜底；老文件无 paired 字段）=====
-    // 返回 paired；hasEvidence=false 表示无记录或老格式（缺信息 → 调用方 fail-open 放行并记 debug）。
-    public static bool QueryPairEvidence(string coord, out bool hasEvidence)
-    {
-        hasEvidence = false;
-        if (string.IsNullOrEmpty(coord)) return false;
-        try
-        {
-            var inst = Instance;
-            if (inst != null)
-            {
-                inst.LoadPersisted();
-                if (inst._persisted.TryGetValue(coord, out var rec) && rec != null)
-                {
-                    hasEvidence = rec.hasPairEvidence;
-                    return rec.paired;
-                }
-            }
-            string path = PersistedPath();
-            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return false;
-            string txt = System.IO.File.ReadAllText(path);
-            if (string.IsNullOrWhiteSpace(txt)) return false;
-            string key = "\"" + coord + "\"";
-            int ki = txt.IndexOf(key, StringComparison.Ordinal);
-            if (ki < 0) return false;
-            int bo = txt.IndexOf('{', ki + key.Length);
-            if (bo < 0) return false;
-            int depth = 0;
-            bool inStr = false;
-            int be = -1;
-            for (int j = bo; j < txt.Length; j++)
-            {
-                char ch = txt[j];
-                if (inStr) { if (ch == '\\') j++; else if (ch == '"') inStr = false; continue; }
-                if (ch == '"') inStr = true;
-                else if (ch == '{') depth++;
-                else if (ch == '}') { depth--; if (depth == 0) { be = j; break; } }
-            }
-            if (be < 0) return false;
-            string body = txt.Substring(bo, be - bo + 1);
-            hasEvidence = body.Contains("\"paired\"");
-            return ParseIntFieldStatic(body, "\"paired\"") != 0;
-        }
-        catch { return false; }
     }
 
     private static int ParseIntFieldStatic(string body, string key)

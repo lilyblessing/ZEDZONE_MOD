@@ -680,18 +680,8 @@ public class TeleportConsoleUI : MonoBehaviour
                         Plugin.L.LogInfo($"[TS][UI] 跳过本站存量行 coord={st.coord}({st.name})");
                         continue; // 本站（坐标比对，跨读档稳定）
                     }
-                    // v0.9.65 配对三选一即放行：②绑定坐标对 ③存量配对证据；
-                    // 缺信息（无②且存量无 paired 字段/老文件）fail-open 放行；仅③显式 paired=false 才拦。
-                    if (!TeleportBindingManager.IsPadCoordPaired(st.coord))
-                    {
-                        if (st.hasPairEvidence && !st.paired)
-                        {
-                            Plugin.L.LogInfo($"[TS][UI] 排除已解绑存量站 coord={st.coord}({st.name})（配对证据paired=false）");
-                            continue;
-                        }
-                        if (st.paired) Plugin.L.LogInfo($"[TS][UI] 存量站配对证据放行 coord={st.coord}({st.name}) peer={st.peer}");
-                        else Plugin.L.LogInfo($"[TS][UI] 存量站缺配对信息 fail-open coord={st.coord}({st.name})");
-                    }
+                    // v0.9.66 配对门控已拆（入表即已配对，门控零收益且自造 paired=false 误拦）；
+                    // 存量行只按坐标/自站过滤保留。
                     string distStr = FormatDistFromXY(cc, st.x, st.y);
                     // v0.9.64 显示名优先（UID直查→活体自愈→存量名→UID）；在线态仅显示，无门控。
                     string staleUid = TeleportStationUid.UidFromCoord(st.coord);
