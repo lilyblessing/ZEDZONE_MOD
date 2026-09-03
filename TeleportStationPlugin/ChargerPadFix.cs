@@ -1265,25 +1265,30 @@ public static class ChargerPadFix
         catch { }
     }
 
-    /// <summary>充电台克隆盘判定：组件类型含 BatteryCharger + attr.id == 900102。类型名不匹配时一次性诊断（排查 v0.9.4 初始化缺失）。</summary>
+    /// <summary>充电台克隆盘判定：attr.id == 900102 即放行（v0.9.72：不再要求组件类型名含 BatteryCharger——存量实例组件为基类 TerrainObject_Production，类型门曾导致 EnsureContainer 永不执行）。</summary>
     private static bool IsChargerPad(TerrainObject_Production g)
     {
         try
         {
-            bool typeOk = g.GetType().Name.IndexOf("BatteryCharger", StringComparison.Ordinal) >= 0;
             var to = FindTerrainObject(g.transform);
             if (to == null) return false;
             object attr = null;
             try { attr = Reflect.Get(to, "attr"); } catch { }
-            if (attr == null) { if (!_warnedTypeMiss) { _warnedTypeMiss = true; Plugin.L.LogWarning($"[TS] ChargerPad 判定诊断: attr=null type='{g.GetType().Name}'"); } return false; }
+            if (attr == null) return false;
             bool isPad = false;
             try { isPad = (RegistrationStore.Attrs.TryGetValue(PadId, out var our) && ReferenceEquals(attr, our)) || AttrId(attr) == PadId; } catch { }
-            if (isPad && !typeOk && !_warnedTypeMiss)
+            if (isPad && !_warnedTypeMiss)
             {
                 _warnedTypeMiss = true;
-                Plugin.L.LogWarning($"[TS] ChargerPad 判定诊断: 是900102但组件类型名不含 BatteryCharger: '{g.GetType().Name}' attrId={AttrId(attr)}");
+                try
+                {
+                    string tn = g.GetType().Name ?? "?";
+                    if (tn.IndexOf("BatteryCharger", StringComparison.Ordinal) < 0)
+                        Plugin.L.LogInfo($"[TS] ChargerPad 判定: 900102 组件为基类型 '{tn}'（存量实例），按 attr 放行容器初始化");
+                }
+                catch { }
             }
-            return isPad && typeOk;
+            return isPad;
         }
         catch { return false; }
     }
