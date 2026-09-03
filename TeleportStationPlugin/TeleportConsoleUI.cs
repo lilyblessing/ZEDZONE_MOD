@@ -98,8 +98,10 @@ public class TeleportConsoleUI : MonoBehaviour
         scrollRT.offsetMin = new Vector2(16f, 16f); scrollRT.offsetMax = new Vector2(-16f, -60f);
         var maskImg = scrollGO.AddComponent<Image>();
         maskImg.color = new Color(0, 0, 0, 0);
-        var mask = scrollGO.AddComponent<Mask>();
-        mask.showMaskGraphic = false;
+        // v0.9.62 可见性修复：双 legacy Mask（stencil）把 Content 子树行像素整体裁掉
+        // （行对象存在且父链正确、未被遮罩的标题/关闭按钮均可见、连静态清除行同样不可见）。
+        // 换 RectMask2D（纯矩形裁剪，无 stencil 依赖；视口无旋转，视觉等价）。
+        scrollGO.AddComponent<RectMask2D>();
         var scroll = scrollGO.AddComponent<ScrollRect>();
         scroll.horizontal = false; scroll.vertical = true;
         scroll.movementType = ScrollRect.MovementType.Clamped;
@@ -110,7 +112,7 @@ public class TeleportConsoleUI : MonoBehaviour
         vpRT.anchorMin = Vector2.zero; vpRT.anchorMax = Vector2.one;
         vpRT.offsetMin = Vector2.zero; vpRT.offsetMax = Vector2.zero;
         viewportGO.AddComponent<Image>().color = new Color(0, 0, 0, 0);
-        viewportGO.AddComponent<Mask>().showMaskGraphic = false;
+        viewportGO.AddComponent<RectMask2D>(); // v0.9.62 同上：Mask→RectMask2D
 
         var contentGO = new GameObject("Content");
         // v0.9.61 修空列表：先加 RectTransform（会替换掉默认 Transform），再缓存 _contentTr。
@@ -232,11 +234,14 @@ public class TeleportConsoleUI : MonoBehaviour
             var candidates = CollectCandidates();
             long ck0 = _currentConsole != null ? GetInstanceKey(_currentConsole) : 0;
             Plugin.L.LogInfo($"[TS][UI] 选点候选 console={ck0} 共 {candidates.Count} 个圆盘");
+            // v0.9.62 存量回退：活体去重键 + 本站坐标键（跨读档实例ID必变，坐标稳定）
+            var livePadCoords = new HashSet<string>();
+            string selfPadCoord = "";
             if (candidates.Count == 0)
             {
-                Plugin.L.LogInfo($"[TS][UI] 候选为空 console={ck0}（已直扫兜底仍为0，请检查圆盘是否存在/attr.id==900102）");
+                Plugin.L.LogInfo($"[TS][UI] 候选为空 console={ck0}（已直扫兜底仍为0，继续走存量回退）");
                 CreateInfoRow("无可用传送台（请先放置并绑定圆盘）");
-                return;
+                // 不 return：读档后活体为空时仍可列出存量站
             }
             string consoleName0 = "";
             try { consoleName0 = TeleportStationNameManager.GetName(_currentConsole); } catch {}
@@ -252,6 +257,11 @@ public class TeleportConsoleUI : MonoBehaviour
                 string distStr = FormatDistXY(_currentConsole, pad);
                 // 取证日志：每条候选一行（含console id/name/dist/online；本站行亦留痕后跳过）
                 Plugin.L.LogInfo($"[TS][UI] 候选 console={ck}({consoleName0}) pad={pk}({displayName}) online={online} dist={distStr} self={isSelfPad}");
+                // v0.9.62 活体坐标键（存量去重 + 本站坐标比对；公开方法调用，无反射）
+                string padCoord = "";
+                try { padCoord = TeleportBindingManager.CoordKey(pad); } catch {}
+                if (!string.IsNullOrEmpty(padCoord)) livePadCoords.Add(padCoord);
+                if (isSelfPad && string.IsNullOrEmpty(selfPadCoord)) selfPadCoord = padCoord;
                 if (isSelfPad)
                 {
                     Plugin.L.LogInfo($"[TS][UI] 跳过本站行 pad={pk}({displayName})");
@@ -261,20 +271,25 @@ public class TeleportConsoleUI : MonoBehaviour
                 {
                     string status = online ? "在线" : "离线";
                     string label = $"{displayName} {status} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
-                    if (online && !isSelfPad) label += " ★可传送";
-                    else if (!online) label += " （不可选）";
+                    if (online) label += " ★可传送";
+                    else label += " （离线，点击提示）";
 
-                    var btn = CreateRowButton(label, online && !isSelfPad, () =>
+                    // v0.9.62 离线行可点：灰显保留，点击给气泡（不许静默无反应）
+                    var btn = CreateRowButton(label, true, () =>
                     {
                         if (_currentConsole == null) return;
-                        // 仅在线非本站可点，按钮已拦截，但双保险
-                        if (!TeleportConsoleSelection.IsOnline(pad)) { ShowBubble("目的地离线"); return; }
+                        if (!TeleportConsoleSelection.IsOnline(pad))
+                        {
+                            Plugin.L.LogInfo($"[TS][Sel] 点选离线 console={ck}({consoleName0}) -> pad={pk}({displayName}) 已气泡提示");
+                            ShowBubble("目的地离线");
+                            return;
+                        }
                         if (isSelfPad) { ShowBubble("不能选择本站"); return; }
                         Plugin.L.LogInfo($"[TS][Sel] 点选 console={ck}({consoleName0}) -> pad={pk}({displayName}) dist={distStr} online={online}");
                         TeleportConsoleSelection.SetSelected(_currentConsole, pad);
                         ShowBubble($"已选择 {pad.name}");
                         Close();
-                    });
+                    }, greyLook: !online);
                     // 已选中的高亮
                     long sel = ck != 0 ? TeleportConsoleSelection.GetSelectedKey(ck) : 0;
                     if (sel == pk)
@@ -286,10 +301,18 @@ public class TeleportConsoleUI : MonoBehaviour
                     try { parentOk = btn != null && btn.transform != null && btn.transform.parent == _contentTr; } catch {}
                     int cc = -1;
                     try { if (_contentTr != null) cc = _contentTr.childCount; } catch {}
-                    Plugin.L.LogInfo($"[TS][UI] 行渲染成功 pad={pk}({displayName}) parentOk={parentOk} childCount={cc}");
+                    // v0.9.62 可见几何诊断：行高/active/文本长（若 h=0 或 active=False 即行级不可见实证）
+                    float rh = -1f; bool act = false; int tlen = 0;
+                    try { var rrt = btn != null ? btn.GetComponent<RectTransform>() : null; if (rrt != null) rh = rrt.rect.height; } catch {}
+                    try { act = btn != null && btn.activeInHierarchy; } catch {}
+                    try { tlen = label != null ? label.Length : 0; } catch {}
+                    Plugin.L.LogInfo($"[TS][UI] 行渲染成功 pad={pk}({displayName}) parentOk={parentOk} childCount={cc} h={rh:F0} active={act} tlen={tlen}");
                 }
                 catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 行渲染失败 pad={pk}({displayName}) ex={re}"); }
             }
+            // v0.9.62 读档/远站补齐：活体缺失的站用地图存量表回退列出（无活体→灰显可点，提示走近）
+            try { AppendStaleRows(ck0, consoleName0, livePadCoords, selfPadCoord); }
+            catch (Exception se) { Plugin.L.LogWarning($"[TS][UI] 存量补行异常: {se}"); }
             // 底部 清除选择 按钮
             CreateClearRow();
             try
@@ -364,12 +387,14 @@ public class TeleportConsoleUI : MonoBehaviour
         return list;
     }
 
-    private GameObject CreateRowButton(string label, bool interactable, Action onClick)
+    private GameObject CreateRowButton(string label, bool interactable, Action onClick, bool greyLook = false)
     {
         var go = new GameObject("Row");
         go.transform.SetParent(_contentTr, false);
         var img = go.AddComponent<Image>();
-        img.color = interactable ? new Color(0.22f, 0.22f, 0.26f, 1f) : new Color(0.16f, 0.16f, 0.16f, 1f);
+        // v0.9.62 灰显与可点解耦：离线/存量行 greyLook=true（灰色外观）但仍可点（点击给气泡，不静默）
+        bool lookOn = interactable && !greyLook;
+        img.color = lookOn ? new Color(0.22f, 0.22f, 0.26f, 1f) : new Color(0.16f, 0.16f, 0.16f, 1f);
         var btn = go.AddComponent<Button>();
         btn.interactable = interactable;
         var rt = img.rectTransform;
@@ -382,7 +407,7 @@ public class TeleportConsoleUI : MonoBehaviour
         txtGO.transform.SetParent(go.transform, false);
         var txt = txtGO.AddComponent<Text>();
         txt.alignment = TextAnchor.MiddleLeft;
-        txt.color = interactable ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+        txt.color = lookOn ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
         txt.fontSize = 18;
         txt.text = label;
         ApplyFont(txt);
@@ -442,6 +467,178 @@ public class TeleportConsoleUI : MonoBehaviour
                 Close();
             }
         }));
+    }
+
+    // ===== v0.9.62 存量回退（读档/远站）：只读地图存量文件，不改其他文件 =====
+    private class StaleStation
+    {
+        public string coord;
+        public int x;
+        public int y;
+        public string name;
+        public bool online;
+    }
+
+    // 存量表与地图侧同文件同格式：Config/TeleportMapStations.json {"x,y":{"x":..,"y":..,"name":"..","online":0/1}}
+    private static List<StaleStation> LoadStaleStations()
+    {
+        var res = new List<StaleStation>();
+        try
+        {
+            string path = null;
+            try { path = System.IO.Path.Combine(BepInEx.Paths.ConfigPath, "TeleportMapStations.json"); } catch {}
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return res;
+            string txt = System.IO.File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(txt)) return res;
+            int i = 0;
+            while (i < txt.Length && res.Count < 128)
+            {
+                int q1 = txt.IndexOf('"', i);
+                if (q1 < 0) break;
+                int q2 = txt.IndexOf('"', q1 + 1);
+                if (q2 < 0) break;
+                string coord = txt.Substring(q1 + 1, q2 - q1 - 1);
+                int bo = txt.IndexOf('{', q2);
+                if (bo < 0) break;
+                int depth = 0;
+                bool inStr = false;
+                int be = -1;
+                for (int j = bo; j < txt.Length; j++)
+                {
+                    char ch = txt[j];
+                    if (inStr) { if (ch == '\\') j++; else if (ch == '"') inStr = false; continue; }
+                    if (ch == '"') inStr = true;
+                    else if (ch == '{') depth++;
+                    else if (ch == '}') { depth--; if (depth == 0) { be = j; break; } }
+                }
+                if (be < 0) break;
+                string body = txt.Substring(bo, be - bo + 1);
+                try
+                {
+                    var st = new StaleStation
+                    {
+                        coord = coord,
+                        x = ParseStaleInt(body, "\"x\""),
+                        y = ParseStaleInt(body, "\"y\""),
+                        name = ParseStaleStr(body, "\"name\""),
+                        online = ParseStaleInt(body, "\"online\"") != 0
+                    };
+                    if (!string.IsNullOrEmpty(coord) && !string.IsNullOrEmpty(st.name)) res.Add(st);
+                } catch {}
+                i = be + 1;
+            }
+        } catch {}
+        return res;
+    }
+
+    private static int ParseStaleInt(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return 0;
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return 0;
+            int s = ci + 1;
+            while (s < body.Length && (char.IsWhiteSpace(body[s]) || body[s] == '"')) s++;
+            int e = s;
+            while (e < body.Length && (char.IsDigit(body[e]) || body[e] == '-')) e++;
+            if (int.TryParse(body.Substring(s, e - s), out var v)) return v;
+        } catch {}
+        return 0;
+    }
+
+    private static string ParseStaleStr(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return "";
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return "";
+            int q1 = body.IndexOf('"', ci);
+            if (q1 < 0) return "";
+            var sb = new System.Text.StringBuilder();
+            for (int j = q1 + 1; j < body.Length; j++)
+            {
+                char ch = body[j];
+                if (ch == '\\' && j + 1 < body.Length)
+                {
+                    char n = body[j + 1];
+                    if (n == '"') sb.Append('"');
+                    else if (n == '\\') sb.Append('\\');
+                    else if (n == 'n') sb.Append('\n');
+                    else sb.Append(n);
+                    j++;
+                }
+                else if (ch == '"') break;
+                else sb.Append(ch);
+            }
+            return sb.ToString();
+        } catch { return ""; }
+    }
+
+    // A方案距离（坐标版，与 FormatDistXY 同口径：XY 平面，忽略 z）
+    private static string FormatDistFromXY(Vector3 c, int x, int y)
+    {
+        try
+        {
+            float dx = x - c.x;
+            float dy = y - c.y;
+            return $"{Mathf.Sqrt(dx * dx + dy * dy):F0}m";
+        } catch { return "未知"; }
+    }
+
+    private void AppendStaleRows(long ck0, string consoleName0, HashSet<string> livePadCoords, string selfPadCoord)
+    {
+        try
+        {
+            if (_currentConsole == null || _currentConsole.transform == null) return;
+            Vector3 cc = _currentConsole.transform.position;
+            var stale = LoadStaleStations();
+            if (stale.Count == 0) { Plugin.L.LogInfo($"[TS][UI] 存量站载入 0 条 console={ck0}"); return; }
+            // 按距离排序（失败保序）
+            try
+            {
+                stale.Sort((a, b) =>
+                {
+                    try
+                    {
+                        if (a == null || b == null) return 0;
+                        float da = (a.x - cc.x) * (a.x - cc.x) + (a.y - cc.y) * (a.y - cc.y);
+                        float db = (b.x - cc.x) * (b.x - cc.x) + (b.y - cc.y) * (b.y - cc.y);
+                        return da.CompareTo(db);
+                    } catch { return 0; }
+                });
+            } catch {}
+            int added = 0;
+            foreach (var st in stale)
+            {
+                try
+                {
+                    if (st == null || string.IsNullOrEmpty(st.coord)) continue;
+                    if (livePadCoords != null && livePadCoords.Contains(st.coord)) continue; // 活体已列，不重复
+                    if (!string.IsNullOrEmpty(selfPadCoord) && st.coord == selfPadCoord)
+                    {
+                        Plugin.L.LogInfo($"[TS][UI] 跳过本站存量行 coord={st.coord}({st.name})");
+                        continue; // 本站（坐标比对，跨读档稳定）
+                    }
+                    string distStr = FormatDistFromXY(cc, st.x, st.y);
+                    string label = $"{st.name} 存量 距{distStr} 坐标{st.x},{st.y} （点击提示）";
+                    var staleCap = st;
+                    var btn = CreateRowButton(label, true, () =>
+                    {
+                        // 存量行无活体对象：不能选点，只给气泡（不许静默无反应）
+                        Plugin.L.LogInfo($"[TS][Sel] 点选存量 console={ck0}({consoleName0}) -> coord={staleCap.coord}({staleCap.name}) 已气泡提示");
+                        ShowBubble("该站未加载，请走近");
+                    }, greyLook: true);
+                    if (btn == null) continue;
+                    added++;
+                    Plugin.L.LogInfo($"[TS][UI] 存量补行 coord={st.coord}({st.name}) dist={distStr} lastOnline={st.online}");
+                } catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 存量补行失败 coord={st?.coord} ex={re}"); }
+            }
+            Plugin.L.LogInfo($"[TS][UI] 存量站载入 {stale.Count} 条，补行 {added} 个 console={ck0}");
+        } catch {}
     }
 
     // ===== 工具 =====
