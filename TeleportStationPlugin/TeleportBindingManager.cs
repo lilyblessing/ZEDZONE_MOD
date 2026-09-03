@@ -31,6 +31,12 @@ public static class TeleportBindingManager
     private static float _lastSave = -999f;
     private static float _lastHint = -999f;
     private static bool _hooksPatched = false;
+    // v0.9.69 脏位：本身份下发生过绑定变更才置位；FlushAll 仅脏表写盘；Load 期被 SuppressDirty 抑制。
+    private static bool _dirty = false;
+    internal static void MarkDirty()
+    {
+        try { if (!TeleportSaveIdentity.SuppressDirty) _dirty = true; } catch {}
+    }
     private static object _lastPlayerForHint = null;
     private static string SavePath => TeleportSaveIdentity.SavePath("TeleportBinding.json");
 
@@ -399,6 +405,7 @@ public static class TeleportBindingManager
                 SaveForInstance(console, nearestUnbound);
                 Save();
                 try { HealPadCoordName(console, nearestUnbound); } catch {}
+                try { MarkDirty(); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -448,6 +455,7 @@ public static class TeleportBindingManager
                 SaveForInstance(console, nearestUnbound);
                 Save();
                 try { HealPadCoordName(console, nearestUnbound); } catch {}
+                try { MarkDirty(); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind][Auto] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -483,6 +491,7 @@ public static class TeleportBindingManager
                 string conCoord = CoordKey(console);
                 TeleportMapManager.MarkStationUnpaired(padCoord, conCoord);
             } catch {}
+            try { MarkDirty(); } catch {}
             ShowHint("已解绑", isError: false);
             Plugin.L.LogInfo($"[TS][Bind] 解绑 console={cid} pad={pid} 并清空选择");
             return true;
@@ -700,13 +709,15 @@ public static class TeleportBindingManager
     }
 
     // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key；含坐标对）。
+    // v0.9.69 脏位守卫：非脏直接返回 0（预览翻档只读不盖戳）；写后清脏位。
     public static int FlushForIdentity()
     {
         try
         {
-            if (_consoleToPad.Count == 0) return 0;
+            if (_consoleToPad.Count == 0 || !_dirty) return 0;
             _lastSave = -999f;
             SaveNow();
+            _dirty = false;
             return _consoleToPad.Count;
         }
         catch { return 0; }
@@ -869,6 +880,7 @@ public static class TeleportBindingManager
             _staleMiss.Clear();
             _pairedPadCoords.Clear();
             _pairsLoaded = false;
+            _dirty = false;
             return n;
         }
         catch { return 0; }
@@ -920,7 +932,7 @@ public static class TeleportBindingManager
                 else _staleMiss[kv.Key] = m;
             }
             foreach(var k in dead){ if(_consoleToPad.TryGetValue(k,out var v)) _padToConsole.Remove(v); _consoleToPad.Remove(k); _staleMiss.Remove(k); }
-            if(dead.Count>0) Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对（宽限{StaleGraceTicks}轮）");
+            if(dead.Count>0) { try { MarkDirty(); } catch {} Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对（宽限{StaleGraceTicks}轮）"); }
         } catch {}
     }
 }

@@ -11,12 +11,19 @@ namespace TeleportStationPlugin;
 /// 切换：GameDataManager.LoadGameData / GameController.set_gameData 双 postfix → key 变化才
 /// Flush 内存旧表 + Load 新表 + 日志。key=""（主菜单/取不到身份）回退 legacy 全局文件名。
 /// 迁移只读兜底：namespaced 缺失但 legacy 存在 → 读 legacy（只读一次），首次 Save 落 namespaced。
+/// v0.9.69：脏位守卫（Load 期 SuppressDirty，FlushAll 仅写脏表）＋ 本槽收敛
+/// （saveEpoch envelope：游戏内存档即一轮，K=3 轮未被活体观测的记录从本槽剔除）。
 /// </summary>
 public static class TeleportSaveIdentity
 {
     private static string _current = null; // null=未初始化；""=主菜单/未知
 
     public static string Current => _current ?? "";
+
+    // v0.9.69：本槽 saveEpoch（游戏内存档即一轮）；Load 期脏位抑制（各表 MarkDirty 读取）。
+    public static int SlotEpoch { get; private set; } = 0;
+    public static bool SuppressDirty = false;
+    public const int ConvergeK = 3;
 
     // 由 GameData 对象派生身份键；null/空 id → ""。
     public static string KeyFromGameData(GameData gd)
@@ -155,10 +162,72 @@ public static class TeleportSaveIdentity
 
     private static void LoadAll()
     {
-        try { TeleportBindingManager.Load(); } catch {}
-        try { TeleportConsoleSelection.Load(); } catch {}
-        try { TeleportStationNameManager.Load(); } catch {}
-        try { TeleportMapManager.ReloadPersisted(); } catch {}
+        SuppressDirty = true;
+        try
+        {
+            try { TeleportBindingManager.Load(); } catch {}
+            try { TeleportConsoleSelection.Load(); } catch {}
+            try { TeleportStationNameManager.Load(); } catch {}
+            try { TeleportMapManager.ReloadPersisted(); } catch {}
+            LoadEpoch();
+        }
+        finally { SuppressDirty = false; }
+    }
+
+    // ===== v0.9.69 本槽 saveEpoch envelope（独立小文件，不进记录体防旧解析器断层） =====
+    private static string EpochPath(string key)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(key)) return null;
+            return Path.Combine(BepInEx.Paths.ConfigPath, $"TeleportSaveEpoch_{key}.json");
+        }
+        catch { return null; }
+    }
+
+    private static void LoadEpoch()
+    {
+        SlotEpoch = 0;
+        try
+        {
+            string p = EpochPath(Current);
+            if (string.IsNullOrEmpty(p) || !File.Exists(p)) return;
+            string txt = File.ReadAllText(p);
+            int ci = txt.IndexOf(':');
+            if (ci > 0 && int.TryParse(txt.Substring(ci + 1).Trim().Trim('}', ' ', '"'), out var e) && e > 0)
+                SlotEpoch = e;
+        } catch {}
+    }
+
+    private static void SaveEpochFile()
+    {
+        try
+        {
+            string p = EpochPath(Current);
+            if (string.IsNullOrEmpty(p)) return;
+            File.WriteAllText(p, $"{{\"epoch\":{SlotEpoch}}}");
+        } catch {}
+    }
+
+    // 游戏内存档即一轮：仅当前槽推进；K 轮未见记录从本槽剔除并强制落盘。
+    public static void OnGameSavedForCurrentSlot(GameData __0)
+    {
+        try
+        {
+            if (__0 == null || string.IsNullOrEmpty(_current)) return;
+            if (KeyFromGameData(__0) != _current) return;
+            SlotEpoch++;
+            SaveEpochFile();
+            int removed = 0;
+            try { removed = TeleportMapManager.PruneUnseen(SlotEpoch, ConvergeK); } catch {}
+            if (removed > 0)
+            {
+                try { TeleportMapManager.ForceSavePersisted(); } catch {}
+                Plugin.L.LogInfo($"[TS][SaveId] 收敛剔除 {removed} 站（本槽 epoch={SlotEpoch}，K={ConvergeK} 轮未见；仅本槽文件）");
+            }
+            else Plugin.L.LogInfo($"[TS][SaveId] 本槽存档 epoch={SlotEpoch}（无剔除）");
+        }
+        catch { }
     }
 
     // ===== Harmony postfix（__0/__result 位置绑定） =====
@@ -175,6 +244,17 @@ public static class TeleportSaveIdentity
     public static void GameDataSetPostfix(GameData __0)
     {
         try { SwitchTo(KeyFromGameData(__0)); } catch { }
+    }
+
+    // SaveGameData(GameData, int, bool)：游戏内存档事件（手动＋自动）。
+    public static void SaveGameDataPostfix(GameData __0)
+    {
+        try
+        {
+            if (__0 == null) return;
+            OnGameSavedForCurrentSlot(__0);
+        }
+        catch { }
     }
 
     public static void EnsurePatch(Harmony h)
@@ -198,6 +278,14 @@ public static class TeleportSaveIdentity
                 Plugin.L.LogInfo("[TS] 已挂钩 GameController.set_gameData（存档隔离切换）");
             }
             else Plugin.L.LogWarning("[TS] set_gameData 挂钩失败（方法未找到）");
+            var save = mgr != null ? AccessTools.Method(mgr, "SaveGameData") : null;
+            if (save != null)
+            {
+                h.Patch(save, postfix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
+                    nameof(SaveGameDataPostfix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
+                Plugin.L.LogInfo("[TS] 已挂钩 GameDataManager.SaveGameData（本槽收敛 epoch）");
+            }
+            else Plugin.L.LogWarning("[TS] SaveGameData 挂钩失败（方法未找到）");
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS] 存档隔离挂钩异常: {ex.Message.Split('\n')[0]}"); }
     }

@@ -40,7 +40,18 @@ public class TeleportMapManager : MonoBehaviour
     private float _lastPersistedSave = -999f;
     // v0.9.65 配对证据③：paired=观测到配对时写true+peer=对端console坐标；无paired字段=老文件缺信息；
     // paired=false(有字段)=解绑后显式清除。门控：paired→放行；无字段→fail-open放行；paired=false→拦。
-    private class StationRec { public int x; public int y; public string name; public bool online; public bool paired; public string peer; public bool hasPairEvidence; }
+    // v0.9.69 本槽收敛：seenEpoch=最近一次被活体观测到的本槽 saveEpoch；连续 K 轮未见即从本槽剔除。
+    private class StationRec { public int x; public int y; public string name; public bool online; public bool paired; public string peer; public bool hasPairEvidence; public int seenEpoch; }
+    // v0.9.69 脏位：本身份下 Record/改名才置位（实例字段，MarkDirty 静态入口经 Instance）。
+    private bool _persistedDirty = false;
+    private static void MarkPersistedDirty()
+    {
+        try
+        {
+            if (TeleportSaveIdentity.SuppressDirty) return;
+            if (Instance != null) Instance._persistedDirty = true;
+        } catch {}
+    }
     private Sprite _markerSprite;
     private float _nextRefresh = -1f;
     private bool _mapOpenLast = false;
@@ -573,7 +584,11 @@ public class TeleportMapManager : MonoBehaviour
                 try
                 {
                     string bare = k.StartsWith("c:") ? k.Substring(2) : null;
-                    if (bare != null && inst._persisted.TryGetValue(bare, out var rec) && rec != null) rec.name = newName;
+                    if (bare != null && inst._persisted.TryGetValue(bare, out var rec) && rec != null)
+                    {
+                        rec.name = newName;
+                        MarkPersistedDirty(); // v0.9.69 改名写脏位
+                    }
                 } catch {}
             }
             try { inst.SavePersistedThrottled(force: true); } catch {}
@@ -641,6 +656,7 @@ public class TeleportMapManager : MonoBehaviour
         try
         {
             if (string.IsNullOrEmpty(coord) || string.IsNullOrEmpty(name)) return;
+            int epoch = TeleportSaveIdentity.SlotEpoch;
             if (_persisted.TryGetValue(coord, out var rec) && rec != null)
             {
                 rec.x = Mathf.RoundToInt(worldPos.x);
@@ -649,9 +665,11 @@ public class TeleportMapManager : MonoBehaviour
                 rec.online = online;
                 rec.paired = true;
                 rec.hasPairEvidence = true;
+                rec.seenEpoch = epoch; // v0.9.69 活体观测打轮戳
                 if (!string.IsNullOrEmpty(peerCoord)) rec.peer = peerCoord;
             }
-            else _persisted[coord] = new StationRec { x = Mathf.RoundToInt(worldPos.x), y = Mathf.RoundToInt(worldPos.y), name = name, online = online, paired = true, peer = peerCoord ?? "", hasPairEvidence = true };
+            else _persisted[coord] = new StationRec { x = Mathf.RoundToInt(worldPos.x), y = Mathf.RoundToInt(worldPos.y), name = name, online = online, paired = true, peer = peerCoord ?? "", hasPairEvidence = true, seenEpoch = epoch };
+            MarkPersistedDirty();
         } catch {}
     }
 
@@ -686,6 +704,7 @@ public class TeleportMapManager : MonoBehaviour
             int n = inst._persisted.Count;
             inst._persisted.Clear();
             inst._persistedLoaded = false;
+            inst._persistedDirty = false;
             return n;
         }
         catch { return 0; }
@@ -751,7 +770,9 @@ public class TeleportMapManager : MonoBehaviour
                         // v0.9.65 老文件无 paired 字段 → hasPairEvidence=false（缺信息，门控 fail-open）
                         paired = ParseIntField(body, "\"paired\"") != 0,
                         peer = ParseStrField(body, "\"peer\""),
-                        hasPairEvidence = body.Contains("\"paired\"")
+                        hasPairEvidence = body.Contains("\"paired\""),
+                        // v0.9.69 老文件无 seen 字段 → 0（首轮 epoch 即参与收敛计数）
+                        seenEpoch = ParseIntField(body, "\"seen\"")
                     };
                     if (!string.IsNullOrEmpty(coord) && !string.IsNullOrEmpty(rec.name)) _persisted[coord] = rec;
                 } catch {}
@@ -809,15 +830,44 @@ public class TeleportMapManager : MonoBehaviour
     }
 
     // v0.9.68 切换落盘：强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    // v0.9.69 脏位守卫：非脏返回 0；写后清脏位。
     public static int FlushForIdentity()
     {
         try
         {
             var inst = Instance;
-            if (inst == null || inst._persisted.Count == 0) return 0;
+            if (inst == null || inst._persisted.Count == 0 || !inst._persistedDirty) return 0;
             int n = inst._persisted.Count;
             inst.SavePersistedThrottled(force: true);
+            inst._persistedDirty = false;
             return n;
+        }
+        catch { return 0; }
+    }
+
+    // v0.9.69 收敛强制落盘（配额内调用，不看脏位；调用方已做 prune）。
+    public static void ForceSavePersisted()
+    {
+        try { Instance?.SavePersistedThrottled(force: true); } catch {}
+    }
+
+    // v0.9.69 本槽收敛：连续 keepWithin 轮未被活体观测（seenEpoch）即从本槽内存剔除；
+    // 仅动本槽内存，不碰 legacy/别槽文件；返回剔除数（调用方置脏并落盘）。
+    public static int PruneUnseen(int epoch, int keepWithin)
+    {
+        try
+        {
+            var inst = Instance;
+            if (inst == null) return 0;
+            var dead = new System.Collections.Generic.List<string>();
+            foreach (var kv in inst._persisted)
+            {
+                if (kv.Value == null) { dead.Add(kv.Key); continue; }
+                if (epoch - kv.Value.seenEpoch >= keepWithin) dead.Add(kv.Key);
+            }
+            foreach (var k in dead) inst._persisted.Remove(k);
+            if (dead.Count > 0) inst._persistedDirty = true;
+            return dead.Count;
         }
         catch { return 0; }
     }
@@ -840,7 +890,7 @@ public class TeleportMapManager : MonoBehaviour
                 if (!first) sb.Append(",");
                 string en = kv.Value.name.Replace("\\", "\\\\").Replace("\"", "\\\"");
                 string epeer = (kv.Value.peer ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
-                sb.Append($"\"{kv.Key}\":{{\"x\":{kv.Value.x},\"y\":{kv.Value.y},\"name\":\"{en}\",\"online\":{(kv.Value.online ? 1 : 0)},\"paired\":{(kv.Value.paired ? 1 : 0)},\"peer\":\"{epeer}\"}}");
+                sb.Append($"\"{kv.Key}\":{{\"x\":{kv.Value.x},\"y\":{kv.Value.y},\"name\":\"{en}\",\"online\":{(kv.Value.online ? 1 : 0)},\"paired\":{(kv.Value.paired ? 1 : 0)},\"peer\":\"{epeer}\",\"seen\":{kv.Value.seenEpoch}}}");
                 first = false;
             }
             sb.Append("}");

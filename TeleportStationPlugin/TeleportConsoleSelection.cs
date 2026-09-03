@@ -19,6 +19,12 @@ public static class TeleportConsoleSelection
     private const int PadId = 900102;
     private static readonly Dictionary<string, string> _selByUid = new(); // consoleUid -> padUid（唯一真相源）
     private static float _lastSave = -999f;
+    // v0.9.69 脏位：本身份下发生过选点写才置位；Load 期被 SuppressDirty 抑制。
+    private static bool _dirty = false;
+    internal static void MarkDirty()
+    {
+        try { if (!TeleportSaveIdentity.SuppressDirty) _dirty = true; } catch {}
+    }
     private static string SelPath => TeleportSaveIdentity.SavePath("TeleportSelection.json");
 
     // ===== 供电 AND 判定（与 PadTrigger 一致：consuming && sufficient>0.01 && list.Count>0） =====
@@ -133,6 +139,7 @@ public static class TeleportConsoleSelection
     {
         if (!TeleportStationUid.IsUid(consoleUid) || !TeleportStationUid.IsUid(padUid)) return;
         _selByUid[consoleUid] = padUid;
+        try { MarkDirty(); } catch {}
         try
         {
             var console = TeleportBindingManager.FindConsoleByUid(consoleUid);
@@ -237,7 +244,7 @@ public static class TeleportConsoleSelection
             if (console != null)
             {
                 string cuid = TeleportStationUid.UidFor(console);
-                if (!string.IsNullOrEmpty(cuid) && _selByUid.ContainsKey(cuid)) _selByUid.Remove(cuid);
+                if (!string.IsNullOrEmpty(cuid) && _selByUid.ContainsKey(cuid)) { _selByUid.Remove(cuid); try { MarkDirty(); } catch {} }
                 var cData = Reflect.Get(console, "objectData") ?? Reflect.Get(console, "terrainObjectData");
                 if (cData != null)
                 {
@@ -254,7 +261,7 @@ public static class TeleportConsoleSelection
     public static void ClearByUid(string consoleUid)
     {
         if (string.IsNullOrEmpty(consoleUid)) return;
-        if (_selByUid.ContainsKey(consoleUid)) _selByUid.Remove(consoleUid);
+        if (_selByUid.ContainsKey(consoleUid)) { _selByUid.Remove(consoleUid); try { MarkDirty(); } catch {} }
         try
         {
             var console = TeleportBindingManager.FindConsoleByUid(consoleUid);
@@ -302,13 +309,15 @@ public static class TeleportConsoleSelection
     }
 
     // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    // v0.9.69 脏位守卫：非脏返回 0；写后清脏位。
     public static int FlushForIdentity()
     {
         try
         {
-            if (_selByUid.Count == 0) return 0;
+            if (_selByUid.Count == 0 || !_dirty) return 0;
             _lastSave = -999f;
             SaveNow();
+            _dirty = false;
             return _selByUid.Count;
         }
         catch { return 0; }
@@ -425,6 +434,7 @@ public static class TeleportConsoleSelection
         {
             int n = _selByUid.Count;
             _selByUid.Clear();
+            _dirty = false;
             return n;
         }
         catch { return 0; }

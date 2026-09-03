@@ -26,6 +26,12 @@ public static class TeleportStationNameManager
     // SetName 双写（实例键+坐标键+对端pad实例键/坐标键）；GetName 按 实例键→存档property[2]→坐标键 顺序回退。
     private static readonly Dictionary<string, string> _namesByCoord = new();
     private static float _lastSave = -999f;
+    // v0.9.69 脏位：本身份下 SetName 才置位；Load 期被 SuppressDirty 抑制。
+    private static bool _dirty = false;
+    internal static void MarkDirty()
+    {
+        try { if (!TeleportSaveIdentity.SuppressDirty) _dirty = true; } catch {}
+    }
     private static string NamePath => TeleportSaveIdentity.SavePath("TeleportStationNames.json");
 
     // ---- 对外：获取/设置 ----
@@ -183,6 +189,7 @@ public static class TeleportStationNameManager
             long k = GetInstanceKey(console);
             if (string.IsNullOrEmpty(newName)) _names.Remove(k);
             else _names[k] = newName;
+            try { MarkDirty(); } catch {}
             // v0.9.61 双写坐标键（跨读档稳定）
             try
             {
@@ -243,13 +250,15 @@ public static class TeleportStationNameManager
     }
 
     // v0.9.68 切换落盘：绕过节流强制写当前 namespace（调用方保证 key 仍是旧 key）。
+    // v0.9.69 脏位守卫：非脏返回 0；写后清脏位。
     public static int FlushForIdentity()
     {
         try
         {
-            if (_names.Count == 0 && _namesByCoord.Count == 0) return 0;
+            if ((_names.Count == 0 && _namesByCoord.Count == 0) || !_dirty) return 0;
             _lastSave = -999f;
             SaveNow();
+            _dirty = false;
             return _names.Count + _namesByCoord.Count;
         }
         catch { return 0; }
@@ -366,6 +375,7 @@ public static class TeleportStationNameManager
             int n = _names.Count + _namesByCoord.Count;
             _names.Clear();
             _namesByCoord.Clear();
+            _dirty = false;
             return n;
         }
         catch { return 0; }
