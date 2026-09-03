@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.72")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.73")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -236,6 +236,27 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] UpdateBatteryCharger 挂钩失败（方法未找到）");
             }
             catch (Exception ek) { Log.LogWarning($"[TS] UpdateBatteryCharger 挂钩异常: {ek.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.73：状态字 16 槽上限屏蔽（8×8 下槽位号≥16 的 Set/Get 原生 throw → prefix 吞掉保充电）═══
+            try
+            {
+                var sbs = AccessTools.Method(typeof(ProductionData), "SetBatteryState");
+                if (sbs != null)
+                {
+                    h.Patch(sbs, prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                        nameof(ChargerPadFix.BatteryStateSetPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionData.SetBatteryState（16槽上限屏蔽）");
+                }
+                else Log.LogWarning("[TS] SetBatteryState 挂钩失败（方法未找到）");
+                var gbs = AccessTools.Method(typeof(ProductionData), "GetBatteryState");
+                if (gbs != null)
+                {
+                    h.Patch(gbs, prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
+                        nameof(ChargerPadFix.BatteryStateGetPrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionData.GetBatteryState（16槽上限屏蔽）");
+                }
+                else Log.LogWarning("[TS] GetBatteryState 挂钩失败（方法未找到）");
+            }
+            catch (Exception es) { Log.LogWarning($"[TS] BatteryState 挂钩异常: {es.Message.Split('\n')[0]}"); }
             // ═══ v0.9.7：电网重扫轨迹探针（定位停机电线不重连）═══
             try
             {
@@ -406,7 +427,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.72 容器初始化改纯attr判定（存量基类型盘可扩8×8）");
+        Log.LogInfo("[TeleportStation] v0.9.73 状态字16槽上限屏蔽（8×8下≥16槽Set/Get吞掉保充电，无LED）");
     }
 }
 

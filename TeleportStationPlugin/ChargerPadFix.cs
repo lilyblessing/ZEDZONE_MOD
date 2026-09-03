@@ -1389,6 +1389,22 @@ public static class ChargerPadFix
         try { productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat / 4f; } catch { }
     }
 
+    // ═══ v0.9.73 状态字位域上限屏蔽（反编译实证 subagent/data/battery-state-cap-decompile.md）═══
+    // batteryChargeStateTemp uint @0xE0 按 2bit/槽打包共 16 槽；Set 用 if(0xf<index)throw，Get 用 if(index<0x10)；
+    // UpdateBatteryCharger 传的是格子槽位号（sizeX*y+x），8×8 下 ≥16 即崩且掀翻当次充电。
+    // 充电循环（ChargeBattery）与 index 无关 → 越界 Set/Get 直接吞掉，16+ 格无 LED（渲染本就只管前 totalBatterySoltNumber 槽）。
+    public static bool BatteryStateSetPrefix(int __0)
+    {
+        try { if (__0 < 0 || __0 > 15) return false; } catch { }
+        return true;
+    }
+
+    public static bool BatteryStateGetPrefix(int __0, ref int __result)
+    {
+        try { if (__0 < 0 || __0 > 15) { __result = 0; return false; } } catch { }
+        return true;
+    }
+
     /// <summary>×4 目标判定：900102 传送盘（克隆引用或 id）或 126 原版充电台。</summary>
     private static bool IsBoostPd(ProductionData pd)
     {
