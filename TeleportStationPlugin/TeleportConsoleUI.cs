@@ -227,11 +227,17 @@ public class TeleportConsoleUI : MonoBehaviour
             }
 
             var candidates = CollectCandidates();
+            long ck0 = _currentConsole != null ? GetInstanceKey(_currentConsole) : 0;
+            Plugin.L.LogInfo($"[TS][UI] 选点候选 console={ck0} 共 {candidates.Count} 个圆盘");
             if (candidates.Count == 0)
             {
+                Plugin.L.LogInfo($"[TS][UI] 候选为空 console={ck0}（已直扫兜底仍为0，请检查圆盘是否存在/attr.id==900102）");
                 CreateInfoRow("无可用传送台（请先放置并绑定圆盘）");
                 return;
             }
+            string consoleName0 = "";
+            try { consoleName0 = TeleportStationNameManager.GetName(_currentConsole); } catch {}
+            if (string.IsNullOrWhiteSpace(consoleName0)) { try { consoleName0 = _currentConsole != null ? _currentConsole.name : "?"; } catch {} }
             foreach (var pad in candidates)
             {
                 bool online = TeleportConsoleSelection.IsOnline(pad);
@@ -239,11 +245,13 @@ public class TeleportConsoleUI : MonoBehaviour
                 long ck = _currentConsole != null ? GetInstanceKey(_currentConsole) : 0;
                 long boundPad = TeleportBindingManager.GetBoundPad(ck);
                 bool isSelfPad = pk == boundPad;
-                string suffix = isSelfPad ? " [本站]" : "";
-                string status = online ? "在线" : "离线";
                 string displayName = ResolvePadDisplayName(pad, pk);
                 string distStr = FormatDistXY(_currentConsole, pad);
-                string label = $"{displayName} {status}{suffix} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
+                // 取证日志：每条候选一行（含console id/name/dist/online；本站行亦留痕后跳过）
+                Plugin.L.LogInfo($"[TS][UI] 候选 console={ck}({consoleName0}) pad={pk}({displayName}) online={online} dist={distStr} self={isSelfPad}");
+                if (isSelfPad) continue; // 定案需求：仅显示除本机外的其他传送站
+                string status = online ? "在线" : "离线";
+                string label = $"{displayName} {status} 距{distStr}  id={pad.attr.id} pos={pad.transform.position.x:F0},{pad.transform.position.y:F0}";
                 if (online && !isSelfPad) label += " ★可传送";
                 else if (!online) label += " （不可选）";
 
@@ -253,6 +261,7 @@ public class TeleportConsoleUI : MonoBehaviour
                     // 仅在线非本站可点，按钮已拦截，但双保险
                     if (!TeleportConsoleSelection.IsOnline(pad)) { ShowBubble("目的地离线"); return; }
                     if (isSelfPad) { ShowBubble("不能选择本站"); return; }
+                    Plugin.L.LogInfo($"[TS][Sel] 点选 console={ck}({consoleName0}) -> pad={pk}({displayName}) dist={distStr} online={online}");
                     TeleportConsoleSelection.SetSelected(_currentConsole, pad);
                     ShowBubble($"已选择 {pad.name}");
                     Close();
@@ -271,6 +280,8 @@ public class TeleportConsoleUI : MonoBehaviour
         catch (Exception e) { Plugin.L.LogWarning($"[TS][UI] 重建列表异常: {e.Message}"); }
     }
 
+    // P6.4 修空列表：先逐项清洗（坏项跳过，不毒化全表），排序独立 try（失败保序返回）。
+    // 旧版 all.Sort 比较器直访 a.transform.position 且外层空 catch{}，任一坏项抛异常即整表清空且无日志。
     private List<TerrainObject> CollectCandidates()
     {
         var list = new List<TerrainObject>();
@@ -278,21 +289,55 @@ public class TeleportConsoleUI : MonoBehaviour
         try
         {
             var all = FindAllPads();
-            // 按距离当前控制台排序
-            Vector3 cPos = _currentConsole != null ? _currentConsole.transform.position : Vector3.zero;
-            all.Sort((a,b) =>
+            // 缓存 TTL/时序空窗兜底：缓存为空时直扫一次 Resources（只读，不轮询不常驻）
+            if (all == null || all.Count == 0)
             {
-                if (a == null || b == null) return 0;
-                float da = (a.transform.position - cPos).sqrMagnitude;
-                float db = (b.transform.position - cPos).sqrMagnitude;
-                return da.CompareTo(db);
-            });
+                try
+                {
+                    var direct = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
+                    if (direct != null)
+                    {
+                        all = new List<TerrainObject>();
+                        foreach (var t in direct)
+                        {
+                            try { if (t != null && t.attr != null && t.attr.id == 900102) all.Add(t); } catch {}
+                        }
+                        Plugin.L.LogInfo($"[TS][UI] 缓存为空，直扫兜底得 {all.Count} 个圆盘");
+                    }
+                } catch {}
+            }
+            if (all == null) return list;
+            var clean = new List<TerrainObject>();
             foreach (var pad in all)
             {
-                if (pad == null || pad.transform == null) continue;
-                long k = GetInstanceKey(pad);
-                if (seen.Add(k)) list.Add(pad);
+                try
+                {
+                    if (pad == null) continue;
+                    if (pad.transform == null) continue;
+                    if (pad.attr == null || pad.attr.id != 900102) continue;
+                    long k = GetInstanceKey(pad);
+                    if (!seen.Add(k)) continue;
+                    clean.Add(pad);
+                } catch {}
             }
+            try
+            {
+                Vector3 cc = Vector3.zero;
+                try { if (_currentConsole != null && _currentConsole.transform != null) cc = _currentConsole.transform.position; } catch {}
+                Vector3 cPos = cc;
+                clean.Sort((a,b) =>
+                {
+                    try
+                    {
+                        if (a == null || b == null) return 0;
+                        if (a.transform == null || b.transform == null) return 0;
+                        float da = (a.transform.position - cPos).sqrMagnitude;
+                        float db = (b.transform.position - cPos).sqrMagnitude;
+                        return da.CompareTo(db);
+                    } catch { return 0; }
+                });
+            } catch {}
+            list = clean;
         } catch {}
         return list;
     }
