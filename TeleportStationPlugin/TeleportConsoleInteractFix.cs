@@ -18,10 +18,12 @@ namespace TeleportStationPlugin;
 /// 修复：Postfix 在原版注册后，定位 InteractManager.interactObjectDataList 中对应 GameObject 的 InteractObjectData，
 ///    清空其 interactDataList 并重建为“重命名/选择目的地(列表)/退出”，保留原版 InteractUI 容器与按键提示。
 /// 回退：若定位失败，则直接构造 InteractObjectData + InteractData x3 并调用 AddInteractObjectData。
-/// A方案（F注册层分流）：CommuEnterPrefix 内编译期直访 objectData@0xA8/attr@0xB8 判 900101，
-/// 传送台返回false吞原生注册并登记自建单F（打开传送控制台），原生返回true零触碰；
-/// TryCreateDelegate 按 R1-R6 六路重做（R4 newobj方法组直构为主路径），interactAction 非null；
-/// CommuDelegatePrefix(<>c)保留作兜底，CommuEnterPostfix 内 isQ 透传跳过逻辑未动。
+/// A方案（F注册层分流，v0.9.56）已回退：CommuEnterPrefix 内吞原生（return false）+ TryRegisterConsoleSelf 自建登记，
+/// 自建委托 TryCreateDelegate R1-R6 全灭恒 null → list 真空（count=0）→ 外部 F/Q 全灭（v0.9.56 回归）。
+/// v0.9.57 放行方案：CommuEnterPrefix 对 900101 也不再 return false（只打日志 + 标记 _currentConsole，返回 true 放行原生注册，保住 F+Q 原生条目）；
+/// postfix 沿用 v0.9.55 做法只改 F 条目 interactStr（Q 条目 isQ 透传保留不动）；F 分派走 <>c 拦截，
+/// <>c 入口改用回调 obj 链判 900101（InteractObjectData.interactObject@0x10 / InteractData.interactObjectTemp@0x30 → attr.id），是才 return false 弹自建菜单；
+/// TryRegisterConsoleSelf 整段休眠（R-all-fail），不再向 list 写 null 委托。
 /// </summary>
 public static class TeleportConsoleInteractFix
 {
@@ -89,28 +91,92 @@ public static class TeleportConsoleInteractFix
                     }
                 }
             } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllInteract 挂钩异常: {e.Message.Split('\n')[0]}"); }
-            // P6.11: 委托目标兜底 — 直接 patch 闭包方法 <>c.<OnPlayerEnterRange>b__0_0，绕过 Delegate.CreateDelegate 的 IL2CPP 类型校验
+            // P6.12: 委托目标兜底 — 直接 patch 闭包方法 <>c.<OnPlayerEnterRange>b__0_0，绕过 Delegate.CreateDelegate 的 IL2CPP 类型校验
+            // dump.cs:78378-78394 实证：<>c 系 TerrainObject_Furniture_Commu 的 private sealed 嵌套类（TypeDefIndex 1824），
+            //   方法 internal void <OnPlayerEnterRange>b__0_0(object obj)，RVA 0x9A49A0 / VA 0x1809A49A0。
+            // 穷举解析（命中即停）+ 单条 trace 诊断：成功打 Info（含命中路），全失败才打一条 Warn（含逐路结果）。
             try
             {
-                Type closure = null;
-                try { closure = typeof(TerrainObject_Furniture_Commu).GetNestedType("<>c", BindingFlags.NonPublic); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] GetNestedType <>c fail {ex.Message.Split('\n')[0]}"); }
-                if (closure == null) try { closure = AccessTools.Inner(typeof(TerrainObject_Furniture_Commu), "<>c"); } catch {}
-                if (closure == null) try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
-                if (closure == null) try { closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
-                if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu+<>c"); } catch {}
-                if (closure == null) try { closure = SafeTypeByName("TerrainObject_Furniture_Commu.<>c"); } catch {}
+                var trace = new System.Text.StringBuilder();
+                Type closure = null; string hitRoute = null; MethodInfo bMethod = null;
+                // L1: 直访嵌套（Public|NonPublic 双旗；v0.9.55 仅传 NonPublic，若代理层嵌套可见性被改写则此处 null）
+                try
+                {
+                    closure = typeof(TerrainObject_Furniture_Commu).GetNestedType("<>c", BindingFlags.Public | BindingFlags.NonPublic);
+                    trace.Append($"L1(GetNestedType Public|NonPublic)={(closure != null ? closure.FullName : "null")};");
+                    if (closure != null) hitRoute = "L1";
+                } catch (Exception ex) { trace.Append($"L1-ex:{ex.Message.Split('\n')[0]};"); }
+                // L2: 枚举全部嵌套（定位：嵌套是否存在、实际叫什么名；Il2CppInterop 改名/剥离在此现形）
+                if (closure == null) try
+                {
+                    var nested = typeof(TerrainObject_Furniture_Commu).GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic);
+                    var names = new List<string>();
+                    foreach (var n in nested) { names.Add(n.Name); if (n.Name == "<>c" || n.Name.Contains(">c")) { closure = n; hitRoute = "L2"; break; } }
+                    trace.Append($"L2(enumNested count={nested.Length} names=[{string.Join(",", names)}]);");
+                } catch (Exception ex) { trace.Append($"L2-ex:{ex.Message.Split('\n')[0]};"); }
+                // L3: Harmony Inner（名精确匹配 "<>c"）
+                if (closure == null) try
+                {
+                    closure = AccessTools.Inner(typeof(TerrainObject_Furniture_Commu), "<>c");
+                    trace.Append($"L3(Inner)={(closure != null ? closure.FullName : "null")};");
+                    if (closure != null) hitRoute = "L3";
+                } catch (Exception ex) { trace.Append($"L3-ex:{ex.Message.Split('\n')[0]};"); }
+                // L4: 同程序集全扫描（不经嵌套名：FullName 含 Furniture_Commu 且以 +<>c / .<>c 结尾；覆盖代理层改名或顶层化）
+                if (closure == null) try
+                {
+                    var asm = typeof(TerrainObject_Furniture_Commu).Assembly;
+                    Type[] types = null;
+                    try { types = asm.GetTypes(); } catch (System.Reflection.ReflectionTypeLoadException ex) { types = ex.Types; }
+                    int candCount = 0; var candNames = new List<string>();
+                    if (types != null) foreach (var tp in types)
+                    {
+                        if (tp == null || tp.FullName == null) continue;
+                        if (tp.FullName.Contains("Furniture_Commu"))
+                        {
+                            candCount++;
+                            if (candNames.Count < 12) candNames.Add(tp.FullName);
+                            if (tp.Name == "<>c" || tp.FullName.EndsWith("+<>c") || tp.FullName.EndsWith(".<>c")) { closure = tp; hitRoute = "L4"; break; }
+                        }
+                    }
+                    trace.Append($"L4(asmScan asm={asm.GetName().Name} commuCandidates={candCount} [{string.Join(",", candNames)}]){(closure != null ? " HIT" : "")};");
+                } catch (Exception ex) { trace.Append($"L4-ex:{ex.Message.Split('\n')[0]};"); }
+                // L5: AccessTools.TypeByName 变体（+ 分隔与 . 分隔）
+                if (closure == null) try
+                {
+                    closure = AccessTools.TypeByName("TerrainObject_Furniture_Commu+<>c") ?? AccessTools.TypeByName("TerrainObject_Furniture_Commu.<>c");
+                    trace.Append($"L5(TypeByName)={(closure != null ? closure.FullName : "null")};");
+                    if (closure != null) hitRoute = "L5";
+                } catch (Exception ex) { trace.Append($"L5-ex:{ex.Message.Split('\n')[0]};"); }
+                // L6: SafeTypeByName 变体（+ 分隔与 . 分隔，全 AppDomain 扫描）
+                if (closure == null) try
+                {
+                    closure = SafeTypeByName("TerrainObject_Furniture_Commu+<>c") ?? SafeTypeByName("TerrainObject_Furniture_Commu.<>c");
+                    trace.Append($"L6(SafeTypeByName)={(closure != null ? closure.FullName : "null")};");
+                    if (closure != null) hitRoute = "L6";
+                } catch (Exception ex) { trace.Append($"L6-ex:{ex.Message.Split('\n')[0]};"); }
+                // 方法反查（不经类型名精确语义）：M1 精确名 → M2 按“含 OnPlayerEnterRange 且含 b__0_0”枚举
+                // 注：RVA/VA→MethodInfo 无托管 API（Il2CppInterop 不暴露 RVA 查表），M2 方法名枚举即“从方法反查”的等价实现。
                 if (closure != null)
                 {
-                    var bMethod = AccessTools.Method(closure, "<OnPlayerEnterRange>b__0_0");
-                    if (bMethod != null)
+                    try { bMethod = AccessTools.Method(closure, "<OnPlayerEnterRange>b__0_0"); trace.Append($"M1(exact)={(bMethod != null ? "HIT" : "null")};"); } catch (Exception ex) { trace.Append($"M1-ex:{ex.Message.Split('\n')[0]};"); }
+                    if (bMethod == null) try
                     {
-                        var pre = new HarmonyMethod(typeof(TeleportConsoleInteractFix).GetMethod(nameof(CommuDelegatePrefix), BindingFlags.NonPublic | BindingFlags.Static));
-                        h.Patch(bMethod, prefix: pre);
-                        Plugin.L.LogInfo($"[TS][Fix] 已挂钩 <>c.<OnPlayerEnterRange>b__0_0 prefix (委托目标劫持兜底) type={closure.FullName}");
-                    }
-                    else Plugin.L.LogWarning("[TS][Fix] <>c.<OnPlayerEnterRange>b__0_0 未找到");
+                        var mNames = new List<string>();
+                        foreach (var m in closure.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                        {
+                            if (mNames.Count < 16) mNames.Add(m.Name);
+                            if (m.Name.Contains("OnPlayerEnterRange") && m.Name.Contains("b__0_0")) { bMethod = m; break; }
+                        }
+                        trace.Append($"M2(enumMethods [{string.Join(",", mNames)}]){(bMethod != null ? " HIT" : "")};");
+                    } catch (Exception ex) { trace.Append($"M2-ex:{ex.Message.Split('\n')[0]};"); }
                 }
-                else Plugin.L.LogWarning("[TS][Fix] <>c 类型未找到，委托目标劫持未挂钩");
+                if (closure != null && bMethod != null)
+                {
+                    var pre = new HarmonyMethod(typeof(TeleportConsoleInteractFix).GetMethod(nameof(CommuDelegatePrefix), BindingFlags.NonPublic | BindingFlags.Static));
+                    h.Patch(bMethod, prefix: pre);
+                    Plugin.L.LogInfo($"[TS][Fix] 已挂钩 <>c.<OnPlayerEnterRange>b__0_0 prefix route={hitRoute} type={closure.FullName} trace=[{trace}]");
+                }
+                else Plugin.L.LogWarning($"[TS][Fix] <>c 劫持未挂钩 closure={(closure != null ? closure.FullName : "null")} bMethod={(bMethod != null ? bMethod.Name : "null")} trace=[{trace}]");
             } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] <>c 挂钩异常: {e.Message.Split('\n')[0]}"); }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 挂钩异常: {e.Message.Split('\n')[0]}"); }
@@ -830,10 +896,30 @@ public static class TeleportConsoleInteractFix
         return null;
     }
 
-    private static bool CommuDelegatePrefix(object __instance, object obj)
+    /// <summary>
+    /// <>c 分派：F 按下时 b__0_0 回调入口。判别一律先走回调 obj 链（编译期直访，禁反射读游戏字段）：
+    /// 主路 obj as InteractObjectData → interactObject@0x10 → TerrainObject.attr.id；
+    /// 次路 obj as InteractData → interactObjectTemp@0x30（Furniture_Commu 注册时 == this）→ attr.id。
+    /// 命中 900101 才 return false 弹自建菜单；obj 链可解析但非 900101 → return true 放原生 DOS；
+    /// obj 不可解析（null/未知类型）→ 沿用 v0.9.55 近距门控兜底（_currentConsole + 6m）并打 fallback 日志。
+    /// 旧问题：纯距离门控下，传送台旁的原生终端按 F 也会被吞；现仅未知 payload 才走此兜底。
+    /// </summary>
+    private static bool CommuDelegatePrefix(object __instance, object __0)
     {
         try
         {
+            object obj = __0;
+            // 主判别：回调 obj 链（编译期直访，禁反射读游戏字段）
+            TerrainObject hit = ResolveConsoleFromCallback(obj);
+            if (hit != null)
+            {
+                _currentConsole = hit;
+                try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(hit); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
+                Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (obj链) console={hit.GetInstanceID()} objType={obj?.GetType().FullName ?? "null"}");
+                return false; // 900101：吞原生 DOS，弹自建菜单
+            }
+            if (obj != null && IsKnownInteractPayload(obj)) return true; // 链可解析但非传送台：原生终端，放原生 DOS
+            try { Plugin.L.LogInfo($"[TS][Fix] <>c obj不可解析走近距兜底 objType={obj?.GetType().FullName ?? "null"}"); } catch {}
             var c = _currentConsole;
             if (c == null || c.attr == null || c.attr.id != 900101)
             {
@@ -865,9 +951,51 @@ public static class TeleportConsoleInteractFix
                 }
             } catch {}
             try { TeleportConsoleMenuUI.EnsureExists().ShowForConsole(c); } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix menu fail {e.Message.Split('\n')[0]}"); }
-            Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted -> menu console={c.GetInstanceID()} pos={c.transform.position} objParam={obj?.GetType().FullName ?? "null"}");
+            Plugin.L.LogInfo($"[TS][Fix] <>c delegate intercepted (近距兜底) console={c.GetInstanceID()} pos={c.transform.position} objParam={obj?.GetType().FullName ?? "null"}");
             return false;
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] delegate prefix err {e.Message.Split('\n')[0]}"); return true; }
+    }
+
+    /// <summary>obj 链主判别：obj → InteractObjectData.interactObject@0x10 / InteractData.interactObjectTemp@0x30 → TerrainObject.attr.id==900101。编译期直访，禁反射读游戏字段；命中返回拥有者，否则 null。</summary>
+    private static TerrainObject ResolveConsoleFromCallback(object obj)
+    {
+        if (obj == null) return null;
+        try
+        {
+            var iod = obj as InteractObjectData;
+            if (iod != null)
+            {
+                TerrainObject to = iod.interactObject as TerrainObject;
+                if (to == null)
+                {
+                    try { var go = iod.interactObject as GameObject; if (go != null) to = go.GetComponent<TerrainObject>(); } catch {}
+                }
+                if (to != null && to.attr != null && to.attr.id == 900101) return to;
+            }
+        } catch {}
+        try
+        {
+            var id = obj as InteractData;
+            if (id != null)
+            {
+                TerrainObject to = id.interactObjectTemp as TerrainObject;
+                if (to == null)
+                {
+                    try { var go = id.interactObjectTemp as GameObject; if (go != null) to = go.GetComponent<TerrainObject>(); } catch {}
+                }
+                if (to != null && to.attr != null && to.attr.id == 900101) return to;
+            }
+        } catch {}
+        return null;
+    }
+
+    /// <summary>obj 是否为可解析的交互 payload（任一链可走通类型判断）。用于区分“明确非传送台”（放原生 DOS）与“不可解析”（走近距兜底）。只读自家类型判断，零反射读游戏字段。</summary>
+    private static bool IsKnownInteractPayload(object obj)
+    {
+        if (obj == null) return false;
+        try { if (obj is InteractData) return true; } catch {}
+        try { if (obj is InteractObjectData) return true; } catch {}
+        return false;
     }
 
     public static bool CommuExitPrefix(object __instance)
@@ -880,12 +1008,14 @@ public static class TeleportConsoleInteractFix
     public static bool ComputerOpenPrefix(object __instance, object m_computerData, object m_computer) { return true; }
     public static bool InteractOpenPrefix(object __instance, GameObject go, string str, object del) { return true; }
     /// <summary>
-    /// A方案F注册层分流（传送控制台吞原生走自建，原生零触碰）。
+    /// v0.9.57 放行方案（A 方案吞原生已回退）。
+    /// v0.9.56 回归根因：传送台 return false 吞原生注册（含 Q 条目），而 TryRegisterConsoleSelf 自建委托 R1-R6 全灭恒 null → 拒绝注册 → list 真空（postfix 实测 count=0）→ 外部 F/Q 全灭。
+    /// 现 900101 也不再 return false：只打日志 + 标记 _currentConsole（postfix 改字 / <>c 分派用），返回 true 放行原生注册，保住 F+Q 原生条目。
+    /// 判定=编译期直访 attr@0xB8（attr.id==900101），禁反射读游戏字段；原生零触碰。
     /// 反编译结论直接用：F注册=TerrainObject_Furniture_Commu.OnPlayerEnterRange Slot19 VA 0x180997AD0（virtual非final，互操作元数据已验），
     /// 只登记InteractData（+0x28缓存委托<>9__0_0，+0x18按键名，+0x10交互文本）；F按下=b__0_0 VA 0x1809A49A0仅调DOS OpenDOSPanel，
-    /// __this共享单例实例已丢，实例仅注册瞬间存在（__this/interactObject@0x10）；判定=objectData@0xA8/attr@0xB8，传送台attr.id==900101。
-    /// 传送台→返回false吞原生注册+登记自建单F（interactStr=打开传送控制台）；原生→返回true零触碰。
-    /// Q说明：isQ透传跳过逻辑在CommuEnterPostfix内原样保留未动；CommuDelegatePrefix(<>c)保留作兜底。
+    /// __this共享单例实例已丢，实例仅注册瞬间存在（__this/interactObject@0x10）；判定=attr@0xB8，传送台attr.id==900101。
+    /// Q说明：isQ透传跳过逻辑在CommuEnterPostfix内原样保留未动；F分派走CommuDelegatePrefix(<>c)obj链判别。
     /// </summary>
     public static bool CommuEnterPrefix(object __instance, object __0)
     {
@@ -894,22 +1024,27 @@ public static class TeleportConsoleInteractFix
             // 编译期直访代理类型public成员，禁反射读游戏字段；实例仅注册瞬间有效
             var t = __instance as TerrainObject;
             if (t == null) return true;
-            var od = t.objectData; // @0xA8
             var attr = t.attr;     // @0xB8
             if (attr == null || attr.id != 900101) return true; // 原生：什么都不做，直接放行
-            if (od == null) { try { Plugin.L.LogWarning("[TS][Fix] A分流 console objectData null，吞原生但跳过自建"); } catch {} return false; }
             _currentConsole = t;
-            EnsureTypeCache();
-            bool ok = TryRegisterConsoleSelf(t);
-            try { Plugin.L.LogInfo($"[TS][Fix] A分流 console={t.GetInstanceID()} swallowNative selfReg={ok}"); } catch {}
-            return false; // 吞原生：雇佣/上传/退出三项不再登记
+            try { Plugin.L.LogInfo($"[TS][Fix] 900101 放行原生 console={t.GetInstanceID()} (F+Q保留→postfix改字+<>c分派)"); } catch {}
+            return true; // 放行原生：雇佣/上传/退出（+Q抬走）原样登记，F/Q 不再全灭
         }
         catch (Exception e) { try { Plugin.L.LogWarning($"[TS][Fix] CommuEnterPrefix err {e.Message.Split('\n')[0]}"); } catch {} return true; }
     }
 
-    /// <summary>A方案自建登记：单F InteractData（打开传送控制台→OnTeleportConsoleInteract），委托须非null否则拒绝注册。</summary>
+    /// <summary>
+    /// A 方案自建登记：已休眠（DORMANT v0.9.57，不再调用）。
+    /// 休眠原因 R-all-fail：TryCreateDelegate R1-R3 System.Delegate 均报 Type must derive from Delegate（InteractDelegate 系 Il2CppSystem.MulticastDelegate 派生，非 System 派系），
+    /// R4 ConvertDelegate 实机抛 target invocation，R5/R6 亦无可用 → 委托恒 null；继续登记会写坏项，而 prefix 若吞原生则 list 真空（count=0）→ F/Q 全灭（v0.9.56 回归）。
+    /// 现改走原生放行 + postfix 改字 + &lt;&gt;c 分派，本方法不再调用；旧实现整段保留在 #if false 内备查，不再向 list 写 null 委托。
+    /// </summary>
     private static bool TryRegisterConsoleSelf(TerrainObject t)
     {
+        try { Plugin.L.LogWarning("[TS][Fix] TryRegisterConsoleSelf dormant (R-all-fail)，拒绝自建登记"); } catch {}
+        return false;
+#if false
+        // ===== v0.9.56 A 方案自建实现（休眠保留，不编译）=====
         try
         {
             EnsureTypeCache();
@@ -946,5 +1081,6 @@ public static class TeleportConsoleInteractFix
             return true;
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] 自建异常 {e.Message.Split('\n')[0]}"); return false; }
+#endif
     }
 }

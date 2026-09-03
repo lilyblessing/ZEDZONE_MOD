@@ -225,9 +225,9 @@ public class TeleportMapManager : MonoBehaviour
                             var rt = go.GetComponent<RectTransform>();
                             if (rt != null)
                             {
-                                rt.anchorMin = new Vector2(0.5f, 0.5f);
-                                rt.anchorMax = new Vector2(0.5f, 0.5f);
-                                rt.pivot = new Vector2(0.5f, 0.5f);
+                                // 原生 0x118 路径仅 SetParent(mapParent)+写anchoredPosition，
+                                // anchor/pivot沿用 prefab 自带（反编译未见逐marker改写），故不覆盖；
+                                // 覆盖成 0.5/0.5 会在 prefab 非中心锚点时引入半个父级尺寸的系统性偏移。
                                 rt.anchoredPosition = anchoredPos;
                                 // 沿用 prefab 自带 rect（无实测证据不硬编码 sizeDelta；scale 语义保留 One，
                                 // 对应 CreateSimpleMapMarker 基准×param_4 由原生 prefab 侧决定）。
@@ -409,13 +409,20 @@ public class TeleportMapManager : MonoBehaviour
     }
 
     // ===== WorldToMapPos =====
+    // 原生实证（InitMapIcons 0x180BE8790 反编译）：
+    //  - 0x118 木牌路径：anchoredPos = worldPosition-get返回值 + 静态偏移(+8/+0xc，加法），
+    //    无×scale、无+center，挂mapParent(0x30)后仅写anchoredPosition；
+    //  - 0x120 路径同形：world + 静态偏移后直传 CreateSimpleMapMarker(Sprite, anchoredPos, scale, ...)；
+    //  - mapScaleFloat(0x128)=0.5f缺省、centerPoint(0x12C)均在父级由 RefreshMapTransformExecute
+    //    (0x180BED0B0) 统一应用；RefreshMapTransform(0x180BED340)本体仅写 refreshMapTransformFrameFlag(0x140)。
+    // 结论：逐marker公式只能是加法 world+offset。我方旧公式 (world-offset)*scale+center
+    // 把父级变换在子级又应用了一次（方向还反了：减 vs 加），即严重偏离根因。
+    // worldPositionOffset身份（MapPanel静态区+8/+0xc）为中置信，待实测；加法形状为高置信（两处独立调用点同形）。
     public Vector2 WorldToMapPos(Vector2 world)
     {
         EnsureTypeCache();
         try
         {
-            var mp = GetMapPanelInstance();
-            if (mp == null) return world * 0.5f;
             Vector2 offset = Vector2.zero;
             try
             {
@@ -426,49 +433,23 @@ public class TeleportMapManager : MonoBehaviour
                     else if (v is Vector3 v3) offset = new Vector2(v3.x, v3.y);
                     else try { offset = (Vector2)v; } catch {}
                 }
-            } catch {}
-            float scale = 0f;
-            Vector2 center = Vector2.zero;
-            float mapWidth = 0f, mapHeight = 0f;
-            try { if (_fi_mapScale != null) scale = Convert.ToSingle(_fi_mapScale.GetValue(mp)); else scale = Convert.ToSingle(RGet(mp, "mapScaleFloat")); } catch {}
-            try
-            {
-                if (_fi_center != null)
-                {
-                    var c = _fi_center.GetValue(mp);
-                    if (c is Vector2 cv2) center = cv2;
-                    else if (c is Vector3 cv3) center = new Vector2(cv3.x, cv3.y);
-                    else try { center = (Vector2)c; } catch {}
-                }
                 else
                 {
-                    var c = RGet(mp, "centerPoint");
-                    if (c is Vector2 cv2) center = cv2;
-                    else if (c is Vector3 cv3) center = new Vector2(cv3.x, cv3.y);
+                    // worldPositionOffset 是静态字段：实例与类型两级尽力读，失败即零（try/catch 内无害）。
+                    var mp = GetMapPanelInstance();
+                    var c = RGet(mp, "worldPositionOffset");
+                    if (c == null) try { c = RGet(_mapPanelType, "worldPositionOffset"); } catch {}
+                    if (c is Vector2 cv2) offset = cv2;
+                    else if (c is Vector3 cv3) offset = new Vector2(cv3.x, cv3.y);
                 }
             } catch {}
-            try { if (_fi_mapWidth != null) mapWidth = Convert.ToSingle(_fi_mapWidth.GetValue(mp)); else mapWidth = Convert.ToSingle(RGet(mp, "mapWidth")); } catch {}
-            try { if (_fi_mapHeight != null) mapHeight = Convert.ToSingle(_fi_mapHeight.GetValue(mp)); else mapHeight = Convert.ToSingle(RGet(mp, "mapHeight")); } catch {}
-            if (scale == 0f || float.IsNaN(scale) || float.IsInfinity(scale))
-            {
-                if (mapWidth > 1f)
-                {
-                    scale = mapWidth / 2048f;
-                    Plugin.L.LogWarning($"[TS][Map] mapScaleFloat==0 fallback mapWidth/2048={scale:F4}");
-                }
-                else
-                {
-                    Plugin.L.LogWarning($"[TS][Map] 反射失败 scale=0 center={center} mapSize={mapWidth}x{mapHeight} fallback world*0.5");
-                    return world * 0.5f;
-                }
-            }
-            Vector2 anchored = (world - offset) * scale + center;
+            Vector2 anchored = world + offset;
             return anchored;
         }
         catch (Exception ex)
         {
-            Plugin.L.LogWarning($"[TS][Map] WorldToMapPos 失败 fallback world*0.5: {ex.Message.Split('\n')[0]}");
-            return world * 0.5f;
+            Plugin.L.LogWarning($"[TS][Map] WorldToMapPos 失败 fallback world: {ex.Message.Split('\n')[0]}");
+            return world;
         }
     }
 
