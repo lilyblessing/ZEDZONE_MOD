@@ -220,18 +220,11 @@ public class TeleportConsoleMenuUI : MonoBehaviour
                 var txt = trans.GetComponent<Text>();
                 if (txt != null)
                 {
-                    string name = TeleportStationNameManager.GetName(console);
-                    long ck = GetInstanceKey(console);
-                    long sel = TeleportConsoleSelection.GetSelectedKey(ck);
-                    string selName = "";
-                    if (sel != 0)
-                    {
-                        var pad = FindByKey(sel) as TerrainObject;
-                        if (pad != null) selName = TeleportStationNameManager.GetName(pad) ?? pad.name;
-                        else selName = sel.ToString();
-                    }
-                    else selName = "未选择";
-                    string display = string.IsNullOrWhiteSpace(name) ? console.name : name;
+                    // v0.9.63 显示名优先（有名用名，无名用UID；永不显示 GO 名/实例ID）
+                    string display = TeleportStationUid.DisplayForConsole(console);
+                    string selName = "未选择";
+                    string selUid = TeleportConsoleSelection.GetSelectedUid(TeleportStationUid.UidFor(console));
+                    if (!string.IsNullOrEmpty(selUid)) selName = TeleportStationUid.DisplayForUid(selUid);
                     txt.text = $"{display}  |  目的地: {selName}";
                 }
             }

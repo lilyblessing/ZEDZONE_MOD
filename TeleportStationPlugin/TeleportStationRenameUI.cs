@@ -48,7 +48,9 @@ public class TeleportStationRenameUI : MonoBehaviour
         EnsureUI();
         try
         {
-            string cur = TeleportStationNameManager.GetName(console);
+            // v0.9.63 预填玩家命名；未命名留空（禁止把 GO 名/实例ID派生名塞进输入框）
+            string cur2;
+            string cur = TeleportStationNameManager.TryGetCustomName(console, out cur2) ? cur2 : string.Empty;
             if (_input != null) _input.text = cur ?? string.Empty;
         }
         catch {}

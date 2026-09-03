@@ -584,7 +584,10 @@ public class TeleportMapManager : MonoBehaviour
             {
                 var btn = go.AddComponent<Button>();
                 btn.interactable = true;
-                btn.onClick.AddListener(new System.Action(() => { try { ShowBubble("该站当前未加载（走近后重试）"); } catch {} }));
+                // v0.9.63 存量标记可点：persisted-online=true 即按 UID 选点（在线即传，无走近门控）；
+                // 从未在线的站仅气泡说明原因。mkey 形如 "c:x,y"。
+                string coordCap = mkey.StartsWith("c:") ? mkey.Substring(2) : "";
+                btn.onClick.AddListener(new System.Action(() => { try { Instance?.OnOfflineMarkerClick(coordCap); } catch {} }));
             } catch {}
             go.transform.SetParent(mapParent, false);
             rt.anchoredPosition = anchoredPos;
@@ -765,48 +768,203 @@ public class TeleportMapManager : MonoBehaviour
     {
         try
         {
-            // v0.9.61 存量补齐标记无活体对象（走近加载后重试）
-            if (pad == null) { ShowBubble("该站当前未加载（走近后重试）"); return; }
+            if (pad == null) { ShowBubble("该站当前离线"); return; }
             if (PendingConsole == null) { ShowBubble("请先在控制台选择传送"); return; }
             long ck = GetInstanceKey(PendingConsole);
+            string cuid = TeleportStationUid.UidFor(PendingConsole);
             long pendingPadKey = TeleportBindingManager.GetBoundPad(ck);
             TerrainObject pendingPadObj = pendingPadKey != 0 ? FindByKey(pendingPadKey) as TerrainObject : null;
             if (pendingPadKey == 0 || pendingPadObj == null) { ShowBubble("本站未绑定圆盘"); return; }
-            // 发送方需 IsSenderReady(供电+电池≥10000)，接收方仅 IsOnline
+            // 发送方需 IsSenderReady(供电+电池≥10000)，接收方仅在线（活体或持久）
             if (!TeleportConsoleSelection.IsSenderReady(pendingPadObj))
             {
                 if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站离线（未通电或未绑定）");
                 else ShowBubble("本站电量不足（需≥10000）");
                 return;
             }
-            if (!TeleportConsoleSelection.IsOnline(pad)) { ShowBubble("目的地离线"); return; }
+            string targetUid = TeleportStationUid.UidFor(pad);
+            if (!TeleportConsoleSelection.IsOnlineUid(targetUid)) { ShowBubble("目的地离线"); return; }
             if (pad == pendingPadObj) { ShowBubble("不能选择本站"); return; }
             long targetKey = GetInstanceKey(pad);
             if (targetKey == pendingPadKey) { ShowBubble("不能选择本站"); return; }
 
             TeleportConsoleSelection.SetSelected(PendingConsole, pad);
-            string name = GetNameForPad(pad);
-            ShowBubble($"已选择目的地: {name}");
-            Plugin.L.LogInfo($"[TS][Map] 选点 console={ck} -> pad={targetKey} {name}");
+            string name = TeleportStationUid.DisplayForPad(pad);
+            ShowBubble($"已选择 {name}");
+            Plugin.L.LogInfo($"[TS][Map] 选点 {cuid}({TeleportStationUid.DisplayForConsole(PendingConsole)}) -> {targetUid}({name})");
 
-            try
-            {
-                EnsureTypeCache();
-                var pdaType = _pdaPanelType;
-                var instProp = pdaType?.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-                var pda = instProp?.GetValue(null);
-                if (pda != null)
-                {
-                    var close = pda.GetType().GetMethod("ClosePanel", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    if (close != null) close.Invoke(pda, null);
-                    else { var close2 = AccessTools.Method(pda.GetType(), "Close"); close2?.Invoke(pda, null); }
-                }
-            } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Map] 关闭地图异常: {ex2.Message.Split('\n')[0]}"); }
-            PendingConsole = null;
-            try { TeleportConsoleComputerFix.PendingConsoleForMap = null; TeleportConsoleComputerFix.CurrentConsole = null; } catch {}
-            try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
+            CloseMapPanel();
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] OnMarkerClick 异常: {ex.Message.Split('\n')[0]}"); }
+    }
+
+    // v0.9.63 存量标记选点：无活体对象，以 UID 为身份；persisted-online=true 即选点（在线即传）。
+    [HideFromIl2Cpp]
+    public void OnOfflineMarkerClick(string coord)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(coord) || PendingConsole == null)
+            {
+                if (PendingConsole == null) ShowBubble("请先在控制台选择传送");
+                return;
+            }
+            string cuid = TeleportStationUid.UidFor(PendingConsole);
+            string targetUid = TeleportStationUid.UidFromCoord(coord);
+            if (!TeleportStationUid.IsUid(cuid) || !TeleportStationUid.IsUid(targetUid)) return;
+            long ck = GetInstanceKey(PendingConsole);
+            long pendingPadKey = TeleportBindingManager.GetBoundPad(ck);
+            TerrainObject pendingPadObj = pendingPadKey != 0 ? FindByKey(pendingPadKey) as TerrainObject : null;
+            if (pendingPadKey == 0 || pendingPadObj == null) { ShowBubble("本站未绑定圆盘"); return; }
+            if (!TeleportConsoleSelection.IsSenderReady(pendingPadObj))
+            {
+                if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站离线（未通电或未绑定）");
+                else ShowBubble("本站电量不足（需≥10000）");
+                return;
+            }
+            if (!TeleportConsoleSelection.IsOnlineUid(targetUid))
+            {
+                ShowBubble("目的地离线（从未观测到供电）");
+                Plugin.L.LogInfo($"[TS][Map] 存量选点拒绝 {cuid} -> {targetUid} persistedOnline=False");
+                return;
+            }
+            string selfUid = TeleportStationUid.UidFor(pendingPadObj);
+            if (targetUid == selfUid) { ShowBubble("不能选择本站"); return; }
+            TeleportConsoleSelection.SetSelectedByUid(cuid, targetUid);
+            string disp = TeleportStationUid.DisplayForUid(targetUid);
+            ShowBubble($"已选择 {disp}");
+            Plugin.L.LogInfo($"[TS][Map] 存量选点 {cuid} -> {targetUid}({disp}) persistedOnline=True");
+            CloseMapPanel();
+        }
+        catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] OnOfflineMarkerClick 异常: {ex.Message.Split('\n')[0]}"); }
+    }
+
+    private void CloseMapPanel()
+    {
+        try
+        {
+            EnsureTypeCache();
+            var pdaType = _pdaPanelType;
+            var instProp = pdaType?.GetProperty("instance", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+            var pda = instProp?.GetValue(null);
+            if (pda != null)
+            {
+                var close = pda.GetType().GetMethod("ClosePanel", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                if (close != null) close.Invoke(pda, null);
+                else { var close2 = AccessTools.Method(pda.GetType(), "Close"); close2?.Invoke(pda, null); }
+            }
+        }
+        catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Map] 关闭地图异常: {ex2.Message.Split('\n')[0]}"); }
+        PendingConsole = null;
+        try { TeleportConsoleComputerFix.PendingConsoleForMap = null; TeleportConsoleComputerFix.CurrentConsole = null; } catch {}
+        try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
+    }
+
+    // ===== v0.9.63 持久在线态静态查询（文件直读，不碰标记绘制，供选点/触发两路在线判） =====
+    // TeleportMapStations.json: {"x,y":{"x":..,"y":..,"name":"..","online":0/1}}
+    public static bool QueryPersistedStation(string coord, out int x, out int y, out string name, out bool online)
+    {
+        x = 0; y = 0; name = ""; online = false;
+        if (string.IsNullOrEmpty(coord)) return false;
+        try
+        {
+            // 实例表优先（本帧即时性），文件兜底（实例未就绪/跨会话）
+            var inst = Instance;
+            if (inst != null && inst._persisted.TryGetValue(coord, out var rec) && rec != null)
+            {
+                x = rec.x; y = rec.y; name = rec.name ?? ""; online = rec.online;
+                return !string.IsNullOrEmpty(name);
+            }
+            string path = PersistedPath();
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return false;
+            string txt = System.IO.File.ReadAllText(path);
+            if (string.IsNullOrWhiteSpace(txt)) return false;
+            string key = "\"" + coord + "\"";
+            int ki = txt.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return false;
+            int bo = txt.IndexOf('{', ki + key.Length);
+            if (bo < 0) return false;
+            int depth = 0;
+            bool inStr = false;
+            int be = -1;
+            for (int j = bo; j < txt.Length; j++)
+            {
+                char ch = txt[j];
+                if (inStr) { if (ch == '\\') j++; else if (ch == '"') inStr = false; continue; }
+                if (ch == '"') inStr = true;
+                else if (ch == '{') depth++;
+                else if (ch == '}') { depth--; if (depth == 0) { be = j; break; } }
+            }
+            if (be < 0) return false;
+            string body = txt.Substring(bo, be - bo + 1);
+            x = ParseIntFieldStatic(body, "\"x\"");
+            y = ParseIntFieldStatic(body, "\"y\"");
+            name = ParseStrFieldStatic(body, "\"name\"");
+            online = ParseIntFieldStatic(body, "\"online\"") != 0;
+            return !string.IsNullOrEmpty(name);
+        }
+        catch { return false; }
+    }
+
+    public static bool QueryPersistedOnline(string coord)
+    {
+        try
+        {
+            int x, y; string n; bool on;
+            if (QueryPersistedStation(coord, out x, out y, out n, out on)) return on;
+        }
+        catch { }
+        return false;
+    }
+
+    private static int ParseIntFieldStatic(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return 0;
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return 0;
+            int s = ci + 1;
+            while (s < body.Length && (char.IsWhiteSpace(body[s]) || body[s] == '"')) s++;
+            int e = s;
+            while (e < body.Length && (char.IsDigit(body[e]) || body[e] == '-')) e++;
+            int v;
+            if (int.TryParse(body.Substring(s, e - s), out v)) return v;
+        }
+        catch { }
+        return 0;
+    }
+
+    private static string ParseStrFieldStatic(string body, string key)
+    {
+        try
+        {
+            int ki = body.IndexOf(key, StringComparison.Ordinal);
+            if (ki < 0) return "";
+            int ci = body.IndexOf(':', ki + key.Length);
+            if (ci < 0) return "";
+            int q1 = body.IndexOf('"', ci);
+            if (q1 < 0) return "";
+            var sb = new System.Text.StringBuilder();
+            for (int j = q1 + 1; j < body.Length; j++)
+            {
+                char ch = body[j];
+                if (ch == '\\' && j + 1 < body.Length)
+                {
+                    char n = body[j + 1];
+                    if (n == '"') sb.Append('"');
+                    else if (n == '\\') sb.Append('\\');
+                    else if (n == 'n') sb.Append('\n');
+                    else sb.Append(n);
+                    j++;
+                }
+                else if (ch == '"') break;
+                else sb.Append(ch);
+            }
+            return sb.ToString();
+        }
+        catch { return ""; }
     }
 
     // ===== LoadMarkerSprite =====
@@ -981,12 +1139,11 @@ public class TeleportMapManager : MonoBehaviour
     private static string GetNameForPad(TerrainObject pad)
     {
         EnsureTypeCache();
-        if (pad == null) return "未知";
+        if (pad == null) return "未知站点";
         // v0.9.61 改名写在 console 键下，标记按 pad 查必须先走对端活体 console（根因①修复）。
         try { var r = TeleportStationNameManager.GetNameForPadObject(pad); if (!string.IsNullOrWhiteSpace(r)) return r; } catch {}
-        try { if (!string.IsNullOrWhiteSpace(pad.name)) return pad.name; } catch {}
-        try { if (pad.attr != null) { var n = RGet(pad.attr, "itemName") as string; if (!string.IsNullOrWhiteSpace(n)) return n; } } catch {}
-        return $"传送台 {GetInstanceKey(pad) % 1000}";
+        // v0.9.63 未命名回退 UID（永不返回 GO 名/实例ID派生名）。
+        return TeleportStationUid.DisplayForPad(pad);
     }
 
     private void ApplyFont(Text txt)

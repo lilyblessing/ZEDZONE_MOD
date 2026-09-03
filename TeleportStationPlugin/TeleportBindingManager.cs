@@ -61,6 +61,56 @@ public static class TeleportBindingManager
     public static long GetBoundPad(long consoleInstanceId) => _consoleToPad.TryGetValue(consoleInstanceId, out var v) ? v : 0;
     public static long GetBoundConsole(long padInstanceId) => _padToConsole.TryGetValue(padInstanceId, out var v) ? v : 0;
 
+    // ===== v0.9.63 UID 身份层（实例ID仅运行时关联，UID 跨读档稳定） =====
+    public static string ConsoleUid(TerrainObject c) => TeleportStationUid.UidFor(c);
+    public static string PadUid(TerrainObject p) => TeleportStationUid.UidFor(p);
+
+    // 按 UID 找活体（attr 匹配 + UID 比对；无活体返回 null，不编造）。
+    public static TerrainObject FindPadByUid(string uid)
+    {
+        if (!TeleportStationUid.IsUid(uid)) return null;
+        try
+        {
+            foreach (var t in FindAllTerrainObjectsById(PadId))
+            {
+                if (t == null) continue;
+                if (TeleportStationUid.UidFor(t) == uid) return t;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    public static TerrainObject FindConsoleByKey(long key) => FindByKey(key) as TerrainObject;
+
+    public static TerrainObject FindConsoleByUid(string uid)
+    {
+        if (!TeleportStationUid.IsUid(uid)) return null;
+        try
+        {
+            foreach (var t in FindAllTerrainObjectsById(ConsoleId))
+            {
+                if (t == null) continue;
+                if (TeleportStationUid.UidFor(t) == uid) return t;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    // 发送方配对盘 UID（运行时关联；对端未加载返回 ""）。
+    public static string GetBoundPadUid(long consoleInstanceId)
+    {
+        try
+        {
+            long pk = GetBoundPad(consoleInstanceId);
+            if (pk == 0) return "";
+            var pad = FindByKey(pk) as TerrainObject;
+            return pad != null ? TeleportStationUid.UidFor(pad) : "";
+        }
+        catch { return ""; }
+    }
+
     // 激活判定（P4 精简→P6 完整）：已绑定 && 圆盘通电（pad ProductionData 有电） && 距离≤50m 附近有控制台；控制台本身无需供电
     public static bool IsActive(TerrainObject console)
     {

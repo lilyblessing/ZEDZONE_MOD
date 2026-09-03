@@ -107,6 +107,61 @@ public static class TeleportStationNameManager
         return "";
     }
 
+    // v0.9.63 玩家命名查询（无 GO 名回退）：仅查实例键→存档 property[2]→坐标键。
+    // 未命名返回 false，调用方显示 UID。面向玩家文本禁止再用 console.name。
+    public static bool TryGetCustomName(TerrainObject console, out string name)
+    {
+        name = "";
+        if (console == null) return false;
+        try
+        {
+            long k = GetInstanceKey(console);
+            string c;
+            if (_names.TryGetValue(k, out c) && !string.IsNullOrEmpty(c)) { name = c; return true; }
+            try
+            {
+                var d = Reflect.Get(console, "objectData") ?? Reflect.Get(console, "terrainObjectData");
+                if (d != null)
+                {
+                    var gm = d.GetType().GetMethod("GetProperty", new Type[] { typeof(int) });
+                    if (gm != null)
+                    {
+                        var v = gm.Invoke(d, new object[] { 2 }) as string;
+                        if (!string.IsNullOrEmpty(v)) { _names[k] = v; name = v; return true; }
+                    }
+                }
+            }
+            catch { }
+            try
+            {
+                string ck = CoordKey(console);
+                string cn;
+                if (!string.IsNullOrEmpty(ck) && _namesByCoord.TryGetValue(ck, out cn) && !string.IsNullOrEmpty(cn))
+                {
+                    _names[k] = cn;
+                    name = cn;
+                    return true;
+                }
+            }
+            catch { }
+        }
+        catch { }
+        return false;
+    }
+
+    // v0.9.63 按坐标键取玩家命名（UID 显示解析用）；无名返回 ""。
+    public static string GetNameByCoord(string coord)
+    {
+        if (string.IsNullOrEmpty(coord)) return "";
+        try
+        {
+            string n;
+            if (_namesByCoord.TryGetValue(coord, out n) && !string.IsNullOrEmpty(n)) return n;
+        }
+        catch { }
+        return "";
+    }
+
     public static void SetName(TerrainObject console, string newName)
     {
         if (console == null) return;
