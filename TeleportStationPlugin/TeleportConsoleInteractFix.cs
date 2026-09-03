@@ -23,6 +23,9 @@ namespace TeleportStationPlugin;
 /// v0.9.57 放行方案：CommuEnterPrefix 对 900101 也不再 return false（只打日志 + 标记 _currentConsole，返回 true 放行原生注册，保住 F+Q 原生条目）；
 /// postfix 沿用 v0.9.55 做法只改 F 条目 interactStr（Q 条目 isQ 透传保留不动）；F 分派走 <>c 拦截，
 /// <>c 入口改用回调 obj 链判 900101（InteractObjectData.interactObject@0x10 / InteractData.interactObjectTemp@0x30 → attr.id），是才 return false 弹自建菜单；
+/// v0.9.58（LogOutput.log 实证修）：<>c 从未挂上——L1-L6 全失败，L2 names=[__c] / L4 +__c 实证嵌套实际名是 `__c`
+/// （Il2CppInterop 把 <> 改写为下划线，硬查 "<>c" 永不命中）；加 L7 按 `__c` 精确命中 + M3 方法宽松匹配；
+/// postfix 删 TryCreateDelegate 调用（R1-R4 死路刷屏），原生委托原样保留只改 interactStr，F 分派唯一走 <>c prefix。
 /// TryRegisterConsoleSelf 整段休眠（R-all-fail），不再向 list 写 null 委托。
 /// </summary>
 public static class TeleportConsoleInteractFix
@@ -92,6 +95,8 @@ public static class TeleportConsoleInteractFix
                 }
             } catch (Exception e) { Plugin.L.LogWarning($"[TS][Fix] ClearAllInteract 挂钩异常: {e.Message.Split('\n')[0]}"); }
             // P6.12: 委托目标兜底 — 直接 patch 闭包方法 <>c.<OnPlayerEnterRange>b__0_0，绕过 Delegate.CreateDelegate 的 IL2CPP 类型校验
+            // v0.9.58 实证修正：闭包实际名是 `__c`（L2/L4），不是 "<>c"；L7 按 `__c` 命中。CommuDelegatePrefix 签名
+            // (object __instance, object __0)->bool 与实例方法 void b__0_0(object) 对得上，无需改签名。
             // dump.cs:78378-78394 实证：<>c 系 TerrainObject_Furniture_Commu 的 private sealed 嵌套类（TypeDefIndex 1824），
             //   方法 internal void <OnPlayerEnterRange>b__0_0(object obj)，RVA 0x9A49A0 / VA 0x1809A49A0。
             // 穷举解析（命中即停）+ 单条 trace 诊断：成功打 Info（含命中路），全失败才打一条 Warn（含逐路结果）。
@@ -114,6 +119,21 @@ public static class TeleportConsoleInteractFix
                     foreach (var n in nested) { names.Add(n.Name); if (n.Name == "<>c" || n.Name.Contains(">c")) { closure = n; hitRoute = "L2"; break; } }
                     trace.Append($"L2(enumNested count={nested.Length} names=[{string.Join(",", names)}]);");
                 } catch (Exception ex) { trace.Append($"L2-ex:{ex.Message.Split('\n')[0]};"); }
+                // L7: `__c` 精确命中（v0.9.58 实证：LogOutput.log 启动段 L2 names=[__c] / L4 +__c，
+                //   Il2CppInterop 把 "<>c" 改写为 "__c"，L1/L3/L5/L6 硬查 "<>c" 永不命中；放 L3 前命中即跳过后路，减少 TypeLoadException 刷屏）
+                if (closure == null) try
+                {
+                    closure = typeof(TerrainObject_Furniture_Commu).GetNestedType("__c", BindingFlags.Public | BindingFlags.NonPublic);
+                    trace.Append($"L7(__c exact)={(closure != null ? closure.FullName : "null")};");
+                    if (closure != null) hitRoute = "L7";
+                } catch (Exception ex) { trace.Append($"L7-ex:{ex.Message.Split('\n')[0]};"); }
+                if (closure == null) try
+                {
+                    var nested7 = typeof(TerrainObject_Furniture_Commu).GetNestedTypes(BindingFlags.Public | BindingFlags.NonPublic);
+                    var names7 = new List<string>();
+                    foreach (var n in nested7) { if (names7.Count < 8) names7.Add(n.Name); if (n.Name == "__c" || n.Name.EndsWith("__c")) { closure = n; hitRoute = "L7-enum"; break; } }
+                    trace.Append($"L7-enum(names=[{string.Join(",", names7)}]){(closure != null ? " HIT" : "")};");
+                } catch (Exception ex) { trace.Append($"L7-enum-ex:{ex.Message.Split('\n')[0]};"); }
                 // L3: Harmony Inner（名精确匹配 "<>c"）
                 if (closure == null) try
                 {
@@ -169,6 +189,17 @@ public static class TeleportConsoleInteractFix
                         }
                         trace.Append($"M2(enumMethods [{string.Join(",", mNames)}]){(bMethod != null ? " HIT" : "")};");
                     } catch (Exception ex) { trace.Append($"M2-ex:{ex.Message.Split('\n')[0]};"); }
+                    // M3: 宽松匹配（仅含 OnPlayerEnterRange；防方法名也被互操作改写，如 __OnPlayerEnterRange_b__0_0）
+                    if (bMethod == null) try
+                    {
+                        var mNames3 = new List<string>();
+                        foreach (var m in closure.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                        {
+                            if (mNames3.Count < 16) mNames3.Add(m.Name);
+                            if (m.Name.Contains("OnPlayerEnterRange")) { bMethod = m; break; }
+                        }
+                        trace.Append($"M3(loose [{string.Join(",", mNames3)}]){(bMethod != null ? " HIT" : "")};");
+                    } catch (Exception ex) { trace.Append($"M3-ex:{ex.Message.Split('\n')[0]};"); }
                 }
                 if (closure != null && bMethod != null)
                 {
@@ -399,24 +430,9 @@ public static class TeleportConsoleInteractFix
                                 string s0=null; try { s0=Reflect.Get(targetF,"interactStr") as string; } catch { try { s0=targetF.GetType().GetField("interactStr")?.GetValue(targetF) as string; } catch {} }
                                 Plugin.L.LogInfo($"[TS][Fix] hijack F idx={targetIdx} dc={dc} orig='{s0 ?? "null"}' -> 打开传送控制台 (Q preserved)");
                                 try { Reflect.Set(targetF,"interactStr","打开传送控制台"); } catch { try { targetF.GetType().GetField("interactStr")?.SetValue(targetF,"打开传送控制台"); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] set interactStr fail {ex.Message.Split('\n')[0]}"); } }
-                                try {
-                                    var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                    if (m2 != null) {
-                                        Type delType = null;
-                                        try { var f = targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (f!=null) delType = f.FieldType; } catch {}
-                                        if (delType == null) delType = _interactDelegateType;
-                                        if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
-                                        if (delType != null) {
-                                            object del = null;
-                                            try { del = TryCreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] TryCreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); }
-                                            if (del == null) try { del = TryCreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch (Exception ex1) { Plugin.L.LogWarning($"[TS][Fix] fallback TryCreateDelegate fail {ex1.Message.Split('\n')[0]}"); }
-                                            if (del != null) {
-                                                try { Reflect.Set(targetF, "interactAction", del); } catch { try { targetF.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.SetValue(targetF, del); } catch (Exception ex2) { Plugin.L.LogWarning($"[TS][Fix] set delegate fail {ex2.Message.Split('\n')[0]}"); } }
-                                                Plugin.L.LogInfo($"[TS][Fix] delegate hijacked F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' Q preserved delType={delType.FullName} via TryCreateDelegate");
-                                            } else Plugin.L.LogWarning("[TS][Fix] del null after TryCreateDelegate");
-                                        } else Plugin.L.LogWarning("[TS][Fix] delType null cannot hijack");
-                                    }
-                                } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] delegate hijack fail {ex.Message.Split('\n')[0]}"); }
+                                // v0.9.58：System.Delegate 造 Il2Cpp 委托已死（R1-R4 全灭恒 null），不再写 interactAction；
+                                // 原生委托原样保留、只改 interactStr；F 分派唯一走 <>c prefix（L7 __c 精确命中）拦截。
+                                try { Plugin.L.LogInfo($"[TS][Fix] delegate preserved (native) F idx={targetIdx} console={t.GetInstanceID()} orig='{s0}' -> 打开传送控制台, dispatch via <>c prefix"); } catch {}
                                 try { var curTemp=Reflect.Get(targetF,"interactObjectTemp"); if (curTemp==null) Reflect.Set(targetF,"interactObjectTemp", t); } catch {}
                             } else {
                                 // no F found (only Q present), create new F via cloning Q's valid fields if possible else Create
@@ -441,23 +457,8 @@ public static class TeleportConsoleInteractFix
                             // just ensure delegate fresh
                             object id0=null; try { if (gItem!=null) id0=gItem.Invoke(dataList,new object[]{0}); } catch {}
                             if (id0!=null) {
-                                try {
-                                    var m2 = typeof(TeleportConsoleInteractFix).GetMethod(nameof(OnTeleportConsoleInteract), BindingFlags.Public|BindingFlags.Static);
-                                    if (m2 != null) {
-                                        Type delType = null;
-                                        try { var f = id0.GetType().GetField("interactAction", BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance); if (f!=null) delType = f.FieldType; } catch {}
-                                        if (delType == null) delType = _interactDelegateType;
-                                        if (delType == null) try { delType = typeof(InteractManager.InteractDelegate); } catch {}
-                                        if (delType != null) {
-                                            object del = null;
-                                            try { del = TryCreateDelegate(delType, m2); } catch (Exception ex0) { Plugin.L.LogWarning($"[TS][Fix] re-hijack TryCreateDelegate fail delType={delType.FullName} err={ex0.Message.Split('\n')[0]}"); try { del = TryCreateDelegate(typeof(InteractManager.InteractDelegate), m2); } catch {} }
-                                            if (del != null) {
-                                                try { Reflect.Set(id0, "interactAction", del); } catch { try { id0.GetType().GetField("interactAction")?.SetValue(id0, del); } catch {} }
-                                                Plugin.L.LogInfo($"[TS][Fix] re-hijacked delegate for already single console={t.GetInstanceID()} delType={delType.FullName} via TryCreateDelegate");
-                                            } else Plugin.L.LogWarning("[TS][Fix] re-hijack del null after TryCreateDelegate");
-                                        }
-                                    }
-                                } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] re-hijack fail {ex.Message.Split('\n')[0]}"); }
+                                // v0.9.58：单项已是目标文字，仅确认保留原生委托，无动作（分派走 <>c prefix）。
+                                try { Plugin.L.LogInfo($"[TS][Fix] single F already target str, delegate preserved (native) console={t.GetInstanceID()}, dispatch via <>c prefix"); } catch {}
                             }
                         }
                     }

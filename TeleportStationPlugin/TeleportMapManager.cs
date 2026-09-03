@@ -52,6 +52,8 @@ public class TeleportMapManager : MonoBehaviour
     private static FieldInfo _fi_mapParent;
     private static FieldInfo _fi_mapIconPrefab;
     private static bool _typeCacheDone = false;
+    // worldPositionOffset 解析诊断（一次性日志，避免刷屏；RefreshMarkers 低频调用，单次日志无害）
+    private static bool _offsetDiagLogged = false;
     private static void EnsureTypeCache()
     {
         if (_typeCacheDone) return;
@@ -417,38 +419,41 @@ public class TeleportMapManager : MonoBehaviour
     //    (0x180BED0B0) 统一应用；RefreshMapTransform(0x180BED340)本体仅写 refreshMapTransformFrameFlag(0x140)。
     // 结论：逐marker公式只能是加法 world+offset。我方旧公式 (world-offset)*scale+center
     // 把父级变换在子级又应用了一次（方向还反了：减 vs 加），即严重偏离根因。
-    // worldPositionOffset身份（MapPanel静态区+8/+0xc）为中置信，待实测；加法形状为高置信（两处独立调用点同形）。
+    // worldPositionOffset身份（高置信，三重一致，静态反编译实证；运行时数值待日志实证）：
+    //  1) dump.cs:103746 `public static Vector2 worldPositionOffset; // 0x8`（MapPanel静态区，Vector2占双float）；
+    //  2) InitMapIcons 木牌路径 decompiled_map_3VA.c L1893-1903：uVar9=FUN_18054f940(lVar10,0)
+    //     （=TerrainObjecLocationMarkerData.get_worldPosition，dump.cs:76126-76127 VA0x18054F940），
+    //     anchored=CONCAT44(*(单例+0xc)+y, *(单例+8)+x)，即 world+offset，单例+8/+0xc恰为静态Vector2布局；
+    //  3) 加法形状有0x120路径 L1846-1857 交叉印证（world+DAT_1837bb228单例+8/+0xc后直传CreateSimpleMapMarker）。
+    //  DAT_1837bb228 token未解析到类名，但字段名+static+偏移+类型四者全对，错了日志会暴露（见下）。
     public Vector2 WorldToMapPos(Vector2 world)
     {
-        EnsureTypeCache();
+        // v0.9.58 根因定位=offset错（值错，非形状错）：
+        //  InitMapIcons 0x118原生逐marker只做 anchored=world+S（decompiled_map_3VA.c L1893-1903），
+        //  parent=mapParent、坐标XY、anchor沿prefab均已对齐；S=DAT_1837bb228静态区+8/+0xc，
+        //  归属=MapPanel.worldPositionOffset（dump.cs:103746 public static Vector2 // 0x8；
+        //  另两同布局静态Vector2 InGameController.playerBornPositionOffset(dump.cs:35455) /
+        //  PlayerInventoryPanel.positionOffset(dump.cs:52176)均无地图定位语义，排除）。
+        //  v0.9.57字符串反射读静态（TypeByName+GetField）在Il2Cpp代理类型上静默失败恒回零
+        //  （铁律：编译期直访GameController.instance等先例；ChargerPadFix:496-501 typeof+Static读写先例），
+        //  原生S非零时全标整体平移=用户实测“严重偏离”。故改编译期直访，异常零回退+一次性诊断。
         try
         {
-            Vector2 offset = Vector2.zero;
-            try
+            Vector2 offset = MapPanel.worldPositionOffset;
+            if (!_offsetDiagLogged)
             {
-                if (_fi_worldOffset != null)
-                {
-                    var v = _fi_worldOffset.GetValue(null);
-                    if (v is Vector2 vv) offset = vv;
-                    else if (v is Vector3 v3) offset = new Vector2(v3.x, v3.y);
-                    else try { offset = (Vector2)v; } catch {}
-                }
-                else
-                {
-                    // worldPositionOffset 是静态字段：实例与类型两级尽力读，失败即零（try/catch 内无害）。
-                    var mp = GetMapPanelInstance();
-                    var c = RGet(mp, "worldPositionOffset");
-                    if (c == null) try { c = RGet(_mapPanelType, "worldPositionOffset"); } catch {}
-                    if (c is Vector2 cv2) offset = cv2;
-                    else if (c is Vector3 cv3) offset = new Vector2(cv3.x, cv3.y);
-                }
-            } catch {}
-            Vector2 anchored = world + offset;
-            return anchored;
+                _offsetDiagLogged = true;
+                Plugin.L.LogInfo($"[TS][Map] worldPositionOffset 直读成功 offset={offset.x:F1},{offset.y:F1}（编译期直访MapPanel，公式world+offset）");
+            }
+            return world + offset;
         }
         catch (Exception ex)
         {
-            Plugin.L.LogWarning($"[TS][Map] WorldToMapPos 失败 fallback world: {ex.Message.Split('\n')[0]}");
+            if (!_offsetDiagLogged)
+            {
+                _offsetDiagLogged = true;
+                Plugin.L.LogWarning($"[TS][Map] worldPositionOffset 直读失败，回退零向量: {ex.Message.Split('\n')[0]}（先看此行再量截图向量）");
+            }
             return world;
         }
     }
