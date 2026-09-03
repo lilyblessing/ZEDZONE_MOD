@@ -9,7 +9,7 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// P5 电池扣减：每次传送消耗 2 枚满电电池（单枚 5000Wh，已在设计定稿），按序扣减。
-/// 仓位：pad 的 ProductionData.inventoryData1，4×4，totalBatterySoltNumber=4（ChargerPadFix 已初始化）。
+/// 仓位：pad 的 ProductionData.inventoryData1，8×8，totalBatterySoltNumber=4（ChargerPadFix 已初始化）。
 /// 电量：ItemFeature_Battery 的 charge / maxCharge / wattage 字段（dump 待精确定位，当前用反射兼容多命名）。
 /// </summary>
 public static class TeleportBatteryManager

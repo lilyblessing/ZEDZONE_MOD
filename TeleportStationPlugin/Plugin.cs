@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.70")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.71")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -406,7 +406,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.70 真选择pin＋自动档翻转屏蔽（OnLoadConfirm/标题/死亡/新开局＋SaveGameData快照回写对账）");
+        Log.LogInfo("[TeleportStation] v0.9.71 生物能×4扩原版126充电台＋传送盘电池仓8×8（并行槽数保持4）");
     }
 }
 

@@ -10,14 +10,16 @@ namespace TeleportStationPlugin;
 /// 克隆源切换（斯特林120→充电台126）后：
 ///   1. 盘天然是电力消费端 → 游戏真实电线路由（电线杆接线）原生可用，充电走原版 UpdateBatteryCharger；
 ///   2. 本类只做两件事：
-///      A. 容器微调（一次性）：productionData.inventoryData1（原版槽位扫描容器）→ 4×4 + 标题「电池仓」+ totalBatterySoltNumber=4；
+///      A. 容器微调（一次性）：productionData.inventoryData1（原版槽位扫描容器）→ 8×8 + 标题「电池仓」+ totalBatterySoltNumber=4；
 ///      B. ×4 倍率 hook：Supply 源含生物能（900103）时，UpdateBatteryCharger 前后把 powerInputSufficientFloat ×4/恢复
 ///         （原版公式 totalWh = sufficient × electricWattage × addedTime × 24 → 放大 sufficient 即等效倍率）。
+///         v0.9.71 起目标含 126 原版充电台（同条件同享×4）。
 ///   旧档斯特林组件盘继续由 BatteryChargeFix（虚拟供电充电）照顾。
 /// </summary>
 public static class ChargerPadFix
 {
     private const int PadId = 900102;
+    private const int VanillaChargerId = 126; // 原版电池充电台（v0.9.71 起同享生物能×4）
     private const int BioGenId = 900103;
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
@@ -1286,7 +1288,7 @@ public static class ChargerPadFix
         catch { return false; }
     }
 
-    /// <summary>一次性容器微调：4×4 + 标题 + 槽数 4（原版充电台默认 2 槽 2×1 容器）。</summary>
+    /// <summary>一次性容器微调：8×8 + 标题 + 槽数 4（v0.9.71：格子 4×4→8×8，并行槽数保持 4；原版充电台默认 2 槽 2×1 容器）。</summary>
     private static void EnsureContainer(TerrainObject_Production g)
     {
         long key = 0;
@@ -1305,11 +1307,11 @@ public static class ChargerPadFix
         var inv = Reflect.Get(pd, "inventoryData1") as InventoryData;
         if (inv == null) return;
         try { Reflect.Set(inv, "inventoryTitleName", GameLocale.T("电池仓", "Battery Cell")); } catch { }
-        try { Reflect.Set(inv, "inventorySize", new Vector2Int(4, 4)); } catch { }
-        try { Reflect.Set(inv, "inventorySizeX", 4); } catch { }
-        try { Reflect.Set(inv, "inventorySizeY", 4); } catch { }
+        try { Reflect.Set(inv, "inventorySize", new Vector2Int(8, 8)); } catch { }
+        try { Reflect.Set(inv, "inventorySizeX", 8); } catch { }
+        try { Reflect.Set(inv, "inventorySizeY", 8); } catch { }
         try { Reflect.Set(g, "totalBatterySoltNumber", 4); } catch { }
-        Plugin.L.LogInfo($"[TS] 充电台盘初始化: 4×4 槽数=4 size=({inv.inventorySizeX}x{inv.inventorySizeY}) PD表={(_pdTablesFixed ? "已重建" : "完整")}");
+        Plugin.L.LogInfo($"[TS] 充电台盘初始化: 8×8 槽数=4 size=({inv.inventorySizeX}x{inv.inventorySizeY}) PD表={(_pdTablesFixed ? "已重建" : "完整")}");
     }
 
     private static bool _pdTablesFixed; // 一次性日志用
@@ -1347,15 +1349,15 @@ public static class ChargerPadFix
         }
     }
 
-    /// <summary>×4 倍率 prefix：pd 是 900102 且供电含生物能 → sufficient ×4（postfix 恢复）。</summary>
+    /// <summary>×4 倍率 prefix：pd 是 900102 传送盘或 126 原版充电台、且供电含生物能 → sufficient ×4（postfix 恢复）。</summary>
     public static bool ChargerUpdatePrefix(ProductionData productionData, float addedTime)
     {
         try
         {
             if (productionData == null) return true;
-            if (!IsPadPd(productionData))
+            if (!IsBoostPd(productionData))
             {
-                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning("[TS] ×4 诊断: UpdateBatteryCharger 触发但 IsPadPd=false（attr 判定未命中）"); }
+                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning("[TS] ×4 诊断: UpdateBatteryCharger 触发但 IsBoostPd=false（非 900102/126）"); }
                 return true;
             }
             if (!IsBioGenSupplied(productionData))
@@ -1382,14 +1384,16 @@ public static class ChargerPadFix
         try { productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat / 4f; } catch { }
     }
 
-    private static bool IsPadPd(ProductionData pd)
+    /// <summary>×4 目标判定：900102 传送盘（克隆引用或 id）或 126 原版充电台。</summary>
+    private static bool IsBoostPd(ProductionData pd)
     {
         try
         {
             var attr = pd.terrainObjectAttr;
             if (attr == null) return false;
             if (RegistrationStore.Attrs.TryGetValue(PadId, out var our) && ReferenceEquals(attr, our)) return true;
-            return AttrId(attr) == PadId;
+            int id = AttrId(attr);
+            return id == PadId || id == VanillaChargerId;
         }
         catch { return false; }
     }
