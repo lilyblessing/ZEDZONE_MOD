@@ -8,8 +8,15 @@ namespace TeleportStationPlugin;
 /// v0.9.67 存档隔离（方案A：文件名嵌入身份键）。
 /// 身份键 = $"{GameData.id}_SlotIndex{GameData.saveSlotIndex}"（与 {gameId}_SlotIndex{slot}.game 同构；
 /// GameController.instance.gameData 编译期直访，禁反射读实例字段）。
-/// 切换：GameDataManager.LoadGameData / GameController.set_gameData 双 postfix → key 变化才
-/// Flush 内存旧表 + Load 新表 + 日志。key=""（主菜单/取不到身份）回退 legacy 全局文件名。
+/// v0.9.70 pin 设计（反编译实证 subagent/data/saveid-hijack-decompile.md）：
+/// 真读档三处（GameDataUI_IngameLoad.OnLoadConfirm 0x180689FE0 / 基类 GameDataUI.OnClick 0x18068B5C0（标题栏行）/
+/// DeathPanel.LoadLatestSavedGame 0x180B6F1C0）全是裸 +0x38 写，不经过 LoadGameData/set_gameData；
+/// LoadGameData 仅读档菜单枚举＋多人房详情 → 不再做切换源（旧双 hook 对真选择全盲）；
+/// 进游戏后 InGameController.<AutoSaveCoroutine> 首 tick 以硬编码 slot=5 调 SaveGameData(0x180687520)，
+/// 后者原地改活对象 saveSlotIndex（伪 C :182），不建新对象不调 setter → SaveGameData prefix 快照活槽、
+/// postfix 写回（仅内存；文件名取参量 local、序列化在函数内同步完成，磁盘行为保持原生），
+/// prefix 另带万能对账（活键≠_current 即 pin，兜底新开局/漏pin）。set_gameData postfix 保留（原生零调用，无害）。
+/// 切换：真选择事件 pin＋存档对账 → key 变化才 Flush 内存旧表 + Load 新表 + 日志。
 /// 迁移只读兜底：namespaced 缺失但 legacy 存在 → 读 legacy（只读一次），首次 Save 落 namespaced。
 /// v0.9.69：脏位守卫（Load 期 SuppressDirty，FlushAll 仅写脏表）＋ 本槽收敛
 /// （saveEpoch envelope：游戏内存档即一轮，K=3 轮未被活体观测的记录从本槽剔除）。
@@ -230,27 +237,86 @@ public static class TeleportSaveIdentity
         catch { }
     }
 
-    // ===== Harmony postfix（__0/__result 位置绑定） =====
-    public static void LoadGameDataPostfix(GameData __result)
+    // ===== v0.9.70 会话 pin＋槽位屏蔽（__0/__1/__instance 位置绑定）=====
+    private static int _saveSnapSlot = int.MinValue; // SaveGameData prefix 快照的活槽号
+
+    private static void PinSession(string why, string key)
     {
         try
         {
-            if (__result == null) return;
-            SwitchTo(KeyFromGameData(__result));
+            if (string.IsNullOrEmpty(key) || key == _current) return;
+            SwitchTo(key);
+            Plugin.L.LogInfo($"[TS][SaveId] 会话pin({why}) -> {key}");
         }
         catch { }
     }
 
+    // set_gameData 兜底（原生零调用，仅外部补丁调用时切换）。
     public static void GameDataSetPostfix(GameData __0)
     {
         try { SwitchTo(KeyFromGameData(__0)); } catch { }
     }
 
-    // SaveGameData(GameData, int, bool)：游戏内存档事件（手动＋自动）。
+    // 暂停菜单读档确认 prefix：行对象 gameData(+0x20) 即游戏随后裸写装配的真选择。
+    public static void OnLoadConfirmPrefix(GameDataUI_IngameLoad __instance)
+    {
+        try
+        {
+            if (__instance == null) return;
+            PinSession("读档确认", KeyFromGameData(__instance.gameData));
+        }
+        catch { }
+    }
+
+    // 标题栏读档 postfix（基类行，无子类覆写，裸写已发生）：用行邮戳 pin。
+    public static void TitleLoadClickPostfix(GameDataUI __instance)
+    {
+        try
+        {
+            if (__instance == null) return;
+            PinSession("标题读档", KeyFromGameData(__instance.gameData));
+        }
+        catch { }
+    }
+
+    // 死亡读最新档 postfix：裸写已发生，采样活对象。
+    public static void LoadLatestPostfix()
+    {
+        try { PinSession("死亡读档", CurrentKey()); } catch { }
+    }
+
+    // 新开局 postfix：采样活对象（新 id 即新命名空间；未就绪则跳过，由存档对账兜底）。
+    public static void NewGamePostfix()
+    {
+        try { PinSession("新开局", CurrentKey()); } catch { }
+    }
+
+    // SaveGameData(GameData, int, bool) prefix：快照活槽号供 postfix 写回；活键漂移即对账 pin。
+    public static void SaveGameDataPrefix(GameData __0, int __1)
+    {
+        try
+        {
+            if (__0 == null) { _saveSnapSlot = int.MinValue; return; }
+            _saveSnapSlot = __0.saveSlotIndex;
+            string liveKey = KeyFromGameData(__0); // prefix 时原地翻转尚未发生，活邮戳可信
+            if (!string.IsNullOrEmpty(liveKey) && liveKey != _current)
+                PinSession("存档对账", liveKey);
+        }
+        catch { }
+    }
+
+    // SaveGameData postfix：写回活槽号（屏蔽 slot=5 硬编码的原地翻转，仅内存），再走本槽 epoch。
     public static void SaveGameDataPostfix(GameData __0)
     {
         try
         {
+            if (__0 != null && _saveSnapSlot != int.MinValue && __0.saveSlotIndex != _saveSnapSlot)
+            {
+                int flipped = __0.saveSlotIndex;
+                __0.saveSlotIndex = _saveSnapSlot;
+                Plugin.L.LogInfo($"[TS][SaveId] 存档槽回写 {flipped} -> {_saveSnapSlot}（自动档硬编码屏蔽，仅内存）");
+            }
+            _saveSnapSlot = int.MinValue;
             if (__0 == null) return;
             OnGameSavedForCurrentSlot(__0);
         }
@@ -262,31 +328,52 @@ public static class TeleportSaveIdentity
         try
         {
             var mgr = AccessTools.TypeByName("GameDataManager");
-            var load = mgr != null ? AccessTools.Method(mgr, "LoadGameData") : null;
-            if (load != null)
-            {
-                h.Patch(load, postfix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
-                    nameof(LoadGameDataPostfix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
-                Plugin.L.LogInfo("[TS] 已挂钩 GameDataManager.LoadGameData（存档隔离切换）");
-            }
-            else Plugin.L.LogWarning("[TS] LoadGameData 挂钩失败（方法未找到）");
+            // v0.9.70：LoadGameData 仅菜单枚举/多人房详情，不再做切换源（只拆钩，不再注册）。
+            // set_gameData 原生零调用，保留作外部调用兜底。
             var set = AccessTools.Method(typeof(GameController), "set_gameData");
             if (set != null)
             {
                 h.Patch(set, postfix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
                     nameof(GameDataSetPostfix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
-                Plugin.L.LogInfo("[TS] 已挂钩 GameController.set_gameData（存档隔离切换）");
+                Plugin.L.LogInfo("[TS] 已挂钩 GameController.set_gameData（存档隔离切换兜底）");
             }
             else Plugin.L.LogWarning("[TS] set_gameData 挂钩失败（方法未找到）");
             var save = mgr != null ? AccessTools.Method(mgr, "SaveGameData") : null;
             if (save != null)
             {
-                h.Patch(save, postfix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
-                    nameof(SaveGameDataPostfix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
-                Plugin.L.LogInfo("[TS] 已挂钩 GameDataManager.SaveGameData（本槽收敛 epoch）");
+                h.Patch(save,
+                    prefix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
+                        nameof(SaveGameDataPrefix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)),
+                    postfix: new HarmonyMethod(typeof(TeleportSaveIdentity).GetMethod(
+                        nameof(SaveGameDataPostfix), System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)));
+                Plugin.L.LogInfo("[TS] 已挂钩 GameDataManager.SaveGameData（槽位快照回写＋本槽收敛 epoch）");
             }
             else Plugin.L.LogWarning("[TS] SaveGameData 挂钩失败（方法未找到）");
+            // v0.9.70 真选择事件 pin：读档确认(prefix行邮戳) / 标题读档 / 死亡读档 / 新开局×2。
+            PatchPin(h, typeof(GameDataUI_IngameLoad), "OnLoadConfirm", nameof(OnLoadConfirmPrefix), true, "暂停读档确认");
+            PatchPin(h, typeof(GameDataUI), "OnClick", nameof(TitleLoadClickPostfix), false, "标题读档");
+            PatchPin(h, AccessTools.TypeByName("DeathPanel"), "LoadLatestSavedGame", nameof(LoadLatestPostfix), false, "死亡读档");
+            PatchPin(h, AccessTools.TypeByName("Map_Character_GameConfig"), "StartGame", nameof(NewGamePostfix), false, "新开局");
+            PatchPin(h, AccessTools.TypeByName("StoryModeNewGamePanel"), "OnStartClicked", nameof(NewGamePostfix), false, "剧情新开局");
         }
         catch (Exception ex) { Plugin.L.LogWarning($"[TS] 存档隔离挂钩异常: {ex.Message.Split('\n')[0]}"); }
+    }
+
+    private static void PatchPin(Harmony h, Type t, string method, string pin, bool asPrefix, string label)
+    {
+        try
+        {
+            var m = t != null ? AccessTools.Method(t, method) : null;
+            var pm = typeof(TeleportSaveIdentity).GetMethod(pin,
+                System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
+            if (m != null && pm != null)
+            {
+                if (asPrefix) h.Patch(m, prefix: new HarmonyMethod(pm));
+                else h.Patch(m, postfix: new HarmonyMethod(pm));
+                Plugin.L.LogInfo($"[TS] 已挂钩 {t.Name}.{method}（存档隔离pin：{label}）");
+            }
+            else Plugin.L.LogWarning($"[TS] {label}挂钩失败（方法未找到）");
+        }
+        catch (Exception ex) { Plugin.L.LogWarning($"[TS] {label}挂钩异常: {ex.Message.Split('\n')[0]}"); }
     }
 }

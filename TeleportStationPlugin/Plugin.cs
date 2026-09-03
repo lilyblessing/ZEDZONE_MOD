@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.69")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.70")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -370,7 +370,7 @@ public class Plugin : BasePlugin
         AddComponent<RegistrationProbe>();
         AddComponent<PadDeployMonitor>(); // v0.7.1：圆盘放置物渲染监控（尺寸/层/order 修正）
         AddComponent<TeleportBindingController>(); // P6.2：20m 自动互绑（1Hz）+ E/Q 原生保留
-        // v0.9.67 存档隔离：双 hook（LoadGameData/set_gameData）+ 初始身份（主菜单 key="" 读 legacy）
+        // v0.9.70 存档隔离pin：真选择事件pin＋SaveGameData槽位快照回写＋存档对账（反编译实证：真读档裸写/自动存硬编码slot=5原地翻转）
         try { var h67 = new Harmony("com.zedzone.teleportstation.p67"); TeleportSaveIdentity.EnsurePatch(h67); } catch (Exception e) { Log.LogWarning($"[TS] 存档隔离挂钩异常: {e.Message.Split('\n')[0]}"); }
         try { TeleportSaveIdentity.Init(); } catch { }
         try { TeleportBindingManager.Load(); } catch { }
@@ -406,7 +406,7 @@ public class Plugin : BasePlugin
             Log.LogInfo("[TS] 已挂钩 P4 搬运放下（OnPlaceTerrainObject/PlaceTerrainObject 双保险）");
         }
         catch (Exception ex) { Log.LogWarning($"[TS] P4 搬运钩异常: {ex.Message.Split('\n')[0]}"); }
-        Log.LogInfo("[TeleportStation] v0.9.69 兜底污染收敛（脏位守卫+本槽seenEpoch收敛K=3）");
+        Log.LogInfo("[TeleportStation] v0.9.70 真选择pin＋自动档翻转屏蔽（OnLoadConfirm/标题/死亡/新开局＋SaveGameData快照回写对账）");
     }
 }
 
