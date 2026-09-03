@@ -457,6 +457,7 @@ public static class ChargerPadFix
         try
         {
             try { EnsureClonesInTables(); } catch { }
+            try { CompleteAllPdTables(__instance); } catch { }
             // v0.9.22：从克隆注册表补表（H&D 下 FindObjectsOfType 不可见，注册表不依赖可见性）
             try
             {
@@ -703,6 +704,77 @@ public static class ChargerPadFix
             if (m != null) m.Invoke(null, null);
         }
         catch { }
+    }
+
+    /// <summary>v0.9.74 读档重扫 NRE 根治：重扫前把工作集里全部 PD（含原生物件）的六连接表补齐。
+    /// 原生 ElectricPole.RefreshElectricConnection:106 对表 Add 无守卫，读档时序下任一表 null 即掀翻整轮重扫
+    /// （杆-盘线消失、盘断电，拨燃料手动重扫才自愈）。返回补齐字段数（0 即无事发生）。</summary>
+    private static int CompleteAllPdTables(ProductionManager mgr)
+    {
+        int n = 0;
+        try
+        {
+            if (mgr != null)
+            {
+                try
+                {
+                    var all = mgr.productionDataList;
+                    if (all != null)
+                    {
+                        for (int i = 0; i < all.Count; i++)
+                        {
+                            try { n += EnsurePdTables(all[i]); } catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        try
+        {
+            var list = TerrainObject_Production.ActiveObjects_Production;
+            if (list != null)
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    try
+                    {
+                        var g = list[i];
+                        if (g == null) continue;
+                        object pd = null;
+                        var tod = Reflect.Get(g, "objectData");
+                        if (tod != null) pd = Reflect.Get(tod, "productionData");
+                        n += EnsurePdTables(pd);
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch { }
+        try
+        {
+            var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            if (slist != null)
+            {
+                for (int i = 0; i < slist.Count; i++)
+                {
+                    try
+                    {
+                        var s = slist[i];
+                        if (s == null) continue;
+                        object pd = null;
+                        var tod = Reflect.Get(s, "objectData");
+                        if (tod != null) pd = Reflect.Get(tod, "productionData");
+                        n += EnsurePdTables(pd);
+                    }
+                    catch { }
+                }
+            }
+        }
+        catch { }
+        if (n > 0) Plugin.L.LogInfo($"[TS] 重扫前PD全表补齐 {n} 字段（含原生物件）");
+        return n;
     }
 
     private static void EnsurePdTablesOnce(TerrainObject_Production g)
@@ -1323,9 +1395,11 @@ public static class ChargerPadFix
 
     /// <summary>ProductionData 六连接表完整性保障（反编译 ElectricPole.RefreshElectricConnection 0x1809BD350：
     /// 对 input/output/connected 三组列表做 List.Add 无守卫，任一 null 即 NRE「已隔离」→ 存档重建电网时建筑加载异常）。
-    /// 原版 ctor new 六表；克隆/池化路径可能缺——缺则补 Il2Cpp List（字段名以 dump.cs 为准）。</summary>
-    private static void EnsurePdTables(object pd)
+    /// 原版 ctor new 六表；克隆/池化/读档时序路径可能缺——缺则补 Il2Cpp List（字段名以 dump.cs 为准）。
+    /// 返回补齐字段数。</summary>
+    private static int EnsurePdTables(object pd)
     {
+        int n = 0;
         string[] strTables = { "inputProductionObjectList", "outputProductionObjectList", "connectedProductionObjectList" };
         string[] pdTables = { "inputProductionDataList", "outputProductionDataList", "connectedProductionDataList" };
         foreach (var f in strTables)
@@ -1336,6 +1410,7 @@ public static class ChargerPadFix
                 {
                     Reflect.Set(pd, f, new Il2CppSystem.Collections.Generic.List<string>());
                     _pdTablesFixed = true;
+                    n++;
                 }
             }
             catch { }
@@ -1348,10 +1423,12 @@ public static class ChargerPadFix
                 {
                     Reflect.Set(pd, f, new Il2CppSystem.Collections.Generic.List<ProductionData>());
                     _pdTablesFixed = true;
+                    n++;
                 }
             }
             catch { }
         }
+        return n;
     }
 
     /// <summary>×4 倍率 prefix：pd 是 900102 传送盘或 126 原版充电台、且供电含生物能 → sufficient ×4（postfix 恢复）。</summary>
