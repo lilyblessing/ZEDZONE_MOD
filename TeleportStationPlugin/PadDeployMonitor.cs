@@ -154,6 +154,8 @@ public class PadDeployMonitor : MonoBehaviour
         catch (Exception e) { LogWarnOnce($"BodySprite 异常: {e.Message.Split('\n')[0]}"); }
     }
 
+    internal static void ResetForIdentity() { try { _classified.Clear(); _pads.Clear(); _dumped.Clear(); _srCache.Clear(); } catch { } }
+
     private static void LogWarnOnce(string msg)
     {
         if (Time.unscaledTime - _lastWarn < 3f) return;

@@ -170,6 +170,13 @@ public static class TeleportSaveIdentity
         try { TeleportConsoleSelection.ResetForIdentity(); } catch {}
         try { TeleportStationNameManager.ResetForIdentity(); } catch {}
         try { TeleportMapManager.ResetPersistedForIdentity(); } catch {}
+        try { BioGenFuel.ResetForIdentity(); } catch {}
+        try { ChargerPadFix.ResetForIdentity(); } catch {}
+        try { BatteryChargeFix.ResetForIdentity(); } catch {}
+        try { BuildingPadFix.ResetForIdentity(); } catch {}
+        try { PadDeployMonitor.ResetForIdentity(); } catch {}
+        try { TeleportStationUid.InvalidateAll(); } catch {}
+        try { TeleportObjectCache.InvalidateAll(); } catch {}
     }
 
     private static void LoadAll()

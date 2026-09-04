@@ -140,11 +140,43 @@ public static class BioGenFuel
 
     // ───────────────── 内部工具 ─────────────────
 
+    /// <summary>统一实例键（GetInstanceID→Pointer→GetHashCode 三段式，TeleportStationUid.GetInstanceKey 范式）：
+    /// InventoryData 系纯数据类（dump.cs TypeDefIndex: 1108，无 Unity 基类），未必有 GetInstanceID，故首段经反射探测
+    /// （TeleportConsoleInteractFix 同款 GetMethod("GetInstanceID") 路径，一次性缓存），缺失则回退 Pointer→GetHashCode。
+    /// Mark/IsMarked 必须同走此函数（旧不对称：Mark 回退 GetHashCode 而 IsMarked 只读 Pointer，回退写入的键永远查不到）。</summary>
+    private static System.Reflection.MethodInfo _gidMethod; // InventoryData.GetInstanceID（若有；一次性探测缓存）
+    private static bool _gidProbed;
+
+    private static long GetInstanceKey(InventoryData fd)
+    {
+        if (fd == null) return 0;
+        try
+        {
+            if (!_gidProbed)
+            {
+                _gidProbed = true;
+                try { _gidMethod = fd.GetType().GetMethod("GetInstanceID"); } catch { _gidMethod = null; }
+            }
+            if (_gidMethod != null) return Convert.ToInt64(_gidMethod.Invoke(fd, null));
+        }
+        catch { }
+        try { return (long)fd.Pointer; } catch { }
+        try { return fd.GetHashCode(); } catch { return 0; }
+    }
+
+    /// <summary>心跳契约：换档/读档时清空标记（跨档结转消除）。签名必须精确，心跳调用方直接引用。</summary>
+    internal static void ResetForIdentity() { try { _marked.Clear(); } catch { } }
+
+    /// <summary>心跳契约：活体求交修枝。留空原因——本文件内无可枚举的 InventoryData 活体全集
+    /// （_marked 来源 inventoryData1 + fuelInventoryData 双来源；本文件刻意不走 ActiveObjects 遍历，见文件头注释），
+    /// 全量清理交 ResetForIdentity 覆盖。</summary>
+    internal static void PruneCaches() { try { /* 本文件内无可枚举的 InventoryData 活体全集，修枝无全集可求交；全量清理交 ResetForIdentity 覆盖 */ } catch { } }
+
     private static void Mark(InventoryData fd, bool burnContainer)
     {
-        long ptr = 0;
-        try { ptr = (long)fd.Pointer; } catch { ptr = fd.GetHashCode(); }
-        if (_marked.Add(ptr))
+        long key = 0;
+        try { key = GetInstanceKey(fd); } catch { return; }
+        if (_marked.Add(key))
         {
             try { Reflect.Set(fd, "inventoryTitleName", GameLocale.T("生物燃料仓", "Bio Fuel Hopper")); } catch { }
             Plugin.L.LogInfo($"[TS] BioGen 燃料仓已标记 ({(burnContainer ? "烧录容器" : "UI 容器")}) size=({fd.inventorySizeX}x{fd.inventorySizeY}) _marked={_marked.Count}");
@@ -153,7 +185,7 @@ public static class BioGenFuel
 
     private static bool IsMarked(InventoryData fd)
     {
-        try { return _marked.Contains((long)fd.Pointer); } catch { return false; }
+        try { return _marked.Contains(GetInstanceKey(fd)); } catch { return false; }
     }
 
     /// <summary>严格白名单（v0.8.10 终版）：Food 类物品全部可入（含腐肉 205、含未过期食品）+ 炭 6（副产品回仓）；木头/金属等非食品拒。

@@ -25,6 +25,23 @@ public static class BatteryChargeFix
     private static float _pendingGameDays; // TimeController hook 累积的未结算游戏天
     private static float _lastAbsTime = float.NaN; // ChangeTimeTo 跟踪（睡觉=绝对跳变）
 
+    /// <summary>心跳契约：换档/读档时清初始化去重表＋时间累积归零（跨档结转消除）。
+    /// _lastAbsTime 归初值 NaN（无基线态；若置 0 则首个 ChangeTimeTo 将产生虚假大差值入池）。签名必须精确，心跳调用方直接引用。</summary>
+    internal static void ResetForIdentity() { try { _initKeys.Clear(); _pendingGameDays = 0f; _lastAbsTime = float.NaN; } catch { } }
+
+    /// <summary>心跳契约：活体求交修枝。留空原因——本文件内唯一活体枚举 ActiveObjects_StirlingGenerator 不是全集
+    /// （H&D 隐藏对象对此表隐形，以它求交会误删存活盘的去重键；误删仅触发 EnsureContainer 重跑，虽无害但无意义），
+    /// 全量清理交 ResetForIdentity 覆盖。</summary>
+    internal static void PruneCaches() { try { /* ActiveObjects_StirlingGenerator 非全集（H&D 对象隐形），无全集可求交；全量清理交 ResetForIdentity 覆盖 */ } catch { } }
+
+    /// <summary>统一实例键（GetInstanceID→Pointer→GetHashCode 三段式，TeleportStationUid.GetInstanceKey 范式）：
+    /// EnsureContainer 写入与查询同走此函数（旧 Pointer 直读，指针地址复用即误判）。</summary>
+    private static long GetInstanceKey(TerrainObject_Production_StirlingGenerator g)
+    {
+        try { return (long)g.GetInstanceID(); }
+        catch { try { return (long)g.Pointer; } catch { return g.GetHashCode(); } }
+    }
+
     /// <summary>TimeController.AddTime postfix 入口：累计游戏天增量（1f = 1 游戏天）。__0 位置绑定（命名参数曾致 IL Compile Error）。</summary>
     public static void OnGameTimeAdded(float __0)
     {
@@ -74,7 +91,7 @@ public static class BatteryChargeFix
     private static void EnsureContainer(TerrainObject_Production_StirlingGenerator g)
     {
         long key = 0;
-        try { key = (long)g.Pointer; } catch { key = g.GetHashCode(); }
+        try { key = GetInstanceKey(g); } catch { }
         if (_initKeys.Contains(key)) return;
         _initKeys.Add(key);
         var fd = g.fuelInventoryData;

@@ -18,7 +18,7 @@ public static class TeleportStationUid
     // P1-6 显示热点缓存：key=TerrainObject 实例键（GetInstanceID），value=UID/坐标串。
     // DisplayForPad（标记刷新每 pad）与 DisplayForConsole 命中直接返回，免重复派生字符串；
     // DisplayForUid 经 ReverseLookupKey 反查命中后走键直取，跳过 FindPadByUid 全盘扫描（先用 CachedUidFor 校验 UID 一致）。
-    // TODO(正确性复核①): 缓存无主动失效，对象销毁/切档后实例键可能复用；待放置/绑定/Cleanup 接线 Invalidate* 后复核。
+    // 正确性复核①已接线：BindingManager 解绑/陈旧清理/绑定成功/心跳死键清理路径均调 InvalidateUidCache；实例键复用窗口已关。
     private static readonly Dictionary<long, string> _uidCache = new Dictionary<long, string>();
     private static readonly Dictionary<long, string> _coordCache = new Dictionary<long, string>();
 

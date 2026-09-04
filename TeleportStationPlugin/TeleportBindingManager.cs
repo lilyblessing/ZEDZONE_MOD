@@ -282,6 +282,7 @@ public static class TeleportBindingManager
                     Plugin.L.LogInfo($"[TS][Bind] 清理陈旧绑定 console={cid} pad={boundPid} 对端丢失");
                     _consoleToPad.Remove(cid);
                     _padToConsole.Remove(boundPid);
+                    try { TeleportStationUid.InvalidateUidCache(); } catch {}
                 }
             }
             TryAutoBindNearest(console);
@@ -319,6 +320,7 @@ public static class TeleportBindingManager
                     Plugin.L.LogInfo($"[TS][Bind] 清理陈旧绑定 pad={pid} console={boundCid} 对端丢失");
                     _padToConsole.Remove(pid);
                     _consoleToPad.Remove(boundCid);
+                    try { TeleportStationUid.InvalidateUidCache(); } catch {}
                 }
             }
             // 未绑定 pad：寻找最近未绑定控制台尝试绑定（全量扫描，含非 Production 控制台）
@@ -377,6 +379,7 @@ public static class TeleportBindingManager
                 {
                     _consoleToPad.Remove(cid);
                     _padToConsole.Remove(existingPid);
+                    try { TeleportStationUid.InvalidateUidCache(); } catch {}
                 }
             }
             var cPos = console.transform.position;
@@ -406,6 +409,7 @@ public static class TeleportBindingManager
                 Save();
                 try { HealPadCoordName(console, nearestUnbound); } catch {}
                 try { MarkDirty(); } catch {}
+                try { TeleportStationUid.InvalidateUidCache(); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -456,6 +460,7 @@ public static class TeleportBindingManager
                 Save();
                 try { HealPadCoordName(console, nearestUnbound); } catch {}
                 try { MarkDirty(); } catch {}
+                try { TeleportStationUid.InvalidateUidCache(); } catch {}
                 ShowHint("绑定成功", isError: false);
                 Plugin.L.LogInfo($"[TS][Bind][Auto] 绑定成功 console={console.name}({cid}) -> pad={nearestUnbound.name}({bestUnboundKey}) dist={Mathf.Sqrt(bestUnboundD2):F1}m");
                 return true;
@@ -474,6 +479,7 @@ public static class TeleportBindingManager
             var pad = FindByKey(pid) as TerrainObject;
             _consoleToPad.Remove(cid);
             _padToConsole.Remove(pid);
+            try { TeleportStationUid.InvalidateUidCache(); } catch {}
             try
             {
                 var cData = Reflect.Get(console, "objectData") ?? Reflect.Get(console, "terrainObjectData");
@@ -940,7 +946,7 @@ public static class TeleportBindingManager
                 else _staleMiss[kv.Key] = m;
             }
             foreach(var k in dead){ if(_consoleToPad.TryGetValue(k,out var v)) _padToConsole.Remove(v); _consoleToPad.Remove(k); _staleMiss.Remove(k); }
-            if(dead.Count>0) { try { MarkDirty(); } catch {} Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对（宽限{StaleGraceTicks}轮）"); }
+            if(dead.Count>0) { try { MarkDirty(); } catch {} try { TeleportStationUid.InvalidateUidCache(); } catch {} Plugin.L.LogInfo($"[TS][Bind] Tick 清理死键 {dead.Count} 对（宽限{StaleGraceTicks}轮）"); }
         } catch {}
     }
 }
@@ -953,6 +959,7 @@ public class TeleportBindingController : MonoBehaviour
 {
     private float _nextCleanup = -1f;
     private float _nextAutoBind = -1f;
+    private float _nextPrune = -1f;
     void Update()
     {
         try
@@ -970,6 +977,14 @@ public class TeleportBindingController : MonoBehaviour
             {
                 _nextAutoBind = now + 1f; // 1Hz 自动互绑
                 try { AutoBindTick(); } catch {}
+            }
+            if (now >= _nextPrune)
+            {
+                _nextPrune = now + 5f; // ~5s 存活修枝：四类 Pad/Fuel/Charge 缓存剪枝（各 try/catch 独立）
+                try { ChargerPadFix.PruneCaches(); } catch {}
+                try { BioGenFuel.PruneCaches(); } catch {}
+                try { BatteryChargeFix.PruneCaches(); } catch {}
+                try { BuildingPadFix.PruneCaches(); } catch {}
             }
             // P6.1 的 E/H 绑定/选点逻辑已退役：E 由原生 ComputerPanel 接管，选点改走地图标记
             // 保留 H 关闭旧面板兼容（若 TeleportConsoleUI 仍打开）

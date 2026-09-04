@@ -117,7 +117,7 @@ public static class BuildingPadFix
                     {
                         sg.sortingLayerID = _fxBgId;
                         long k = 0;
-                        try { k = (long)sg.Pointer; } catch { k = sg.GetHashCode(); }
+                        try { k = (long)sg.GetInstanceID(); } catch { try { k = sg.GetHashCode(); } catch { } } // P-键统一：SortingGroup取GetInstanceID
                         if (_pinned.Add(k)) Plugin.L.LogInfo($"[TS] 建筑盘层钉 v2: SortingGroup→FX_BG（id={_fxBgId}）");
                     }
                 }
@@ -163,5 +163,52 @@ public static class BuildingPadFix
             t = t.parent;
         }
         return null;
+    }
+
+    internal static void ResetForIdentity()
+    {
+        try
+        {
+            _classified.Clear();
+            _sgCache.Clear();
+            _pinned.Clear();
+        }
+        catch { }
+    }
+
+    internal static void PruneCaches()
+    {
+        try
+        {
+            // _classified按活体修枝（活体=ActiveObjects_Production；_sgCache已有使用前空判自愈，此处顺带清空调亡句柄；_pinned为日志去重键，不动以免重刷日志）
+            var live = new System.Collections.Generic.HashSet<int>();
+            try
+            {
+                var list = TerrainObject_Production.ActiveObjects_Production;
+                if (list != null) for (int i = 0; i < list.Count; i++)
+                {
+                    try { var g = list[i]; if (g != null) live.Add(g.GetInstanceID()); } catch { }
+                }
+            }
+            catch { }
+            try
+            {
+                var dead = new System.Collections.Generic.List<int>();
+                foreach (var kv in _classified) { try { if (!live.Contains(kv.Key)) dead.Add(kv.Key); } catch { } }
+                foreach (var k in dead) { try { _classified.Remove(k); } catch { } }
+            }
+            catch { }
+            try
+            {
+                var deadSg = new System.Collections.Generic.List<int>();
+                foreach (var kv in _sgCache)
+                {
+                    try { if (kv.Value == null || !live.Contains(kv.Key)) deadSg.Add(kv.Key); } catch { }
+                }
+                foreach (var k in deadSg) { try { _sgCache.Remove(k); } catch { } }
+            }
+            catch { }
+        }
+        catch { }
     }
 }

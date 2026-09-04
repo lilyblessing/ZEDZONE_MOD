@@ -842,7 +842,7 @@ public static class ChargerPadFix
         catch { }
         if (pd == null) return;
         long k = 0;
-        try { k = (long)pd.GetHashCode(); } catch { k = pd.GetType().GetHashCode(); }
+        try { k = KeyOf(pd); } catch { try { k = pd.GetType().GetHashCode(); } catch { } } // P-键统一：经KeyOf（PD纯数据对象无GetInstanceID→内部沿用GetHashCode旧式，见KeyOf注释）
         if (_pdFixed.Contains(k)) return;
         EnsurePdTables(pd);
         _pdFixed.Add(k);
@@ -1459,7 +1459,7 @@ public static class ChargerPadFix
     private static void EnsureContainer(TerrainObject_Production g)
     {
         long key = 0;
-        try { key = (long)g.Pointer; } catch { key = g.GetHashCode(); }
+        try { key = KeyOf(g); } catch { try { key = g.GetHashCode(); } catch { } } // P-键统一：TerrainObject经KeyOf取GetInstanceID
         if (_initKeys.Contains(key)) return;
         _initKeys.Add(key);
         object pd = null;
@@ -1841,5 +1841,128 @@ public static class ChargerPadFix
             catch { }
         }
         if (changed) Plugin.L.LogInfo($"[TS] 克隆贴图重钉: id={id} srs={n} ppu={cacheSp.pixelsPerUnit:F1}");
+    }
+
+    /// <summary>P-键统一：实例键唯一入口（_initKeys/_pdFixed 写键/查键必经此函数）。
+    /// Unity 对象（TerrainObject/SortingGroup 等）取 GetInstanceID；纯数据对象（如 ProductionData）无该方法→沿用 GetHashCode 旧式。</summary>
+    private static long KeyOf(object o)
+    {
+        try
+        {
+            if (o is UnityEngine.Object u)
+            {
+                try { if (u != null) return (long)u.GetInstanceID(); } catch { }
+            }
+        }
+        catch { }
+        try { if (o != null) return (long)o.GetHashCode(); } catch { }
+        try { return (long)o.GetType().GetHashCode(); } catch { return 0L; }
+    }
+
+    internal static void ResetForIdentity()
+    {
+        try
+        {
+            _initKeys.Clear();
+            _pdFixed.Clear();
+            _knownClones.Clear();
+            _clonesScanDone = false;
+            _pdTablesCompleted = false;
+            _consumingSwept = false;
+            _stirProbed = false;
+            _prefabProbed = false;
+        }
+        catch { }
+    }
+
+    internal static void PruneCaches()
+    {
+        try
+        {
+            /* _knownClones：以后端ActiveObjects_Production/Stirling两表活体集合＋gameObject空判为基准Remove僵尸；_initKeys/_pdFixed：以活体实例GetInstanceID集合求交集修枝 */
+            try
+            {
+                var live = new System.Collections.Generic.HashSet<object>();
+                try
+                {
+                    var plist = TerrainObject_Production.ActiveObjects_Production;
+                    if (plist != null) for (int i = 0; i < plist.Count; i++) { try { var x = plist[i]; if (x != null) live.Add(x); } catch { } }
+                }
+                catch { }
+                try
+                {
+                    var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    if (slist != null) for (int i = 0; i < slist.Count; i++) { try { var x = slist[i]; if (x != null) live.Add(x); } catch { } }
+                }
+                catch { }
+                var dead = new System.Collections.Generic.List<object>();
+                try
+                {
+                    var arr = _knownClones.ToArray();
+                    foreach (var o in arr)
+                    {
+                        try
+                        {
+                            if (o == null) { dead.Add(o); continue; }
+                            var c = o as Component;
+                            if (c == null) continue; // 非Component条目：保守不动
+                            bool gone = false;
+                            try { if (c.gameObject == null) gone = true; } catch { gone = true; }
+                            if (!gone) { try { if (!live.Contains(o)) gone = true; } catch { } }
+                            if (gone) dead.Add(o);
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                foreach (var d in dead) { try { _knownClones.Remove(d); } catch { } }
+            }
+            catch { }
+            try
+            {
+                var ids = new System.Collections.Generic.HashSet<long>();
+                var pdKeys = new System.Collections.Generic.HashSet<long>();
+                try
+                {
+                    var plist = TerrainObject_Production.ActiveObjects_Production;
+                    if (plist != null) for (int i = 0; i < plist.Count; i++)
+                    {
+                        try
+                        {
+                            var g = plist[i];
+                            if (g == null) continue;
+                            try { ids.Add(KeyOf(g)); } catch { }
+                            object pd = null;
+                            try { var tod = Reflect.Get(g, "objectData"); if (tod != null) pd = Reflect.Get(tod, "productionData"); } catch { }
+                            if (pd != null) { try { pdKeys.Add(KeyOf(pd)); } catch { } }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                try
+                {
+                    var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    if (slist != null) for (int i = 0; i < slist.Count; i++)
+                    {
+                        try
+                        {
+                            var s = slist[i];
+                            if (s == null) continue;
+                            try { ids.Add(KeyOf(s)); } catch { }
+                            object pd = null;
+                            try { var tod = Reflect.Get(s, "objectData"); if (tod != null) pd = Reflect.Get(tod, "productionData"); } catch { }
+                            if (pd != null) { try { pdKeys.Add(KeyOf(pd)); } catch { } }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                try { _initKeys.RemoveWhere(k => !ids.Contains(k)); } catch { }
+                try { _pdFixed.RemoveWhere(k => !pdKeys.Contains(k)); } catch { }
+            }
+            catch { }
+        }
+        catch { }
     }
 }
