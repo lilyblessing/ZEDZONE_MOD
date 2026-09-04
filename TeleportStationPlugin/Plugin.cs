@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.79")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.80")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -767,6 +767,15 @@ public class RegistrationProbe : MonoBehaviour
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
         if (_timer > 0f) return;
         if (RegistrarState.RetryPending) { _timer = 30f; RegistrarState.RetryPending = false; }
+        // v0.9.80 SO兼容-D：新版电力系 loading 期敏感（TerrainObject_Production.OnEnable→电网重建在加载阶段重入致栈溢出；
+        // 电杆自带 RefreshElectricConnectioinWhenLoadingFinishCoroutine 佐证“加载完成”才是安全点）。Instantiate 必须推迟到玩家进世界。
+        // 未就绪则 5s 后再探，不置 Done（主菜单挂机不注册，进存档后自动补注册）。
+        try
+        {
+            var gcReady = GameController.instance;
+            if (gcReady == null || gcReady.playerCharacter == null) { _timer = 5f; return; }
+        }
+        catch { _timer = 5f; return; }
         RegistrarState.Done = true;
         try { RegistrarLogic.Run(); }
         catch (Exception e) { Plugin.L.LogError($"[TS] 探测顶层异常: {e}"); }
