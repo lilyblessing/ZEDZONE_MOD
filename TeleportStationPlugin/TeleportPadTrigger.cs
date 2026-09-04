@@ -39,6 +39,8 @@ public class TeleportPadTrigger : MonoBehaviour
     private static string _lastArrivalUid = null;
     private static bool _arrivalDirtyFired = true; // 初值 true：未传送过不触发
     private static float _lastHealdDirtyFire = -999f; // 自愈 dirty 上次触发时间（窗口内间隔补触发用）
+    private static string _lastGateWhyUid = null; // v0.9.91-diag：GateWhy 同站节流（站 UID）
+    private static float _lastGateWhyTime = -999f; // v0.9.91-diag：GateWhy 同站节流（上次时间）
 
     private static TeleportPadTrigger _instance;
     public static TeleportPadTrigger EnsureExists()
@@ -90,6 +92,18 @@ public class TeleportPadTrigger : MonoBehaviour
                         {
                             if (!online)
                             {
+                                try // v0.9.91-diag：门控原因（只读+日志，零行为改动；同站5s节流）
+                                {
+                                    if (_lastGateWhyUid != _lastArrivalUid || now - _lastGateWhyTime >= 5f)
+                                    {
+                                        _lastGateWhyUid = _lastArrivalUid;
+                                        _lastGateWhyTime = now;
+                                        string why = "?";
+                                        try { string r; TeleportConsoleSelection.IsOnlineReason(arrivalPad, out r); why = r; } catch { }
+                                        try { Plugin.L?.LogInfo($"[TS][GateWhy] 站={_lastArrivalUid ?? "?"} reason={why}"); } catch { }
+                                    }
+                                }
+                                catch { }
                                 if (now - _lastHealdDirtyFire >= 15f)
                                 {
                                     try { ProductionManager.MarkElectricGridDirty(); }

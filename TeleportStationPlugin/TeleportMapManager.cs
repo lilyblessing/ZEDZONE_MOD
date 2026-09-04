@@ -245,6 +245,8 @@ public class TeleportMapManager : MonoBehaviour
                 Vector2 worldPos = new Vector2(pad.transform.position.x, pad.transform.position.y);
                 Vector2 anchoredPos = WorldToMapPos(worldPos);
                 bool online = TeleportConsoleSelection.IsOnline(pad);
+                string gateWhy = ""; // v0.9.91-diag：离线原因（只读+日志，零行为改动）
+                try { if (!online) { string _r; TeleportConsoleSelection.IsOnlineReason(pad, out _r); gateWhy = " reason=" + _r; } } catch { gateWhy = ""; }
                 string name = GetNameForPad(pad);
                 // v0.9.61 活体实测写入持久坐标表（远站补齐的数据源）
                 // v0.9.65：pads 来自 CollectBoundPads（已配对），同步写入配对证据③（对端 console 坐标）。
@@ -357,7 +359,7 @@ public class TeleportMapManager : MonoBehaviour
                             }
                             _markers[padKey] = go;
                             try { NoteHandle(padKey, pad); } catch {} // P2-5：建 marker 时写入 pad 句柄
-                            Plugin.L.LogInfo($"[TS][Map] 创建标记(prefab) pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
+                            Plugin.L.LogInfo($"[TS][Map] 创建标记(prefab) pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}{gateWhy}");
                         }
                         catch (Exception exPrefab)
                         {
@@ -379,7 +381,7 @@ public class TeleportMapManager : MonoBehaviour
                             txt2.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
                             try { var ol = labelGO2.AddComponent<Outline>(); ol.effectColor = new Color(0f,0f,0f,0.5f); ol.effectDistance = new Vector2(1f,-1f); } catch {}
                             _labels[padKey] = txt2;
-                            Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online} (prefab回退)");
+                            Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}{gateWhy} (prefab回退)");
                         }
                     }
                     else
@@ -430,7 +432,7 @@ public class TeleportMapManager : MonoBehaviour
                         // 仅保留 Outline，不加 Shadow
                         try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
                         _labels[padKey] = txt;
-                        Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
+                        Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}{gateWhy}");
                     }
                 }
                 else

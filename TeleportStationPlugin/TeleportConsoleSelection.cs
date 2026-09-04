@@ -55,6 +55,33 @@ public static class TeleportConsoleSelection
         return IsPowered(pad);
     }
 
+    // v0.9.91-diag：门控原因（与 IsOnline/IsPowered 同判据，只读+组串，零行为改动）
+    public static bool IsOnlineReason(TerrainObject pad, out string reason)
+    {
+        bool bound = false, consuming = false, powerOff = false;
+        float sufficient = -1f;
+        bool online = false;
+        try
+        {
+            if (pad != null)
+            {
+                try { bound = TeleportBindingManager.IsPadBound(GetInstanceKey(pad)); } catch { }
+                try { consuming = pad.attr != null && pad.attr.electricConsuming; } catch { }
+                object pd = null;
+                try { pd = GetProductionData(pad); } catch { }
+                if (pd != null)
+                {
+                    try { sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat")); } catch { }
+                    try { powerOff = Convert.ToBoolean(Reflect.Get(pd, "powerSwitchOff")); } catch { }
+                }
+                online = bound && consuming && !powerOff && sufficient > 0.01f;
+            }
+        }
+        catch { }
+        reason = $"bound={bound} consuming={consuming} powerOff={powerOff} sufficient={sufficient:F2}";
+        return online;
+    }
+
     public static bool IsOnlineByKey(long padKey)
     {
         var pad = FindByKey(padKey) as TerrainObject;

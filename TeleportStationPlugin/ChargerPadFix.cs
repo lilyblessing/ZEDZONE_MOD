@@ -125,6 +125,8 @@ public static class ChargerPadFix
     private static readonly Dictionary<int, int> _oeDepth = new Dictionary<int, int>();
     private static int _oeGlobal = 0;
     private static int _oeLogCount = 0;
+    private static int _oePeakGlobal = 0; // v0.9.91-diag：断路器计数历史峰值（只读普查用）
+    private static int _oePeakInst = 0;
     // 断路器 prefix（bool 返回：false 跳过原生；pair postfix 必配对减计数。Harmony 里 prefix 跳过后 postfix 照跑，计数平衡。）
     public static bool OnEnableBreaker_P(TerrainObject_Production __instance)
     {
@@ -156,9 +158,24 @@ public static class ChargerPadFix
     {
         try
         {
+            try // v0.9.91-diag：断路器计数峰值普查（只读+日志，零行为改动；减前采样，天然覆盖真峰值）
+            {
+                int curKeys = 0;
+                try { curKeys = _oeDepth.Count; } catch { }
+                if (_oeGlobal > _oePeakGlobal || curKeys > _oePeakInst)
+                {
+                    if (_oeGlobal > _oePeakGlobal) _oePeakGlobal = _oeGlobal;
+                    if (curKeys > _oePeakInst) _oePeakInst = curKeys;
+                    try { Plugin.L.LogInfo($"[TS][BreakerStat] peakGlobal={_oePeakGlobal} peakInst={_oePeakInst}"); } catch { }
+                }
+            }
+            catch { }
             try { _oeGlobal--; } catch { }
             int key = 0;
             try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
+            bool hasDepth = true;
+            try { hasDepth = _oeDepth.ContainsKey(key); } catch { hasDepth = true; } // 读表失败不误报
+            if (!hasDepth) { try { Plugin.L.LogWarning($"[TS][BreakerLeak] key={key}"); } catch { } } // v0.9.91-diag：P未加过或已泄漏
             if (_oeDepth.TryGetValue(key, out int d)) { if (d <= 1) _oeDepth.Remove(key); else _oeDepth[key] = d - 1; }
         }
         catch { }
@@ -586,6 +603,14 @@ public static class ChargerPadFix
     public static void GridConsumePrefix(ProductionManager __instance)
     {
         if (!RegistrarState.Done) return; // 读档期冻结，沉降后才补表/劫持range
+        try // v0.9.91-diag：重建前 IO 普查（只读+日志，零行为改动）
+        {
+            int preAO = -1, prePD = -1;
+            try { var ao = TerrainObject_Production.ActiveObjects_Production; if (ao != null) preAO = ao.Count; } catch { }
+            try { var pl = __instance != null ? __instance.productionDataList : null; if (pl != null) prePD = pl.Count; } catch { prePD = -1; }
+            try { Plugin.L.LogInfo($"[TS][RebuildIO] pre ActiveObjects={preAO} prodList={prePD}"); } catch { }
+        }
+        catch { }
         try
         {
             try { if (!_clonesScanDone || _knownClones.Count == 0) { EnsureClonesInTables(); _clonesScanDone = true; } } catch { }
@@ -593,6 +618,7 @@ public static class ChargerPadFix
             // v0.9.22：从克隆注册表补表（H&D 下 FindObjectsOfType 不可见，注册表不依赖可见性）
             try
             {
+                int reinforceAdds = 0; // v0.9.91-diag：实际 Add 计数（只读计数+尾部日志，零行为改动）
                 var all = _knownClones.ToArray();
                 foreach (var o in all)
                 {
@@ -608,7 +634,7 @@ public static class ChargerPadFix
                             {
                                 try { g102.gameObject.hideFlags = HideFlags.None; } catch { }
                                 var plist = TerrainObject_Production.ActiveObjects_Production;
-                                if (plist != null && !plist.Contains(g102)) plist.Add(g102);
+                                if (plist != null && !plist.Contains(g102)) { plist.Add(g102); reinforceAdds++; }
                             }
                             else if (tid == 900103)
                             {
@@ -617,13 +643,14 @@ public static class ChargerPadFix
                                 {
                                     try { s.gameObject.hideFlags = HideFlags.None; } catch { }
                                     var slist = TerrainObject_Production.ActiveObjects_Production;
-                                    if (slist != null && !slist.Contains(s)) slist.Add(s);
+                                    if (slist != null && !slist.Contains(s)) { slist.Add(s); reinforceAdds++; }
                                 }
                             }
                         }
                     }
                     catch { }
                 }
+                try { Plugin.L.LogInfo($"[TS][Reinforce] adds={reinforceAdds}"); } catch { }
             }
             catch { }
             if (!_rangeHijacked)
@@ -973,7 +1000,7 @@ public static class ChargerPadFix
     }
 
     /// <summary>ProductionManager.ConsumeElectricGridDirtyFlag postfix：重扫完成 → 采样三建筑 PD 连接表。</summary>
-    public static void GridConsumePostfix()
+    public static void GridConsumePostfix(ProductionManager __instance)
     {
         try
         {
@@ -990,6 +1017,47 @@ public static class ChargerPadFix
                 }
                 catch { }
             }
+            try // v0.9.91-diag：重建后 IO 普查（只读+日志，零行为改动；EnableDiag 门控之外独立运行）
+            {
+                int postAO = -1, postPD = -1;
+                try { var ao = TerrainObject_Production.ActiveObjects_Production; if (ao != null) postAO = ao.Count; } catch { }
+                try { var pl = __instance != null ? __instance.productionDataList : null; if (pl != null) postPD = pl.Count; } catch { postPD = -1; }
+                try { Plugin.L.LogInfo($"[TS][RebuildIO] post ActiveObjects={postAO} prodList={postPD}"); } catch { }
+            }
+            catch { }
+            try // v0.9.91-diag：杆普查（只读+日志，零行为改动；EnableDiag 门控之外独立运行）
+            {
+                int emptyPoles = 0, totalPoles = 0;
+                try
+                {
+                    var listC = TerrainObject_Production.ActiveObjects_Production;
+                    if (listC != null)
+                    {
+                        for (int ci = 0; ci < listC.Count; ci++)
+                        {
+                            var cg = listC[ci];
+                            if (cg == null) continue;
+                            int caid = -1;
+                            try { caid = GetClonedAttrId(cg); } catch { continue; }
+                            if (caid != 125) continue;
+                            totalPoles++;
+                            try
+                            {
+                                object cpd = null;
+                                try { var ctod = Reflect.Get(cg, "objectData"); if (ctod != null) cpd = Reflect.Get(ctod, "productionData"); } catch { }
+                                if (cpd == null) continue;
+                                int oc = CountOf(cpd, "outputProductionObjectList");
+                                int cc = CountOf(cpd, "connectedProductionObjectList");
+                                if (oc <= 0 && cc <= 0) emptyPoles++;
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+                try { Plugin.L.LogInfo($"[TS][PoleCensus] emptyPoles={emptyPoles}/total={totalPoles}"); } catch { }
+            }
+            catch { }
             if (!EnableDiag) return;
             // v0.9.9 对照实验：采样全部 Production 实例（含原版充电台/冰箱/杆子），对比克隆建筑 vs 原版的连接表
             string sb = "[TS] 电网重扫完成，全实例连接表:";
