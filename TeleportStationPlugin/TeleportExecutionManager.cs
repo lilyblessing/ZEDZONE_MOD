@@ -54,6 +54,8 @@ public static class TeleportExecutionManager
     private static PropertyInfo _vdXProp = null;
     private static PropertyInfo _vdYProp = null;
     private static bool _vdCacheTried = false;
+    // P2-4补：drivingVehicle 按运行时类型缓存（含负结论），替代 AccessTools.Field 逐次调用（HarmonyX warning 根源）
+    private static readonly Dictionary<Type, FieldInfo> _drvFiCache = new();
 
     private static bool _patchesApplied = false;
 
@@ -136,9 +138,18 @@ public static class TeleportExecutionManager
                     var drv = Reflect.Get(hcc, "drivingVehicle") as BasicVehicle;
                     if (drv == null)
                     {
-                        // 编译期直访兜底（若 public）
-                        var fi = AccessTools.Field(hcc.GetType(), "drivingVehicle");
-                        if (fi != null) drv = fi.GetValue(hcc) as BasicVehicle;
+                        // P2-4补：FieldInfo 按类型常驻（含负结论），零 AccessTools 调用、零 HarmonyX warning
+                        try
+                        {
+                            var ht = hcc.GetType();
+                            if (!_drvFiCache.TryGetValue(ht, out var fi))
+                            {
+                                try { fi = ht.GetField("drivingVehicle", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance); } catch { fi = null; }
+                                try { _drvFiCache[ht] = fi; } catch { }
+                            }
+                            if (fi != null) drv = fi.GetValue(hcc) as BasicVehicle;
+                        }
+                        catch { }
                     }
                     var isDrivingObj = Reflect.Get(hcc, "isDriving");
                     bool isDriving = isDrivingObj is bool b ? b : drv != null;
