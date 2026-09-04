@@ -62,7 +62,8 @@ public class TeleportPadTrigger : MonoBehaviour
             if (now < _nextScan) return;
             _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
             // 落地电网自愈（到达窗口驱动）：传送成功后 30s 内对到达站做一次供电评估，未供电则单次重算。
-            // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；评估过即关，不管供电与否。
+            // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；只有真评估到（在线/离线）或窗口过期才关窗，
+            // 无活体/求值异常留旗待下次 0.5s 扫描重试（5s 内节流日志，之后静默重试）。
             try
             {
                 if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime < 30f)
@@ -71,21 +72,35 @@ public class TeleportPadTrigger : MonoBehaviour
                     try { arrivalPad = TeleportConsoleSelection.ResolveLivePad(_lastArrivalUid); } catch { arrivalPad = null; }
                     if (arrivalPad == null)
                     {
-                        _arrivalDirtyFired = true;
+                        if (now - _lastArrivalTime < 5f)
+                            Plugin.L?.LogInfo($"[TS][Tele] 落地自愈等待活体 站={_lastArrivalUid ?? "?"}");
                     }
                     else
                     {
                         bool online = true;
                         bool evalOk = true;
                         try { online = TeleportConsoleSelection.IsOnline(arrivalPad); } catch { evalOk = false; }
-                        if (evalOk && !online)
+                        if (!evalOk)
                         {
-                            try { ProductionManager.MarkElectricGridDirty(); }
-                            catch { }
-                            Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发（窗口） 站={_lastArrivalUid ?? "?"}");
+                            if (now - _lastArrivalTime < 5f)
+                                Plugin.L?.LogInfo($"[TS][Tele] 落地自愈等待活体 站={_lastArrivalUid ?? "?"}");
                         }
-                        _arrivalDirtyFired = true;
+                        else
+                        {
+                            if (!online)
+                            {
+                                try { ProductionManager.MarkElectricGridDirty(); }
+                                catch { }
+                                Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发（窗口） 站={_lastArrivalUid ?? "?"}");
+                            }
+                            _arrivalDirtyFired = true;
+                        }
                     }
+                }
+                else if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime >= 30f)
+                {
+                    _arrivalDirtyFired = true;
+                    Plugin.L?.LogInfo($"[TS][Tele] 落地自愈窗口过期（未评估到活体） 站={_lastArrivalUid ?? "?"}");
                 }
             }
             catch { }
