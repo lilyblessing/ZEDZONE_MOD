@@ -683,7 +683,7 @@ public static class TeleportBindingManager
         } catch {}
         try
         {
-            var list3 = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            var list3 = TerrainObject_Production.ActiveObjects_Production;
             if (list3 != null) for (int i=0;i<list3.Count;i++) { var g=list3[i]; if(g==null) continue; var t=FindTerrainObject(g.transform) as TerrainObject; if(t!=null && t.attr!=null && t.attr.id==attrId) { long k=GetInstanceKey(t); if(seen.Add(k)) result.Add(t); } }
         } catch {}
         return result;

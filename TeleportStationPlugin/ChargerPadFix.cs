@@ -44,70 +44,106 @@ public static class ChargerPadFix
     private static bool _dicDiag;
     private static bool _buildDiag;
     private static readonly System.Collections.Generic.List<object> _knownClones = new();
+    // SO兼容：克隆期抑制旗标（RegistrarLogic.Run 入口置位、finally 复位；OnEnable/Init 系 postfix 在克隆 Instantiate 期直接退，掐断 game-side 原生递归环的我方触发段）
+    internal static bool IsCloning;
+    private static int _onEnableDepth; // SO兼容：OnEnable/Init 系递归深度守卫（>4 直接退）
     private static bool _clonesScanDone; // P1-1：会话级全扫描一次性旗标（OnEnable 注册表续增，扫描只覆盖冷启动竞态）
     private static Il2CppSystem.Type _il2cppProdType;
     private static Il2CppSystem.Type _il2cppStirType;
 
     // ═══ v0.9.22 R12-2 克隆实例注册表（OnEnable 记录，不依赖可见性）═══
-    public static void OnEnableRecorder_P(TerrainObject_Production __instance)
+    // SO兼容：postfix void 方法，首行 return 只跳过自体逻辑、不影响游戏原生（非 bool prefix，无跳过原生语义）。
+    internal static void NoteClone(object o)
     {
         try
         {
-            if (__instance == null) return;
-            int id = -1;
-            try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
-            if (id == 900101 || id == 900102 || id == 900103)
-            {
-                if (!_knownClones.Contains(__instance))
-                {
-                    _knownClones.Add(__instance);
-                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
-                }
-                try { StampConsumingFlag(__instance); } catch { }
-            }
+            if (o == null) return;
+            if (_knownClones.Contains(o)) return;
+            _knownClones.Add(o);
         }
         catch { }
     }
 
-    public static void OnEnableRecorder_S(TerrainObject_Production_StirlingGenerator __instance)
+    public static void OnEnableRecorder_P(TerrainObject_Production __instance)
     {
+        if (IsCloning) return;
+        if (_onEnableDepth > 4) return;
         try
         {
-            if (__instance == null) return;
-            int id = -1;
-            try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
-            if (id == 900101 || id == 900102 || id == 900103)
+            _onEnableDepth++;
+            try
             {
-                if (!_knownClones.Contains(__instance))
+                if (__instance == null) return;
+                int id = -1;
+                try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
+                if (id == 900101 || id == 900102 || id == 900103)
                 {
-                    _knownClones.Add(__instance);
-                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                    if (!_knownClones.Contains(__instance))
+                    {
+                        _knownClones.Add(__instance);
+                        try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                    }
+                    try { StampConsumingFlag(__instance); } catch { }
                 }
-                try { StampConsumingFlag(__instance); } catch { }
             }
+            catch { }
         }
-        catch { }
+        finally { try { _onEnableDepth--; } catch { } }
+    }
+
+    public static void OnEnableRecorder_S(TerrainObject_Production_StirlingGenerator __instance)
+    {
+        if (IsCloning) return;
+        if (_onEnableDepth > 4) return;
+        try
+        {
+            _onEnableDepth++;
+            try
+            {
+                if (__instance == null) return;
+                int id = -1;
+                try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
+                if (id == 900101 || id == 900102 || id == 900103)
+                {
+                    if (!_knownClones.Contains(__instance))
+                    {
+                        _knownClones.Add(__instance);
+                        try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                    }
+                    try { StampConsumingFlag(__instance); } catch { }
+                }
+            }
+            catch { }
+        }
+        finally { try { _onEnableDepth--; } catch { } }
     }
 
     // P6.1 新增：通用 TerrainObject OnEnable 捕获（900101 控制台类型为 TerrainObject_Furniture_Commu，不走 Production）
     public static void OnEnableRecorder_All(TerrainObject __instance)
     {
+        if (IsCloning) return;
+        if (_onEnableDepth > 4) return;
         try
         {
-            if (__instance == null) return;
-            int id = -1;
-            try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
-            if (id == 900101 || id == 900102 || id == 900103)
+            _onEnableDepth++;
+            try
             {
-                if (!_knownClones.Contains(__instance))
+                if (__instance == null) return;
+                int id = -1;
+                try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
+                if (id == 900101 || id == 900102 || id == 900103)
                 {
-                    _knownClones.Add(__instance);
-                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                    if (!_knownClones.Contains(__instance))
+                    {
+                        _knownClones.Add(__instance);
+                        try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                    }
+                    try { StampConsumingFlag(__instance); } catch { }
                 }
-                try { StampConsumingFlag(__instance); } catch { }
             }
+            catch { }
         }
-        catch { }
+        finally { try { _onEnableDepth--; } catch { } }
     }
 
     /// <summary>P2-2 共享快照：命中（≤0.5s）直接复用；过期则拷贝一次刷新。取不到活列表返回旧快照（可null），
@@ -470,14 +506,14 @@ public static class ChargerPadFix
                     try { var sc2 = hg2.gameObject.scene; sceneOk2 = sc2.IsValid(); } catch { sceneOk2 = false; }
                     if (!sceneOk2) continue;
                     try { hg2.gameObject.hideFlags = HideFlags.None; } catch { }
-                    var stirListH = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var stirListH = TerrainObject_Production.ActiveObjects_Production;
                     if (stirListH == null) continue;
                     bool containsH2 = false;
                     try { containsH2 = stirListH.Contains(hg2); } catch { for (int k = 0; k < stirListH.Count; k++) if (ReferenceEquals(stirListH[k], hg2)) { containsH2 = true; break; } }
                     if (!containsH2) { try { stirListH.Add(hg2); } catch { } }
                 }
             }
-            // 900103 → ActiveObjects_StirlingGenerator
+            // 900103 → ActiveObjects_Production（新版：发电子类静态表已删，并入基类表）
             var stirsRaw = UnityEngine.Object.FindObjectsOfType(_il2cppStirType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
             if (stirsRaw != null)
             {
@@ -489,7 +525,7 @@ public static class ChargerPadFix
                     try { var to = FindTerrainObject(sg.transform); if (to != null) { object a = null; try { a = Reflect.Get(to, "attr"); } catch { } if (a != null) { if (RegistrationStore.Attrs.TryGetValue(900103, out var our) && ReferenceEquals(a, our)) isBio = true; else if (AttrId(a) == 900103) isBio = true; } } } catch { }
                     if (!isBio) continue;
                     try { sg.gameObject.hideFlags = HideFlags.None; } catch { }
-                    var stirList = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var stirList = TerrainObject_Production.ActiveObjects_Production;
                     if (stirList == null) continue;
                     bool contains2 = false;
                     try { contains2 = stirList.Contains(sg); } catch { for (int k = 0; k < stirList.Count; k++) if (ReferenceEquals(stirList[k], sg)) { contains2 = true; break; } }
@@ -532,7 +568,7 @@ public static class ChargerPadFix
                                 if (s != null)
                                 {
                                     try { s.gameObject.hideFlags = HideFlags.None; } catch { }
-                                    var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                                    var slist = TerrainObject_Production.ActiveObjects_Production;
                                     if (slist != null && !slist.Contains(s)) slist.Add(s);
                                 }
                             }
@@ -665,13 +701,13 @@ public static class ChargerPadFix
             // 900103：Stirling 表
             try
             {
-                var stirList = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                var stirList = TerrainObject_Production.ActiveObjects_Production;
                 if (stirList != null)
                 {
                     TerrainObject_Production_StirlingGenerator sgInst = null;
                     for (int i = 0; i < stirList.Count; i++)
                     {
-                        var sg = stirList[i];
+                        var sg = stirList[i] as TerrainObject_Production_StirlingGenerator;
                         if (sg == null) continue;
                         bool isTarget = false;
                         try
@@ -807,7 +843,7 @@ public static class ChargerPadFix
         catch { }
         try
         {
-            var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            var slist = TerrainObject_Production.ActiveObjects_Production;
             if (slist != null)
             {
                 for (int i = 0; i < slist.Count; i++)
@@ -1143,12 +1179,12 @@ public static class ChargerPadFix
                 try
                 {
                     TerrainObject_Production_StirlingGenerator sg103 = null;
-                    var stirList103 = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var stirList103 = TerrainObject_Production.ActiveObjects_Production;
                     if (stirList103 != null)
                     {
                         for (int _si = 0; _si < stirList103.Count; _si++)
                         {
-                            var _sg = stirList103[_si];
+                            var _sg = stirList103[_si] as TerrainObject_Production_StirlingGenerator;
                             if (_sg == null) continue;
                             bool _isBio = false;
                             try
@@ -1252,16 +1288,16 @@ public static class ChargerPadFix
         {
             if (Time.unscaledTime < 3f) return;
             if (_stirProbed && _prefabProbed) return;
-            // 1) Stirling 表归属：遍历 ActiveObjects_StirlingGenerator，打 attrId（独立 try/catch，失败可重试）
+            // 1) Stirling 表归属：遍历 ActiveObjects_Production，打 attrId（独立 try/catch，失败可重试）
             if (!_stirProbed)
             {
                 bool _stirSuccess = false;
                 try
                 {
-                    var stirList = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var stirList = TerrainObject_Production.ActiveObjects_Production;
                     if (stirList == null)
                     {
-                        Plugin.L.LogInfo("[TS] Stirling表实例: ActiveObjects_StirlingGenerator=null");
+                        Plugin.L.LogInfo("[TS] Stirling表实例: ActiveObjects_Production=null");
                         _stirSuccess = true;
                     }
                     else if (stirList.Count == 0)
@@ -1608,7 +1644,7 @@ public static class ChargerPadFix
             var to = pd.terrainObjectTemp;
             if (to == null) return false;
             var pos = to.transform.position;
-            var list = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return false;
             for (int i = 0; i < list.Count; i++)
             {
@@ -1698,7 +1734,18 @@ public static class ChargerPadFix
     public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
 
     // ═══ v0.9.23 诊断：缩放追踪（不改值，只日志，定位几秒后缩小真凶）═══
-    public static void ScaleGuardPostfix(TerrainObject __instance) { try { if (EnableDiag) ScaleDiagLog(__instance, "Init"); TeleportBindingManager.OnPlaced(__instance); } catch { } }
+    // SO兼容：postfix void 方法，首行 return 只跳过自体逻辑、不影响游戏原生（非 bool prefix，无跳过原生语义）。
+    public static void ScaleGuardPostfix(TerrainObject __instance)
+    {
+        if (IsCloning) return;
+        if (_onEnableDepth > 4) return;
+        try
+        {
+            _onEnableDepth++;
+            try { if (EnableDiag) ScaleDiagLog(__instance, "Init"); TeleportBindingManager.OnPlaced(__instance); } catch { }
+        }
+        finally { try { _onEnableDepth--; } catch { } }
+    }
     private static int _diagCount = 0;
     private static void ScaleDiagLog(TerrainObject t, string tag)
     {
@@ -1891,7 +1938,7 @@ public static class ChargerPadFix
                 catch { }
                 try
                 {
-                    var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var slist = TerrainObject_Production.ActiveObjects_Production;
                     if (slist != null) for (int i = 0; i < slist.Count; i++) { try { var x = slist[i]; if (x != null) live.Add(x); } catch { } }
                 }
                 catch { }
@@ -1942,7 +1989,7 @@ public static class ChargerPadFix
                 catch { }
                 try
                 {
-                    var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+                    var slist = TerrainObject_Production.ActiveObjects_Production;
                     if (slist != null) for (int i = 0; i < slist.Count; i++)
                     {
                         try

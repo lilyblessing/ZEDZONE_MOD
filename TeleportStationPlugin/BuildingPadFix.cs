@@ -13,7 +13,7 @@ namespace TeleportStationPlugin;
 ///   2. 游戏写 SortingGroup 仅两条路径：Init（初始化）/ RestoreRootSortingOrderFactory（factory 模式还原），
 ///      两处都写 set_sortingOrder(缓存0x4C) + set_sortingLayerID(缓存0x50)；UpdateLifted/TerrainObjectUpdate 不写排序
 ///      （同层 y 深度排序是渲染管线规则，非游戏代码逐帧改写）。
-///   3. 方案：ActiveObjects_StirlingGenerator 活列表定位实例（900102 克隆自斯特林，列表含实例）→
+///   3. 方案：ActiveObjects_Production 活列表定位实例（900102 克隆自斯特林，列表含实例）→
 ///      取 m_sortingGroup → 钉 sortingLayerID=FX_BG（层 FX_BG 低于玩家 Character → 玩家永远盖盘，盘永不盖玩家）。
 ///      "玩家/车在盘中心以北被盖"（同层 y-sort）因层不同而彻底消除。
 ///   4. 0.5s 周期复查：防 factory 模式进出时 RestoreRoot 把层写回建筑默认。

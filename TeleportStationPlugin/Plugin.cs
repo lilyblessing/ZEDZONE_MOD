@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.78")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.79")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -819,7 +819,25 @@ internal static class Buildings
 /// <summary>v0.1.2 注入逻辑（静态类，避免 Il2CppInterop 扫描 MonoBehaviour 方法）。</summary>
 internal static class RegistrarLogic
 {
+    // SO兼容：克隆期抑制旗标——Run 全程置位、finally 复位；BuildPrefabClone 内 Object.Instantiate 触发的
+    // OnEnable/Init 系 postfix 见旗标直接退（只跳过我方注册/钉层逻辑，不跳过游戏原生）；Run 结束后三克隆显式登记补表。
     internal static void Run()
+    {
+        ChargerPadFix.IsCloning = true;
+        try
+        {
+            RunInner();
+            try
+            {
+                foreach (int id in new[] { 900101, 900102, 900103 })
+                { try { if (RegistrationStore.Prefabs.TryGetValue(id, out var c) && c != null) ChargerPadFix.NoteClone(c); } catch { } }
+            }
+            catch { }
+        }
+        finally { try { ChargerPadFix.IsCloning = false; } catch { } }
+    }
+
+    private static void RunInner()
     {
         var sb = new StringBuilder();
         sb.AppendLine("[TS] ===== P1 建筑注册注入 =====");

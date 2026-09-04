@@ -6,7 +6,7 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// P6.1 性能修复：FindAll 去重扫描统一缓存（0.5s TTL），消除每帧 4× Resources.FindObjectsOfTypeAll 的 60Hz 轮询风暴。
-/// 合并 4 源：_knownClones + ActiveObjects_Production + Resources.FindObjectsOfTypeAll + ActiveObjects_StirlingGenerator
+/// 合并 4 源：_knownClones + ActiveObjects_Production + Resources.FindObjectsOfTypeAll + ActiveObjects_Production
 /// </summary>
 public static class TeleportObjectCache
 {
@@ -135,10 +135,10 @@ public static class TeleportObjectCache
                 }
             }
         } catch {}
-        // 4. ActiveObjects_StirlingGenerator
+        // 4. ActiveObjects_Production
         try
         {
-            var list3 = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
+            var list3 = TerrainObject_Production.ActiveObjects_Production;
             if (list3 != null)
             {
                 for (int i = 0; i < list3.Count; i++)
