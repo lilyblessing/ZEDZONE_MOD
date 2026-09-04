@@ -38,6 +38,7 @@ public class TeleportPadTrigger : MonoBehaviour
     private static float _lastArrivalTime = -999f;
     private static string _lastArrivalUid = null;
     private static bool _arrivalDirtyFired = true; // 初值 true：未传送过不触发
+    private static float _lastHealdDirtyFire = -999f; // 自愈 dirty 上次触发时间（窗口内间隔补触发用）
 
     private static TeleportPadTrigger _instance;
     public static TeleportPadTrigger EnsureExists()
@@ -61,12 +62,12 @@ public class TeleportPadTrigger : MonoBehaviour
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
             _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
-            // 落地电网自愈（到达窗口驱动）：传送成功后 30s 内对到达站做一次供电评估，未供电则单次重算。
-            // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；只有真评估到（在线/离线）或窗口过期才关窗，
+            // 落地电网自愈（到达窗口驱动）：传送成功后 120s 内对到达站做供电评估，持续离线则每 15s 补一次重算。
+            // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；只有关窗条件（在线或窗口过期）才关窗，
             // 无活体/求值异常留旗待下次 0.5s 扫描重试（5s 内节流日志，之后静默重试）。
             try
             {
-                if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime < 30f)
+                if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime < 120f)
                 {
                     TerrainObject arrivalPad = null;
                     try { arrivalPad = TeleportConsoleSelection.ResolveLivePad(_lastArrivalUid); } catch { arrivalPad = null; }
@@ -89,15 +90,22 @@ public class TeleportPadTrigger : MonoBehaviour
                         {
                             if (!online)
                             {
-                                try { ProductionManager.MarkElectricGridDirty(); }
-                                catch { }
-                                Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发（窗口） 站={_lastArrivalUid ?? "?"}");
+                                if (now - _lastHealdDirtyFire >= 15f)
+                                {
+                                    try { ProductionManager.MarkElectricGridDirty(); }
+                                    catch { }
+                                    _lastHealdDirtyFire = now;
+                                    Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发（窗口） 站={_lastArrivalUid ?? "?"} t={now - _lastArrivalTime:F0}s");
+                                }
                             }
-                            _arrivalDirtyFired = true;
+                            else
+                            {
+                                _arrivalDirtyFired = true;
+                            }
                         }
                     }
                 }
-                else if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime >= 30f)
+                else if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime >= 120f)
                 {
                     _arrivalDirtyFired = true;
                     Plugin.L?.LogInfo($"[TS][Tele] 落地自愈窗口过期（未评估到活体） 站={_lastArrivalUid ?? "?"}");
@@ -295,7 +303,7 @@ public class TeleportPadTrigger : MonoBehaviour
                     // 传后清空选择（发送方控制台）
                     try { TeleportConsoleSelection.ClearByKey(consoleKey); Plugin.L.LogInfo($"[TS][Teleport] 已清空选择 {consoleUid}"); } catch {}
                     // 落地电网自愈记点：目标站 UID＋到达时间，本次 dirty 未触发
-                    try { _lastArrivalUid = selUidCap; _lastArrivalTime = Time.unscaledTime; _arrivalDirtyFired = false; } catch {}
+                    try { _lastArrivalUid = selUidCap; _lastArrivalTime = Time.unscaledTime; _arrivalDirtyFired = false; _lastHealdDirtyFire = -999f; } catch {}
                 }
             });
             Plugin.L?.LogInfo($"[TS][Teleport] 开始倒计时 {senderUid} entrant={(inVehicle?"vehicle":"player")} target={selectedUid}({dispTarget})");
