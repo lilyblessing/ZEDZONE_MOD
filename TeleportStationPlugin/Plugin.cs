@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.83")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.84")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -330,7 +330,10 @@ public class Plugin : BasePlugin
                 var onP = AccessTools.Method(typeof(TerrainObject_Production), "OnEnable");
                 if (onP != null)
                 {
-                    h.Patch(onP, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_P), BindingFlags.Public | BindingFlags.Static)));
+                    h.Patch(onP,
+                        prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableBreaker_P), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_P), BindingFlags.Public | BindingFlags.Static)));
+                    h.Patch(onP, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableBreaker_X), BindingFlags.Public | BindingFlags.Static)));
                     Log.LogInfo("[TS] 已挂钩 TerrainObject_Production.OnEnable（克隆注册表）");
                 }
                 else Log.LogWarning("[TS] TerrainObject_Production.OnEnable 挂钩失败（方法未找到）");
@@ -341,8 +344,12 @@ public class Plugin : BasePlugin
                 var onS = AccessTools.Method(typeof(TerrainObject_Production_StirlingGenerator), "OnEnable");
                 if (onS != null)
                 {
-                    h.Patch(onS, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_S), BindingFlags.Public | BindingFlags.Static)));
+                    h.Patch(onS,
+                        prefix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableBreaker_P), BindingFlags.Public | BindingFlags.Static)),
+                        postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_S), BindingFlags.Public | BindingFlags.Static)));
+                    h.Patch(onS, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableBreaker_X), BindingFlags.Public | BindingFlags.Static)));
                     Log.LogInfo("[TS] 已挂钩 TerrainObject_Production_StirlingGenerator.OnEnable（克隆注册表）");
+                    Log.LogInfo("[TS] OnEnable 断路器已装（diag，perInst>8/global>64 跳过）");
                 }
                 else Log.LogWarning("[TS] TerrainObject_Production_StirlingGenerator.OnEnable 挂钩失败（方法未找到）");
             }

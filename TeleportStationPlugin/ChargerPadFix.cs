@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using ZedZoneShared;
@@ -118,6 +119,49 @@ public static class ChargerPadFix
             catch { }
         }
         finally { try { _onEnableDepth--; } catch { } }
+    }
+
+    // ═══ OnEnable 断路器（诊断版）：Harmony prefix 返回 false 跳过重入过深的原生 OnEnable ═══
+    private static readonly Dictionary<int, int> _oeDepth = new Dictionary<int, int>();
+    private static int _oeGlobal = 0;
+    private static int _oeLogCount = 0;
+    // 断路器 prefix（bool 返回：false 跳过原生；pair postfix 必配对减计数。Harmony 里 prefix 跳过后 postfix 照跑，计数平衡。）
+    public static bool OnEnableBreaker_P(TerrainObject_Production __instance)
+    {
+        try
+        {
+            int key = 0;
+            try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
+            _oeDepth.TryGetValue(key, out int d);
+            _oeGlobal++;
+            if (d >= 8 || _oeGlobal > 64)
+            {
+                if (_oeLogCount < 12)
+                {
+                    _oeLogCount++;
+                    string nm = "?"; int aid = -1; bool act = false;
+                    try { nm = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { }
+                    try { var a = __instance.attr; if (a != null) aid = a.id; } catch { }
+                    try { act = __instance != null && __instance.gameObject != null && __instance.gameObject.activeSelf; } catch { }
+                    Plugin.L.LogWarning($"[TS][Breaker] 跳过重入 OnEnable #{_oeLogCount} key={key} name={nm} attr={aid} active={act} perInst={d} global={_oeGlobal}");
+                }
+                return false;
+            }
+            _oeDepth[key] = d + 1;
+        }
+        catch { }
+        return true;
+    }
+    public static void OnEnableBreaker_X(TerrainObject_Production __instance)
+    {
+        try
+        {
+            try { _oeGlobal--; } catch { }
+            int key = 0;
+            try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
+            if (_oeDepth.TryGetValue(key, out int d)) { if (d <= 1) _oeDepth.Remove(key); else _oeDepth[key] = d - 1; }
+        }
+        catch { }
     }
 
     // P6.1 新增：通用 TerrainObject OnEnable 捕获（900101 控制台类型为 TerrainObject_Furniture_Commu，不走 Production）
