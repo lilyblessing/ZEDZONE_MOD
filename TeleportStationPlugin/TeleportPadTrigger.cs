@@ -33,7 +33,8 @@ public class TeleportPadTrigger : MonoBehaviour
     private static System.Reflection.FieldInfo _drvField = null;
     private static bool _drvResolved = false;
     // 落地电网自愈 workaround（09-05 更新后跨区块传送偶发丢连接）：传送成功记到达时间戳＋目标站 UID，
-    // 后续未供电分支 30s 窗口内单次触发 ProductionManager.MarkElectricGridDirty()。一次性，无轮询。
+    // 到达窗口驱动（Update 0.5s 节流内检查，30s 窗口内单次评估，未供电则调 ProductionManager.MarkElectricGridDirty()）；
+    // 未供电分支内的 TryFireArrivalGridDirty 调用保留作备份路径，共享 _arrivalDirtyFired 防重、天然互斥。
     private static float _lastArrivalTime = -999f;
     private static string _lastArrivalUid = null;
     private static bool _arrivalDirtyFired = true; // 初值 true：未传送过不触发
@@ -60,6 +61,34 @@ public class TeleportPadTrigger : MonoBehaviour
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
             _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
+            // 落地电网自愈（到达窗口驱动）：传送成功后 30s 内对到达站做一次供电评估，未供电则单次重算。
+            // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；评估过即关，不管供电与否。
+            try
+            {
+                if (!_arrivalDirtyFired && _lastArrivalUid != null && now - _lastArrivalTime < 30f)
+                {
+                    TerrainObject arrivalPad = null;
+                    try { arrivalPad = TeleportConsoleSelection.ResolveLivePad(_lastArrivalUid); } catch { arrivalPad = null; }
+                    if (arrivalPad == null)
+                    {
+                        _arrivalDirtyFired = true;
+                    }
+                    else
+                    {
+                        bool online = true;
+                        bool evalOk = true;
+                        try { online = TeleportConsoleSelection.IsOnline(arrivalPad); } catch { evalOk = false; }
+                        if (evalOk && !online)
+                        {
+                            try { ProductionManager.MarkElectricGridDirty(); }
+                            catch { }
+                            Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发（窗口） 站={_lastArrivalUid ?? "?"}");
+                        }
+                        _arrivalDirtyFired = true;
+                    }
+                }
+            }
+            catch { }
             // 诊断：已关闭高频扫描日志（原每5s刷屏，导致日志误判为错误）
             // 仅在需要时手动打开：if ((int)(now) % 30 == 0) Log...
 
