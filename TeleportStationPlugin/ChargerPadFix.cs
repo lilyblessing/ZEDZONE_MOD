@@ -67,6 +67,7 @@ public static class ChargerPadFix
     public static void OnEnableRecorder_P(TerrainObject_Production __instance)
     {
         if (IsCloning) return;
+        if (!RegistrarState.Done) return;
         if (_onEnableDepth > 4) return;
         try
         {
@@ -94,6 +95,7 @@ public static class ChargerPadFix
     public static void OnEnableRecorder_S(TerrainObject_Production_StirlingGenerator __instance)
     {
         if (IsCloning) return;
+        if (!RegistrarState.Done) return;
         if (_onEnableDepth > 4) return;
         try
         {
@@ -122,6 +124,7 @@ public static class ChargerPadFix
     public static void OnEnableRecorder_All(TerrainObject __instance)
     {
         if (IsCloning) return;
+        if (!RegistrarState.Done) return;
         if (_onEnableDepth > 4) return;
         try
         {
@@ -538,6 +541,7 @@ public static class ChargerPadFix
 
     public static void GridConsumePrefix(ProductionManager __instance)
     {
+        if (!RegistrarState.Done) return; // 读档期冻结，沉降后才补表/劫持range
         try
         {
             try { if (!_clonesScanDone || _knownClones.Count == 0) { EnsureClonesInTables(); _clonesScanDone = true; } } catch { }
@@ -1730,8 +1734,8 @@ public static class ChargerPadFix
         catch { }
     }
 
-    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Build"); TeleportBindingManager.OnPlaced(__result); } catch { } }
-    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
+    public static void BuildTerrainObjectPostfix(TerrainObject __result) { if (!RegistrarState.Done) return; try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Build"); TeleportBindingManager.OnPlaced(__result); } catch { } }
+    public static void AddTerrainObjectPostfix(TerrainObject __result) { if (!RegistrarState.Done) return; try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
 
     // ═══ v0.9.23 诊断：缩放追踪（不改值，只日志，定位几秒后缩小真凶）═══
     // SO兼容：postfix void 方法，首行 return 只跳过自体逻辑、不影响游戏原生（非 bool prefix，无跳过原生语义）。
