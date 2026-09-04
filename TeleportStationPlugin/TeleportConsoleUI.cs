@@ -23,6 +23,25 @@ public class TeleportConsoleUI : MonoBehaviour
     private bool _isOpen = false;
     private float _openTime = -999f;
 
+    // P1-7/P1-8 性能优化（行为零变化）：UI 详细日志开关（默认关；失败 Warning 保留直发）+ 字体静态缓存 + 存量文件解析缓存
+    private static bool VerboseUI = false;
+    private static Font _cachedFont;
+    private static string _staleCachePath;
+    private static DateTime _staleCacheMtimeUtc;
+    private static string _staleCacheText;
+    private static List<StaleStation> _staleCacheResult;
+    private static float _staleCacheTime;
+
+    // P1-7：单行回调只捕获这一个小对象（替代 pad/padUid/display/dist 4 闭包变量 + online 捕获）
+    private sealed class RowCapture
+    {
+        public TerrainObject pad;
+        public string padUid;
+        public string display;
+        public string dist;
+        public bool online;
+    }
+
     public bool IsOpen => _isOpen;
 
     void Awake()
@@ -166,15 +185,17 @@ public class TeleportConsoleUI : MonoBehaviour
 
     private void ApplyFont(Text txt)
     {
+        // P1-7：字体静态缓存（首次走原逻辑，之后复用，每行不再全扫）
         try
         {
+            if (_cachedFont != null) { txt.font = _cachedFont; return; }
             var arial = Resources.GetBuiltinResource<Font>("Arial.ttf");
-            if (arial != null) { txt.font = arial; return; }
+            if (arial != null) { _cachedFont = arial; txt.font = arial; return; }
         } catch {}
         try
         {
             var fonts = Resources.FindObjectsOfTypeAll<Font>();
-            if (fonts != null && fonts.Length > 0 && fonts[0] != null) txt.font = fonts[0];
+            if (fonts != null && fonts.Length > 0 && fonts[0] != null) { _cachedFont = fonts[0]; txt.font = fonts[0]; }
         } catch {}
     }
 
@@ -263,6 +284,9 @@ public class TeleportConsoleUI : MonoBehaviour
                 CreateInfoRow("无可用传送台（请先放置并绑定圆盘）");
                 // 不 return：读档后活体为空时仍可列出存量站
             }
+            // P1-7：选中 UID 在循环外取一次（原每行重复查 N 次），行内只做字符串比对
+            string selUidHoisted = "";
+            try { selUidHoisted = !string.IsNullOrEmpty(consoleUid0) ? TeleportConsoleSelection.GetSelectedUid(consoleUid0) : ""; } catch {}
             foreach (var pad in candidates)
             {
                 bool online = TeleportConsoleSelection.IsOnline(pad);
@@ -272,8 +296,8 @@ public class TeleportConsoleUI : MonoBehaviour
                 bool isSelfPad = !string.IsNullOrEmpty(selfPadUid) && padUid == selfPadUid;
                 string displayName = TeleportStationUid.DisplayForPad(pad);
                 string distStr = FormatDistXY(_currentConsole, pad);
-                // 取证日志：UID 身份键 + 显示名（日志可保留 UID+名）
-                Plugin.L.LogInfo($"[TS][UI] 候选 {consoleUid0}({consoleDisp0}) -> {padUid}({displayName}) online={online} dist={distStr} self={isSelfPad}");
+                // 取证日志：UID 身份键 + 显示名（日志可保留 UID+名；P1-7 默认关闭，VerboseUI 开启才输出）
+                if (VerboseUI) Plugin.L.LogInfo($"[TS][UI] 候选 {consoleUid0}({consoleDisp0}) -> {padUid}({displayName}) online={online} dist={distStr} self={isSelfPad}");
                 // v0.9.62 活体坐标键（存量去重 + 本站坐标比对；公开方法调用，无反射）
                 string padCoord = "";
                 try { padCoord = TeleportBindingManager.CoordKey(pad); } catch {}
@@ -293,23 +317,19 @@ public class TeleportConsoleUI : MonoBehaviour
                     string label = $"{displayName} {state} 距{distStr} {padUid}";
                     if (online) label += " ★可传送";
 
-                    var padCap = pad;
-                    var padUidCap = padUid;
-                    var dispCap = displayName;
-                    var distCap = distStr;
+                    var cap = new RowCapture { pad = pad, padUid = padUid, display = displayName, dist = distStr, online = online };
                     var btn = CreateRowButton(label, true, () =>
                     {
                         if (_currentConsole == null) return;
                         string cuid = TeleportStationUid.UidFor(_currentConsole);
                         string cdisp = TeleportStationUid.DisplayForConsole(_currentConsole);
-                        Plugin.L.LogInfo($"[TS][Sel] 点选 {cuid}({cdisp}) -> {padUidCap}({dispCap}) dist={distCap} online={online}");
-                        TeleportConsoleSelection.SetSelected(_currentConsole, padCap);
-                        ShowBubble($"已选择 {dispCap}");
+                        Plugin.L.LogInfo($"[TS][Sel] 点选 {cuid}({cdisp}) -> {cap.padUid}({cap.display}) dist={cap.dist} online={cap.online}");
+                        TeleportConsoleSelection.SetSelected(_currentConsole, cap.pad);
+                        ShowBubble($"已选择 {cap.display}");
                         Close();
                     }, greyLook: !online);
-                    // 已选中的高亮（UID 比对）
-                    string selUid2 = !string.IsNullOrEmpty(consoleUid0) ? TeleportConsoleSelection.GetSelectedUid(consoleUid0) : "";
-                    if (!string.IsNullOrEmpty(selUid2) && selUid2 == padUid)
+                    // 已选中的高亮（UID 比对；selUidHoisted 在循环外一次取回，行内只比对）
+                    if (!string.IsNullOrEmpty(selUidHoisted) && selUidHoisted == padUid)
                     {
                         var img = btn.GetComponent<Image>();
                         if (img != null) img.color = new Color(0.2f, 0.55f, 0.85f, 1f);
@@ -324,7 +344,7 @@ public class TeleportConsoleUI : MonoBehaviour
                     try { actSelf = btn != null && btn.activeSelf; } catch {}
                     try { actHier = btn != null && btn.activeInHierarchy; } catch {}
                     try { tlen = label != null ? label.Length : 0; } catch {}
-                    Plugin.L.LogInfo($"[TS][UI] 行渲染成功 {padUid}({displayName}) parentOk={parentOk} childCount={cc} h={rh:F0} activeSelf={actSelf} active={actHier} tlen={tlen}");
+                    if (VerboseUI) Plugin.L.LogInfo($"[TS][UI] 行渲染成功 {padUid}({displayName}) parentOk={parentOk} childCount={cc} h={rh:F0} activeSelf={actSelf} active={actHier} tlen={tlen}");
                 }
                 catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 行渲染失败 {padUid}({displayName}) ex={re}"); }
             }
@@ -542,6 +562,18 @@ public class TeleportConsoleUI : MonoBehaviour
             string path = null;
             try { path = TeleportSaveIdentity.LoadPath("TeleportMapStations.json"); } catch {}
             if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return res;
+            // P1-8：mtime 未变且 5s 内直接复用解析结果（返回拷贝，调用方 Sort 不污染缓存；全程 try/catch，失败回退现读）
+            try
+            {
+                DateTime mtimeNow = System.IO.File.GetLastWriteTimeUtc(path);
+                float nowT = 0f;
+                try { nowT = UnityEngine.Time.realtimeSinceStartup; } catch {}
+                if (_staleCacheResult != null && _staleCachePath == path && _staleCacheMtimeUtc == mtimeNow
+                    && _staleCacheText != null && _staleCacheTime != 0f && (nowT - _staleCacheTime) < 5f)
+                {
+                    return new List<StaleStation>(_staleCacheResult);
+                }
+            } catch {}
             string txt = System.IO.File.ReadAllText(path);
             if (string.IsNullOrWhiteSpace(txt)) return res;
             int i = 0;
@@ -584,6 +616,15 @@ public class TeleportConsoleUI : MonoBehaviour
                 } catch {}
                 i = be + 1;
             }
+            // P1-8：写回解析缓存（失败静默，本次结果不受影响）
+            try
+            {
+                _staleCachePath = path;
+                try { _staleCacheMtimeUtc = System.IO.File.GetLastWriteTimeUtc(path); } catch {}
+                _staleCacheText = txt;
+                _staleCacheResult = new List<StaleStation>(res);
+                try { _staleCacheTime = UnityEngine.Time.realtimeSinceStartup; } catch { _staleCacheTime = 0f; }
+            } catch {}
         } catch {}
         return res;
     }

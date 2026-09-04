@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.74")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.75")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -318,6 +318,7 @@ public class Plugin : BasePlugin
                 if (ita != null)
                 {
                     h.Patch(ita, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.InitTerrainObjectAttrsPostfix), BindingFlags.Public | BindingFlags.Static)));
+                    h.Patch(ita, postfix: new HarmonyMethod(typeof(SourceInjector).GetMethod(nameof(SourceInjector.AttrDictRebuiltPostfix), BindingFlags.Public | BindingFlags.Static))); // P1-10A：同方法复位标记（字典重建后重补）
                     Log.LogInfo("[TS] 已挂钩 GameController.InitTerrainObjectAttrs（权威补键）");
                 }
                 else Log.LogWarning("[TS] InitTerrainObjectAttrs 挂钩失败（方法未找到）");
@@ -435,6 +436,7 @@ public class Plugin : BasePlugin
 public static class SourceInjector
 {
     private static bool _snapshotDone; // v0.9.4 临时取证：电力卡源表快照（拿充电台原版 id，切换克隆源用）
+    internal static bool _attrsPatched; // P1-10A：attr/prefab 双字典补键完成标记（字典重建后由 AttrDictRebuiltPostfix 复位）
 
     public static void AvailPostfix(object __0, ref Il2CppSystem.Collections.Generic.List<TerrainObjectAttr> __result)
     {
@@ -493,10 +495,33 @@ public static class SourceInjector
         catch (Exception e) { Plugin.L.LogWarning($"[TS] AtbyIdPostfix 异常: {e.Message.Split('\n')[0]}"); }
     }
 
-    /// <summary>v0.9.18：GetTerrainObjectAttrById prefix 短路——克隆 id 直接返回注册 attr，跳过游戏原方法（字典补键不可靠时的根治）。</summary>
+    /// <summary>P1-10A：双字典三键齐复核（缺任一键则 prefix 下次重补）。</summary>
+    private static bool AttrPrefabDictsComplete(GameController gc)
+    {
+        try
+        {
+            var d = gc?.terrainObjectAttrDic;
+            var p = gc?.terrainObjectPrefabDic;
+            if (d == null || p == null) return false;
+            return d.ContainsKey(900101) && d.ContainsKey(900102) && d.ContainsKey(900103)
+                && p.ContainsKey(900101) && p.ContainsKey(900102) && p.ContainsKey(900103);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>P1-10A：字典重建标记复位——InitTerrainObjectAttrs 会 Clear+重建字典（见 ChargerPadFix.cs），
+    /// 本文件只改 Plugin.cs，故在此另挂一个同方法 postfix 做复位（Harmony 允许多 postfix 并存），原有补丁签名不动。</summary>
+    public static void AttrDictRebuiltPostfix()
+    {
+        try { _attrsPatched = false; }
+        catch { }
+    }
+
+    /// <summary>v0.9.18：GetTerrainObjectAttrById prefix 短路——克隆 id 直接返回注册 attr，跳过游戏原方法（字典补键不可靠时的根治）。
+    /// P1-10A：补键循环仅 !_attrsPatched 时跑一次（普通原版 id 查询零字典写）。</summary>
     public static bool AttrByIdPrefix(object __0, ref TerrainObjectAttr __result, GameController __instance)
     {
-        if (__instance != null) { try { var d = __instance.terrainObjectAttrDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Attrs.TryGetValue(id, out var attr) && attr != null && !d.ContainsKey(id)) d.Add(id, attr); } } } catch { } }
+        if (!_attrsPatched && __instance != null) { try { var d = __instance.terrainObjectAttrDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Attrs.TryGetValue(id, out var attr) && attr != null && !d.ContainsKey(id)) d.Add(id, attr); } if (AttrPrefabDictsComplete(__instance)) _attrsPatched = true; } } catch { } }
         try
         {
             int id = Convert.ToInt32(__0);
@@ -513,10 +538,11 @@ public static class SourceInjector
         return true;
     }
 
-    /// <summary>v0.9.18：GetTerrainObjectPrefabById prefix 短路——克隆 id 直接返回注册 prefab，跳过游戏原方法。</summary>
+    /// <summary>v0.9.18：GetTerrainObjectPrefabById prefix 短路——克隆 id 直接返回注册 prefab，跳过游戏原方法。
+    /// P1-10A：补键循环仅 !_attrsPatched 时跑一次（普通原版 id 查询零字典写）。</summary>
     public static bool PrefabByIdPrefix(object __0, ref GameObject __result, GameController __instance)
     {
-        if (__instance != null) { try { var d = __instance.terrainObjectPrefabDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Prefabs.TryGetValue(id, out var clone) && clone != null && !d.ContainsKey(id)) d.Add(id, clone); } } } catch { } }
+        if (!_attrsPatched && __instance != null) { try { var d = __instance.terrainObjectPrefabDic; if (d != null) { int[] ids = { 900101, 900102, 900103 }; foreach (var id in ids) { if (RegistrationStore.Prefabs.TryGetValue(id, out var clone) && clone != null && !d.ContainsKey(id)) d.Add(id, clone); } if (AttrPrefabDictsComplete(__instance)) _attrsPatched = true; } } catch { } }
         try
         {
             int id = Convert.ToInt32(__0);
@@ -659,31 +685,54 @@ public class PadLayerPin : MonoBehaviour
 /// v0.6.35：Cache miss 时实时强制重载（源头自愈，防模板图标 fallback）。</summary>
 public static class IconSourceFix
 {
+    internal static readonly HashSet<int> PendingIcons = new(); // P1-10B：待节流重载的图标 id（去重；渲染热路径只入队不做 IO）
+    internal static readonly HashSet<int> IconMissLogged = new(); // P1-10B：miss 日志去重（每 id 一条）
+    internal static float NextIconRetry; // P1-10B：下次节流处理时间（Time.unscaledTime）
+
     public static void Postfix(int __0, ref Sprite __result)
     {
         try
         {
             if (__0 < 900101 || __0 > 900103) return;
             SpriteInjector.Cache.TryGetValue(__0, out var sp);
-            if (sp == null || string.IsNullOrEmpty(sp.name))
-            {
-                // v0.6.35 源头兜底：Cache 异常时实时重载（每次菜单/详情调用都自愈）
-                var def = Buildings.ById(__0);
-                if (def != null)
-                {
-                    Plugin.L.LogWarning($"[TS] 图标源头兜底重载: id={__0}");
-                    SpriteInjector.CacheSprite(def, force: true);
-                    SpriteInjector.Cache.TryGetValue(__0, out sp);
-                }
-            }
             if (sp != null && !string.IsNullOrEmpty(sp.name))
             {
                 __result = sp;
-                Plugin.L.LogInfo($"[TS] 图标源头: id={__0} → {sp.name}");
+                return; // P1-10B：命中零日志（原 LogInfo 每调用一次打一条，已删）
             }
-            else Plugin.L.LogWarning($"[TS] 图标源头兜底失败: id={__0}");
+            // P1-10B：miss 不做同步文件 IO（原 CacheSprite(force:true) 已搬入 DrainOnePendingIcon），只记 pending
+            try
+            {
+                if (Buildings.ById(__0) == null) { Plugin.L.LogWarning($"[TS] 图标源头兜底失败: id={__0}"); return; }
+                PendingIcons.Add(__0);
+                if (IconMissLogged.Add(__0)) Plugin.L.LogWarning($"[TS] 图标待加载: id={__0}（节流后台重载）");
+            }
+            catch { }
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标源头异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    /// <summary>P1-10B：节流处理一个 pending 图标（原 Postfix 内 CacheSprite(force:true) 同步 IO 逻辑搬入，
+    /// 由 RegistrationProbe.Update 每 0.5s 调一次、每次一个，全程 try/catch）。</summary>
+    internal static void DrainOnePendingIcon()
+    {
+        try
+        {
+            if (PendingIcons.Count == 0) return;
+            if (Time.unscaledTime < NextIconRetry) return;
+            NextIconRetry = Time.unscaledTime + 0.5f;
+            int pid = -1;
+            foreach (var id in PendingIcons) { pid = id; break; }
+            if (pid < 0) return;
+            try
+            {
+                var def = Buildings.ById(pid);
+                if (def != null) SpriteInjector.CacheSprite(def, force: true);
+            }
+            catch (Exception e) { Plugin.L.LogWarning($"[TS] 图标节流重载异常: {e.Message.Split('\n')[0]}"); }
+            try { PendingIcons.Remove(pid); } catch { }
+        }
+        catch { }
     }
 }
 
@@ -711,6 +760,8 @@ public class RegistrationProbe : MonoBehaviour
         try { BatteryChargeFix.Tick(); } catch { }
         // v0.9.4 P3 二期：充电台克隆盘容器微调（4×4/标题/槽数）
         try { ChargerPadFix.Tick(); } catch { }
+        // P1-10B：图标 pending 节流重载（0.5s 一次、每次一个；须在 Done 早退之前——注册完成后仍要处理）
+        try { IconSourceFix.DrainOnePendingIcon(); } catch { }
         if (RegistrarState.Done && !RegistrarState.RetryPending) return;
         // P2-B（2026-08-31）：BioGenFuel.Tick 观察采样已随 P2 验收退役（Done 后本就不执行），移除调用
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled

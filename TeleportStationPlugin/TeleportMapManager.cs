@@ -215,7 +215,9 @@ public class TeleportMapManager : MonoBehaviour
             var mapParent = GetMapParent(mp);
             if (mapParent == null) return;
 
-            var pads = CollectBoundPads();
+            // P1-9：入口一次建映射表（2×缓存FindAllById），本轮内 peer/配对查询全走表查，零逐pad全量扫描。
+            var keyMap = BuildInstanceMap();
+            var pads = CollectBoundPads(keyMap);
             var alive = new HashSet<string>();
             var liveCoords = new HashSet<string>();
 
@@ -251,7 +253,7 @@ public class TeleportMapManager : MonoBehaviour
                             long ck2 = TeleportBindingManager.GetBoundConsole(pk2);
                             if (ck2 != 0)
                             {
-                                var cobj = FindByKey(ck2) as TerrainObject;
+                                var cobj = LookupKey(keyMap, ck2) as TerrainObject;
                                 if (cobj != null) peer = TeleportStationNameManager.CoordKey(cobj);
                             }
                         } catch {}
@@ -1252,7 +1254,41 @@ public class TeleportMapManager : MonoBehaviour
         return null;
     }
 
-    private static List<TerrainObject> CollectBoundPads()
+    // P1-9：RefreshMarkers 入口一次建表（900102 圆盘＋900101 控制台合并，key=GetInstanceKey）。
+    // TeleportObjectCache.FindAllById 自带 0.5s TTL 缓存，此处 2 次调用均为缓存命中；900103（生物能）与本路径无关，不入表。
+    private static Dictionary<long, TerrainObject> BuildInstanceMap()
+    {
+        var map = new Dictionary<long, TerrainObject>();
+        try
+        {
+            List<TerrainObject> pads = null, consoles = null;
+            try { pads = TeleportObjectCache.FindAllById(900102); } catch {}
+            try { consoles = TeleportObjectCache.FindAllById(900101); } catch {}
+            if (pads != null) foreach (var t in pads)
+            {
+                if (t == null) continue;
+                try { map[GetInstanceKey(t)] = t; } catch {}
+            }
+            if (consoles != null) foreach (var t in consoles)
+            {
+                if (t == null) continue;
+                try { map[GetInstanceKey(t)] = t; } catch {}
+            }
+        } catch {}
+        return map;
+    }
+
+    // P1-9：表查＋旧 FindByKey 回退（行为保底：表 miss 时单次旧扫描，结果仍正确）。
+    private static TerrainObject LookupKey(Dictionary<long, TerrainObject> map, long key)
+    {
+        try
+        {
+            if (map != null && map.TryGetValue(key, out var t) && t != null) return t;
+        } catch {}
+        try { return FindByKey(key) as TerrainObject; } catch { return null; }
+    }
+
+    private static List<TerrainObject> CollectBoundPads(Dictionary<long, TerrainObject> map)
     {
         var res = new List<TerrainObject>();
         try
@@ -1265,7 +1301,7 @@ public class TeleportMapManager : MonoBehaviour
                 if (!TeleportBindingManager.IsPadBound(pk)) continue;
                 long ck = TeleportBindingManager.GetBoundConsole(pk);
                 if (ck == 0) continue;
-                var c = FindByKey(ck) as TerrainObject;
+                var c = LookupKey(map, ck) as TerrainObject;
                 if (c == null) continue;
                 res.Add(pad);
             }

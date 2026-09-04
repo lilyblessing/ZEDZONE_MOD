@@ -32,7 +32,6 @@ public static class ChargerPadFix
     private static bool _stirProbed; // v0.9.11 延迟重试：Stirling表段完成旗标
     private static bool _prefabProbed; // v0.9.11 延迟重试：Prefab段完成旗标
     private static float _lastDicLog = -999f;
-    private static float _lastConsumingLog = -999f;
     private static float _lastDirtyLog = -999f;
     private static float _savedConnectRange = float.NaN;
     private static float _savedPowerRange = float.NaN;
@@ -42,6 +41,7 @@ public static class ChargerPadFix
     private static bool _dicDiag;
     private static bool _buildDiag;
     private static readonly System.Collections.Generic.List<object> _knownClones = new();
+    private static bool _clonesScanDone; // P1-1：会话级全扫描一次性旗标（OnEnable 注册表续增，扫描只覆盖冷启动竞态）
     private static Il2CppSystem.Type _il2cppProdType;
     private static Il2CppSystem.Type _il2cppStirType;
 
@@ -57,6 +57,7 @@ public static class ChargerPadFix
             {
                 if (!_knownClones.Contains(__instance))
                     _knownClones.Add(__instance);
+                try { StampConsumingFlag(__instance); } catch { }
             }
         }
         catch { }
@@ -73,6 +74,7 @@ public static class ChargerPadFix
             {
                 if (!_knownClones.Contains(__instance))
                     _knownClones.Add(__instance);
+                try { StampConsumingFlag(__instance); } catch { }
             }
         }
         catch { }
@@ -90,6 +92,7 @@ public static class ChargerPadFix
             {
                 if (!_knownClones.Contains(__instance))
                     _knownClones.Add(__instance);
+                try { StampConsumingFlag(__instance); } catch { }
             }
         }
         catch { }
@@ -321,14 +324,14 @@ public static class ChargerPadFix
         catch { }
     }
 
-    // ── v0.9.12 R2：electricConsuming 兜底（2s 节流）── v0.9.19 编译期直访改造
+    // ── v0.9.12 R2：electricConsuming 兜底 ── P1-3：会话级扫一次存量后永久返回（增量由注册点/Build-Add 直接盖）
+    private static bool _consumingSwept;
     public static void EnsureConsumingFlag()
     {
         try
         {
-            float now = Time.unscaledTime;
-            if (now - _lastConsumingLog < 2f) return;
-            _lastConsumingLog = now;
+            if (_consumingSwept) return;
+            _consumingSwept = true;
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
             for (int i = 0; i < list.Count; i++)
@@ -456,7 +459,7 @@ public static class ChargerPadFix
     {
         try
         {
-            try { EnsureClonesInTables(); } catch { }
+            try { if (!_clonesScanDone || _knownClones.Count == 0) { EnsureClonesInTables(); _clonesScanDone = true; } } catch { }
             try { CompleteAllPdTables(__instance); } catch { }
             // v0.9.22：从克隆注册表补表（H&D 下 FindObjectsOfType 不可见，注册表不依赖可见性）
             try
@@ -474,6 +477,7 @@ public static class ChargerPadFix
                             try { var ta = g102.attr; if (ta != null) tid = ta.id; } catch { }
                             if (tid == 900102 || tid == 900101)
                             {
+                                try { g102.gameObject.hideFlags = HideFlags.None; } catch { }
                                 var plist = TerrainObject_Production.ActiveObjects_Production;
                                 if (plist != null && !plist.Contains(g102)) plist.Add(g102);
                             }
@@ -482,6 +486,7 @@ public static class ChargerPadFix
                                 var s = o as TerrainObject_Production_StirlingGenerator;
                                 if (s != null)
                                 {
+                                    try { s.gameObject.hideFlags = HideFlags.None; } catch { }
                                     var slist = TerrainObject_Production_StirlingGenerator.ActiveObjects_StirlingGenerator;
                                     if (slist != null && !slist.Contains(s)) slist.Add(s);
                                 }
@@ -800,6 +805,19 @@ public static class ChargerPadFix
     {
         try
         {
+            // P1-2 快路：编译期直访 g.attr，先 ReferenceEquals 再比 id；仅 null 时回退旧爬链＋反射
+            try
+            {
+                var ta = g != null ? g.attr : null;
+                if (ta != null)
+                {
+                    if (RegistrationStore.Attrs.TryGetValue(900101, out var fa1) && ReferenceEquals(ta, fa1)) return 900101;
+                    if (RegistrationStore.Attrs.TryGetValue(900102, out var fa2) && ReferenceEquals(ta, fa2)) return 900102;
+                    if (RegistrationStore.Attrs.TryGetValue(900103, out var fa3) && ReferenceEquals(ta, fa3)) return 900103;
+                    try { return ta.id; } catch { }
+                }
+            }
+            catch { }
             var to = FindTerrainObject(g.transform);
             if (to == null) return -1;
             object attr = null;
@@ -1342,6 +1360,29 @@ public static class ChargerPadFix
     {
         try
         {
+            // P1-2 快路：编译期直访 g.attr；仅 null 时回退旧爬链＋反射
+            try
+            {
+                var ta = g != null ? g.attr : null;
+                if (ta != null)
+                {
+                    bool fast = false;
+                    try { fast = (RegistrationStore.Attrs.TryGetValue(PadId, out var ourFast) && ReferenceEquals(ta, ourFast)) || ta.id == PadId; } catch { }
+                    if (fast && !_warnedTypeMiss)
+                    {
+                        _warnedTypeMiss = true;
+                        try
+                        {
+                            string tnFast = g.GetType().Name ?? "?";
+                            if (tnFast.IndexOf("BatteryCharger", StringComparison.Ordinal) < 0)
+                                Plugin.L.LogInfo($"[TS] ChargerPad 判定: 900102 组件为基类型 '{tnFast}'（存量实例），按 attr 放行容器初始化");
+                        }
+                        catch { }
+                    }
+                    return fast;
+                }
+            }
+            catch { }
             var to = FindTerrainObject(g.transform);
             if (to == null) return false;
             object attr = null;
@@ -1584,8 +1625,28 @@ public static class ChargerPadFix
         try { if (d == null) return false; var m = d.GetType().GetMethod("ContainsKey"); if (m == null) return false; return (bool)m.Invoke(d, new object[] { id }); } catch { return false; }
     }
 
-    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); if (EnableDiag) ScaleDiagLog(__result, "Build"); TeleportBindingManager.OnPlaced(__result); } catch { } }
-    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
+    // ── P1-3：900102 electricConsuming 放置即盖（一次性语义前移到注册点，本方法供 OnEnable/Build/Add 复用）──
+    private static void StampConsumingFlag(TerrainObject t)
+    {
+        try
+        {
+            if (t == null) return;
+            var a = t.attr;
+            if (a == null) return;
+            int sid = -1;
+            try
+            {
+                if (RegistrationStore.Attrs.TryGetValue(900102, out var our) && ReferenceEquals(a, our)) sid = 900102;
+                else sid = a.id;
+            }
+            catch { return; }
+            if (sid == 900102) { try { a.electricConsuming = true; } catch { } }
+        }
+        catch { }
+    }
+
+    public static void BuildTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Build"); TeleportBindingManager.OnPlaced(__result); } catch { } }
+    public static void AddTerrainObjectPostfix(TerrainObject __result) { try { FixCloneSprites(__result); StampConsumingFlag(__result); if (EnableDiag) ScaleDiagLog(__result, "Add"); TeleportBindingManager.OnPlaced(__result); } catch { } }
 
     // ═══ v0.9.23 诊断：缩放追踪（不改值，只日志，定位几秒后缩小真凶）═══
     public static void ScaleGuardPostfix(TerrainObject __instance) { try { if (EnableDiag) ScaleDiagLog(__instance, "Init"); TeleportBindingManager.OnPlaced(__instance); } catch { } }

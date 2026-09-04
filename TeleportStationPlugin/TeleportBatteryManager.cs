@@ -38,15 +38,22 @@ public static class TeleportBatteryManager
             if (inv == null) return false;
             var list = GetBatteryItems(inv);
             if (list == null || list.Count == 0) return false;
-            // 按电量降序，优先扣满电的
-            list.Sort((a,b) => GetCharge(b).CompareTo(GetCharge(a)));
+            // 按电量降序，优先扣满电的（P1-4：先物化电量表，比较器只查表不再调 GetCharge；表取值走缓存 MethodInfo 的 GetCharge）
             float need = amount;
             var snapshot = new System.Collections.Generic.Dictionary<object,float>();
             foreach (var it in list) snapshot[it] = GetCharge(it);
+            list.Sort((a,b) =>
+            {
+                float ca = 0f, cb = 0f;
+                try { if (!snapshot.TryGetValue(a, out ca)) ca = GetCharge(a); } catch { }
+                try { if (!snapshot.TryGetValue(b, out cb)) cb = GetCharge(b); } catch { }
+                return cb.CompareTo(ca);
+            });
             foreach (var item in list)
             {
                 if (need <= 0.001f) break;
-                float charge = GetCharge(item);
+                float charge;
+                try { if (!snapshot.TryGetValue(item, out charge)) charge = GetCharge(item); } catch { charge = GetCharge(item); }
                 if (charge <= 0.001f) continue;
                 float take = Math.Min(charge, need);
                 SetCharge(item, charge - take);
@@ -179,12 +186,33 @@ public static class TeleportBatteryManager
         return -1;
     }
 
+    // P1-4: MethodInfo 缓存（懒初始化一次，失败置 null 则调用处回退现查，保证永不抛）
+    private static MethodInfo _mGetCharge = null;
+    private static bool _mGetChargeInit = false;
+    private static MethodInfo _mSetCharge = null;
+    private static bool _mSetChargeInit = false;
+    private static MethodInfo CachedGetChargeMethod()
+    {
+        if (_mGetChargeInit) return _mGetCharge;
+        _mGetChargeInit = true;
+        try { _mGetCharge = typeof(ItemFeature_Battery).GetMethod("GetBatteryRemainingPower", BindingFlags.Public | BindingFlags.Static); } catch { _mGetCharge = null; }
+        return _mGetCharge;
+    }
+    private static MethodInfo CachedSetChargeMethod()
+    {
+        if (_mSetChargeInit) return _mSetCharge;
+        _mSetChargeInit = true;
+        try { _mSetCharge = typeof(ItemData).GetMethod("SetProperty", new Type[]{ typeof(string), typeof(string) }); } catch { _mSetCharge = null; }
+        return _mSetCharge;
+    }
+
     private static float GetCharge(object itemData)
     {
         try
         {
-            // 原生 API：ItemFeature_Battery.GetBatteryRemainingPower
-            var m = typeof(ItemFeature_Battery).GetMethod("GetBatteryRemainingPower", BindingFlags.Public | BindingFlags.Static);
+            // 原生 API：ItemFeature_Battery.GetBatteryRemainingPower（P1-4：缓存 MethodInfo，null 回退现查）
+            var m = CachedGetChargeMethod();
+            if (m == null) { try { m = typeof(ItemFeature_Battery).GetMethod("GetBatteryRemainingPower", BindingFlags.Public | BindingFlags.Static); } catch { m = null; } }
             if (m != null)
             {
                 var v = m.Invoke(null, new object[]{ (ItemData)itemData });
@@ -205,8 +233,9 @@ public static class TeleportBatteryManager
         string newStr = newCharge.ToString("F2");
         try
         {
-            // 原生正确路径：直接写 itemPropertyPairs["RemainingBattery"]，ChargeBattery 负值无效（if wh<=0 return 0）
-            var m = typeof(ItemData).GetMethod("SetProperty", new Type[]{ typeof(string), typeof(string) });
+            // 原生正确路径：直接写 itemPropertyPairs["RemainingBattery"]，ChargeBattery 负值无效（if wh<=0 return 0）（P1-4：缓存 MethodInfo，null 回退现查）
+            var m = CachedSetChargeMethod();
+            if (m == null) { try { m = typeof(ItemData).GetMethod("SetProperty", new Type[]{ typeof(string), typeof(string) }); } catch { m = null; } }
             if (m != null)
             {
                 m.Invoke(itemData, new object[]{ "RemainingBattery", newStr });

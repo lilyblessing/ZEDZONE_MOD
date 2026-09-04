@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 namespace TeleportStationPlugin;
@@ -13,6 +14,86 @@ namespace TeleportStationPlugin;
 public static class TeleportStationUid
 {
     public const string Prefix = "TS-";
+
+    // P1-6 显示热点缓存：key=TerrainObject 实例键（GetInstanceID），value=UID/坐标串。
+    // DisplayForPad（标记刷新每 pad）与 DisplayForConsole 命中直接返回，免重复派生字符串；
+    // DisplayForUid 经 ReverseLookupKey 反查命中后走键直取，跳过 FindPadByUid 全盘扫描（先用 CachedUidFor 校验 UID 一致）。
+    // TODO(正确性复核①): 缓存无主动失效，对象销毁/切档后实例键可能复用；待放置/绑定/Cleanup 接线 Invalidate* 后复核。
+    private static readonly Dictionary<long, string> _uidCache = new Dictionary<long, string>();
+    private static readonly Dictionary<long, string> _coordCache = new Dictionary<long, string>();
+
+    /// <summary>清空 UID/坐标缓存（供后续放置/绑定/Cleanup 接线预留，本轮暂无调用方）。</summary>
+    public static void InvalidateUidCache()
+    {
+        try { _uidCache.Clear(); _coordCache.Clear(); } catch { }
+    }
+
+    /// <summary>清空本类全部缓存（同 InvalidateUidCache，预留统一入口）。</summary>
+    public static void InvalidateAll()
+    {
+        try { _uidCache.Clear(); _coordCache.Clear(); } catch { }
+    }
+
+    private static string CachedUidFor(TerrainObject t)
+    {
+        try
+        {
+            if (t == null) return "";
+            long key = GetInstanceKey(t);
+            string cached;
+            if (_uidCache.TryGetValue(key, out cached)) return cached ?? "";
+            string uid = UidFor(t);
+            try
+            {
+                _uidCache[key] = uid;
+                string c = CoordFromUid(uid);
+                if (!string.IsNullOrEmpty(c)) _coordCache[key] = c;
+            }
+            catch { }
+            return uid;
+        }
+        catch { return ""; }
+    }
+
+    private static string CachedCoordFor(TerrainObject t, long key)
+    {
+        try
+        {
+            string cached;
+            if (_coordCache.TryGetValue(key, out cached)) return cached ?? "";
+            string c = "";
+            try { c = TeleportBindingManager.CoordKey(t); } catch { }
+            if (string.IsNullOrEmpty(c)) c = CoordFromUid(CachedUidFor(t));
+            try { if (!string.IsNullOrEmpty(c)) _coordCache[key] = c; } catch { }
+            return c ?? "";
+        }
+        catch { return ""; }
+    }
+
+    private static void CachePair(long key, string uid, string coord)
+    {
+        try
+        {
+            if (key == 0) return;
+            if (!string.IsNullOrEmpty(uid)) _uidCache[key] = uid;
+            if (!string.IsNullOrEmpty(coord)) _coordCache[key] = coord;
+        }
+        catch { }
+    }
+
+    private static long ReverseLookupKey(string uid)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(uid)) return 0;
+            foreach (var kv in _uidCache)
+            {
+                if (kv.Value == uid) return kv.Key;
+            }
+            return 0;
+        }
+        catch { return 0; }
+    }
 
     /// <summary>由活体对象派生 UID；失败返回 ""（不编造）。</summary>
     public static string UidFor(TerrainObject t)
@@ -41,7 +122,18 @@ public static class TeleportStationUid
 
     public static bool IsUid(string s)
     {
-        try { return !string.IsNullOrEmpty(s) && !string.IsNullOrEmpty(CoordFromUid(s)); }
+        try
+        {
+            // 等价于 CoordFromUid(s) 非空（前缀 + 去空白后非空 + 含逗号），全程无 Substring/Trim 分配。
+            if (string.IsNullOrEmpty(s) || s.Length <= Prefix.Length) return false;
+            if (!s.StartsWith(Prefix, StringComparison.Ordinal)) return false;
+            if (s.IndexOf(',', Prefix.Length) < Prefix.Length) return false;
+            for (int i = Prefix.Length; i < s.Length; i++)
+            {
+                if (!char.IsWhiteSpace(s[i])) return true;
+            }
+            return false;
+        }
         catch { return false; }
     }
 
@@ -73,10 +165,26 @@ public static class TeleportStationUid
                 try
                 {
                     string live = null;
-                    var pad = TeleportBindingManager.FindPadByUid(uid);
+                    TerrainObject pad = null;
+                    try
+                    {
+                        // P1-6：缓存命中走键直取（FindConsoleByKey 底层为通用 FindByKey），跳过 FindPadByUid 全盘扫描；
+                        // 命中后必须用 CachedUidFor 校验 UID 一致（防实例键复用），失败则回落旧级联。
+                        long hitKey = ReverseLookupKey(uid);
+                        if (hitKey != 0)
+                        {
+                            var cachedObj = TeleportBindingManager.FindConsoleByKey(hitKey);
+                            if (cachedObj != null && CachedUidFor(cachedObj) == uid)
+                                pad = cachedObj;
+                        }
+                    }
+                    catch { }
+                    if (pad == null)
+                        pad = TeleportBindingManager.FindPadByUid(uid);
                     if (pad != null)
                     {
                         long pk = GetInstanceKey(pad);
+                        CachePair(pk, uid, coord);
                         long ck = TeleportBindingManager.GetBoundConsole(pk);
                         if (ck != 0)
                         {
@@ -91,6 +199,7 @@ public static class TeleportStationUid
                         var console2 = TeleportBindingManager.FindConsoleByUid(uid);
                         if (console2 != null)
                         {
+                            try { CachePair(GetInstanceKey(console2), uid, coord); } catch { }
                             string n2;
                             if (TeleportStationNameManager.TryGetCustomName(console2, out n2) && !string.IsNullOrWhiteSpace(n2))
                                 live = n2;
@@ -132,7 +241,7 @@ public static class TeleportStationUid
             catch { }
             try
             {
-                string pck = TeleportBindingManager.CoordKey(pad);
+                string pck = CachedCoordFor(pad, pk);
                 if (!string.IsNullOrEmpty(pck))
                 {
                     string n2 = TeleportStationNameManager.GetNameByCoord(pck);
@@ -140,7 +249,7 @@ public static class TeleportStationUid
                 }
             }
             catch { }
-            string uid = UidFor(pad);
+            string uid = CachedUidFor(pad);
             return string.IsNullOrEmpty(uid) ? "未知站点" : uid;
         }
         catch { return "未知站点"; }
@@ -155,7 +264,7 @@ public static class TeleportStationUid
             string n;
             if (TeleportStationNameManager.TryGetCustomName(console, out n) && !string.IsNullOrWhiteSpace(n))
                 return n;
-            string uid = UidFor(console);
+            string uid = CachedUidFor(console);
             return string.IsNullOrEmpty(uid) ? "未知站点" : uid;
         }
         catch { return "未知站点"; }

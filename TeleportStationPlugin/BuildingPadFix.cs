@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -27,6 +28,9 @@ public static class BuildingPadFix
     private static float _lastScan = -1f;
     private static int _fxBgId = -1;
     private static readonly System.Collections.Generic.HashSet<long> _pinned = new(); // 层钉日志去重（写回重钉不再刷屏）
+    private static readonly Dictionary<int, byte> _classified = new(); // P1-5 分类缓存：1=是盘/2=非盘（key=GetInstanceID，未命中跑一次IsPadInstance后记表）
+    private static readonly Dictionary<int, SortingGroup> _sgCache = new(); // P1-5 盘SortingGroup句柄缓存（使用前判空，被销毁删键回退重取）
+    private static float _nextFullScan = -1f; // P1-5 10s整表重扫兜底（到期清空_classified强制重判，不清_sgCache）
 
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流——实例级微秒开销）。</summary>
     public static void Tick()
@@ -39,13 +43,57 @@ public static class BuildingPadFix
             if (_fxBgId < 0) _fxBgId = SortingLayer.NameToID("FX_BG");
             if (_fxBgId <= 0) return; // FX_BG 未注册（内置层，理论不存在）
 
+            // P1-5 10s整表重扫兜底：清空_classified强制重判（不清_sgCache，按需失效）
+            try
+            {
+                if (_nextFullScan < 0f) _nextFullScan = now + 10f;
+                else if (now >= _nextFullScan) { _nextFullScan = now + 10f; try { _classified.Clear(); } catch { } }
+            }
+            catch { }
+
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) return;
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
-                if (g == null || !IsPadInstance(g)) continue;
-                var sg = Reflect.Get(g, "m_sortingGroup") as SortingGroup;
+                if (g == null) continue;
+                int key = 0;
+                try { key = g.GetInstanceID(); }
+                catch { continue; }
+                bool isPad;
+                try
+                {
+                    if (_classified.TryGetValue(key, out byte cls))
+                    {
+                        if (cls == 2) continue; // 已知非盘：O(1)跳过
+                        isPad = true; // 已知是盘：跳过IsPadInstance直达钉层逻辑
+                    }
+                    else
+                    {
+                        isPad = IsPadInstance(g); // 未命中：跑一次原判定后记表
+                        try { _classified[key] = isPad ? (byte)1 : (byte)2; }
+                        catch { }
+                        if (!isPad)
+                        {
+                            try { _sgCache.Remove(key); } // 按需失效：非盘不留旧句柄
+                            catch { }
+                            continue;
+                        }
+                    }
+                }
+                catch { continue; }
+                SortingGroup sg = null;
+                try
+                {
+                    if (!_sgCache.TryGetValue(key, out sg) || sg == null)
+                    {
+                        sg = Reflect.Get(g, "m_sortingGroup") as SortingGroup; // 缓存未命中/句柄失效：回退重取
+                        if (sg == null) continue; // 本轮取不到不缓存，下个0.5s周期重试
+                        try { _sgCache[key] = sg; }
+                        catch { }
+                    }
+                }
+                catch { continue; }
                 if (sg == null) continue;
                 try
                 {
