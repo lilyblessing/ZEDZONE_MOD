@@ -40,6 +40,7 @@ public static class TeleportBatteryManager
             if (list == null || list.Count == 0) return false;
             // 按电量降序，优先扣满电的（P1-4：先物化电量表，比较器只查表不再调 GetCharge；表取值走缓存 MethodInfo 的 GetCharge）
             float need = amount;
+            bool __skipLogged = false; // P2-3：非86跳过日志去重标记（本轮最多一条；既有扣减/回滚日志一字不动）
             var snapshot = new System.Collections.Generic.Dictionary<object,float>();
             foreach (var it in list) snapshot[it] = GetCharge(it);
             list.Sort((a,b) =>
@@ -52,6 +53,14 @@ public static class TeleportBatteryManager
             foreach (var item in list)
             {
                 if (need <= 0.001f) break;
+                // P2-3：非86前置过滤（GetCharge 反射探路只走86；扣费顺序/快照/回滚语义不动）
+                int __iid = -1;
+                try { __iid = GetItemId(item); } catch { __iid = -1; }
+                if (__iid != BatteryItemId)
+                {
+                    try { if (!__skipLogged) { Plugin.L?.LogInfo($"[TS][Battery] 跳过非电池 id={__iid}（去重：本轮仅此一条）"); __skipLogged = true; } } catch { }
+                    continue;
+                }
                 float charge;
                 try { if (!snapshot.TryGetValue(item, out charge)) charge = GetCharge(item); } catch { charge = GetCharge(item); }
                 if (charge <= 0.001f) continue;

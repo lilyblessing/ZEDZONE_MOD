@@ -44,6 +44,8 @@ public class TeleportConsoleMenuUI : MonoBehaviour
         if (Instance != null && Instance != this) { Destroy(this); return; }
         Instance = this;
         UnityEngine.Object.DontDestroyOnLoad(gameObject);
+        // P2-7：初始即 disable 自身，首帧起零成本；ShowForConsole 恢复，Close 再次 disable
+        try { enabled = false; } catch {}
     }
     void OnDestroy() { if (Instance == this) Instance = null; }
 
@@ -232,6 +234,8 @@ public class TeleportConsoleMenuUI : MonoBehaviour
         _canvasGO.SetActive(true);
         _isOpen = true;
         _openTime = Time.unscaledTime;
+        // P2-7：打开时恢复自身 Update（ESC/F 关闭处理用）；关闭时见 Close
+        try { enabled = true; } catch {}
         if (_promptGO != null) _promptGO.SetActive(false);
         Plugin.L.LogInfo($"[TS][Menu] 打开控制台菜单 console={GetInstanceKey(console)}");
     }
@@ -241,12 +245,22 @@ public class TeleportConsoleMenuUI : MonoBehaviour
         if (_canvasGO != null) _canvasGO.SetActive(false);
         _isOpen = false;
         _currentConsole = null;
+        // P2-7：关闭后 disable 自身，Update 零成本（Button 回调在独立组件上，不受本 enabled 影响；下次 Show 恢复）
+        try { enabled = false; } catch {}
     }
 
     void Update()
     {
         try
         {
+            // P2-7 等效门控：若被外部 re-enable 但面板仍关，保留 P6.9 prompt 熄灭语义后首帧自 disable（关面板后零成本）
+            if (!_isOpen)
+            {
+                // P6.9 prompt disabled - native InteractManager handles external F, MenuUI only for internal delegate
+                if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
+                try { enabled = false; } catch {}
+                return;
+            }
             EnsureTypeCache();
             EnsureUI();
             // Menu ESC handling
@@ -266,10 +280,6 @@ public class TeleportConsoleMenuUI : MonoBehaviour
                 if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
                 return;
             }
-
-            // P6.9 prompt disabled - native InteractManager handles external F, MenuUI only for internal delegate
-            if (_promptGO != null && _promptGO.activeSelf) _promptGO.SetActive(false);
-            return;
         } catch (Exception e) { Plugin.L.LogWarning($"[TS][Menu] Update 异常: {e.Message.Split('\n')[0]}"); }
     }
 
@@ -343,16 +353,9 @@ public class TeleportConsoleMenuUI : MonoBehaviour
         try { return (long)t.GetInstanceID(); } catch { try { return (long)t.Pointer; } catch { return t.GetHashCode(); } }
     }
 
+    // P2-6：改走 TeleportObjectCache 统一入口（只读引用 Cache；原直扫全表逻辑删除，语义同：未命中返回 null）
     private static TerrainObject FindByKey(long key)
     {
-        try
-        {
-            var all = Resources.FindObjectsOfTypeAll<TerrainObject>();
-            if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
-            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var list = f?.GetValue(null) as System.Collections.Generic.List<object>;
-            if (list != null) foreach (var o in list) { var c = o as Component; if (c == null) continue; var tr = c.transform; int d = 0; Component found = null; while (tr != null && d++ < 8) { foreach (var comp in tr.GetComponents<Component>()) if (comp != null && comp.GetType().Name.Contains("TerrainObject")) { found = comp; break; } if (found != null) break; tr = tr.parent; } var tt = found as TerrainObject; if (tt != null && GetInstanceKey(tt) == key) return tt; }
-        } catch {}
-        return null;
+        try { return TeleportObjectCache.FindByKey(key); } catch { return null; }
     }
 }

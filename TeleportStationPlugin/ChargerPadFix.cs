@@ -24,10 +24,13 @@ public static class ChargerPadFix
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
+    internal static TerrainObject_Production[] _sharedProdSnapshot; // P2-2：双Tick共享快照（任一Tick先到且过期则拷贝一次刷新）
+    internal static float _sharedProdSnapTime = -999f; // P2-2：快照时间戳（Time.realtimeSinceStartup）
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
+    private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
     private static bool _stirProbed; // v0.9.11 延迟重试：Stirling表段完成旗标
     private static bool _prefabProbed; // v0.9.11 延迟重试：Prefab段完成旗标
@@ -56,7 +59,10 @@ public static class ChargerPadFix
             if (id == 900101 || id == 900102 || id == 900103)
             {
                 if (!_knownClones.Contains(__instance))
+                {
                     _knownClones.Add(__instance);
+                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                }
                 try { StampConsumingFlag(__instance); } catch { }
             }
         }
@@ -73,7 +79,10 @@ public static class ChargerPadFix
             if (id == 900101 || id == 900102 || id == 900103)
             {
                 if (!_knownClones.Contains(__instance))
+                {
                     _knownClones.Add(__instance);
+                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                }
                 try { StampConsumingFlag(__instance); } catch { }
             }
         }
@@ -91,11 +100,45 @@ public static class ChargerPadFix
             if (id == 900101 || id == 900102 || id == 900103)
             {
                 if (!_knownClones.Contains(__instance))
+                {
                     _knownClones.Add(__instance);
+                    try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
+                }
                 try { StampConsumingFlag(__instance); } catch { }
             }
         }
         catch { }
+    }
+
+    /// <summary>P2-2 共享快照：命中（≤0.5s）直接复用；过期则拷贝一次刷新。取不到活列表返回旧快照（可null），
+    /// 调用方回退活列表直读，不崩。只用 Count+索引器（全仓既有用法），不调 ToArray（无盘上先例，免编译风险）。</summary>
+    internal static TerrainObject_Production[] GetSharedProdSnapshot()
+    {
+        try
+        {
+            float now = Time.realtimeSinceStartup;
+            var s = _sharedProdSnapshot;
+            try { if (s != null && now - _sharedProdSnapTime <= 0.5f) return s; } catch { }
+            var live = TerrainObject_Production.ActiveObjects_Production;
+            if (live == null) return s;
+            TerrainObject_Production[] arr = null;
+            try
+            {
+                int c = live.Count;
+                var tmp = new TerrainObject_Production[c];
+                for (int i = 0; i < c; i++) { try { tmp[i] = live[i]; } catch { } }
+                arr = tmp;
+            }
+            catch { arr = null; }
+            if (arr != null)
+            {
+                _sharedProdSnapshot = arr;
+                try { _sharedProdSnapTime = now; } catch { }
+                return arr;
+            }
+            return s;
+        }
+        catch { try { return _sharedProdSnapshot; } catch { return null; } }
     }
 
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
@@ -113,9 +156,10 @@ public static class ChargerPadFix
             try { EnsureConsumingFlag(); } catch { }
             // P6.8: 控制台外部已原生化，不再每 0.5s 轮询
             // try { TeleportConsoleInteractFix.Tick(); } catch { }
-            var list = TerrainObject_Production.ActiveObjects_Production;
+            // P2-2：吃共享快照（本Tick先到且过期则在Get内拷贝一次；BuildingPadFix侧同吃）。节流相位与下述判定逻辑不动。
+            var list = GetSharedProdSnapshot();
             if (list == null) return;
-            for (int i = 0; i < list.Count; i++)
+            for (int i = 0; i < list.Length; i++)
             {
                 var g = list[i];
                 if (g == null) continue;
@@ -192,6 +236,7 @@ public static class ChargerPadFix
         try
         {
             if (__instance == null) return;
+            try { _pdTablesCompleted = false; } catch { } // P2-1：场景加载权威重建→新世界新PD集，脏位复位
             bool did = false;
             try
             {
@@ -717,6 +762,9 @@ public static class ChargerPadFix
     private static int CompleteAllPdTables(ProductionManager mgr)
     {
         int n = 0;
+        // P2-1 脏位：会话内全扫一次即够；增量实例不依赖本全扫（Tick.EnsurePdTablesOnce经_pdFixed去重逐个补，OnEnable新注册复位脏位）。
+        try { if (_pdTablesCompleted) return 0; } catch { }
+        try { if (_knownClones.Count == 0) return 0; } catch { } // 无克隆早退（不置脏位，后续新放盘仍会全扫一次）
         try
         {
             if (mgr != null)
@@ -779,6 +827,7 @@ public static class ChargerPadFix
         }
         catch { }
         if (n > 0) Plugin.L.LogInfo($"[TS] 重扫前PD全表补齐 {n} 字段（含原生物件）");
+        try { _pdTablesCompleted = true; } catch { } // P2-1：首次跑完置位，后续GridConsume跳过
         return n;
     }
 

@@ -51,9 +51,25 @@ public static class BuildingPadFix
             }
             catch { }
 
-            var list = TerrainObject_Production.ActiveObjects_Production;
-            if (list == null) return;
-            for (int i = 0; i < list.Count; i++)
+            // P2-2：吃ChargerPadFix共享快照（对侧先到已刷则复用，零拷贝；null/过期则自己刷一份，不崩）。节流相位与下述判定逻辑不动。
+            TerrainObject_Production[] snap = null;
+            try { snap = ChargerPadFix.GetSharedProdSnapshot(); } catch { snap = null; }
+            if (snap == null)
+            {
+                try
+                {
+                    var live = TerrainObject_Production.ActiveObjects_Production;
+                    if (live == null) return;
+                    int c = live.Count;
+                    var tmp = new TerrainObject_Production[c];
+                    for (int k = 0; k < c; k++) { try { tmp[k] = live[k]; } catch { } }
+                    snap = tmp;
+                }
+                catch { return; }
+                if (snap == null) return;
+            }
+            var list = snap;
+            for (int i = 0; i < list.Length; i++)
             {
                 var g = list[i];
                 if (g == null) continue;

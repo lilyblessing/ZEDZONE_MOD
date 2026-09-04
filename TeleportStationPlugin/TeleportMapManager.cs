@@ -33,6 +33,12 @@ public class TeleportMapManager : MonoBehaviour
     // v0.9.61 标记键改为字符串：活体 "i:{instanceId}"，持久补齐 "c:{x,y}"（实例ID只做运行时关联）。
     private Dictionary<string, GameObject> _markers = new();
     private Dictionary<string, Text> _labels = new();
+    // P2-5：随 marker 缓存 TerrainObject 句柄（建 marker 时写入 NoteHandle），使用前判空/销毁有效性，
+    // 0.25s 节流复验（到期单次 LookupKey 重取一次）。slot 命名：活体 pad 用 marker 键本身；
+    // 对端 console 用 "peer:"+marker键。P1-9 的 BuildInstanceMap/LookupKey 本体不动，仅调用侧走缓存。
+    private readonly Dictionary<string, TerrainObject> _handleCache = new();
+    private readonly Dictionary<string, float> _handleVerifyAt = new();
+    private const float HandleReverifySeconds = 0.25f;
     // v0.9.61 远站持久坐标表（复用木牌“存量数据而非活体”思想，自建表不污染原生木牌）：
     // coord "x,y" -> 站记录（静态坐标+上次实测名/在线态），存 TeleportMapStations.json。
     private readonly Dictionary<string, StationRec> _persisted = new();
@@ -199,6 +205,8 @@ public class TeleportMapManager : MonoBehaviour
             foreach (var kv in _markers) try { if (kv.Value != null) UnityEngine.Object.Destroy(kv.Value); } catch {}
             _markers.Clear();
             _labels.Clear();
+            try { _handleCache.Clear(); } catch {} // P2-5：清标记时同清句柄缓存
+            try { _handleVerifyAt.Clear(); } catch {}
         } catch {}
     }
 
@@ -253,7 +261,9 @@ public class TeleportMapManager : MonoBehaviour
                             long ck2 = TeleportBindingManager.GetBoundConsole(pk2);
                             if (ck2 != 0)
                             {
-                                var cobj = LookupKey(keyMap, ck2) as TerrainObject;
+                                // P2-5：对端 console 句柄随 marker 缓存（slot="peer:"+padKey），0.25s 内有效则零反射；
+                                // 到期/失效时单次 LookupKey 重取一次（P1-9 BuildInstanceMap/LookupKey 本体不动）。
+                                var cobj = ResolveHandleCached("peer:" + padKey, ck2, keyMap);
                                 if (cobj != null) peer = TeleportStationNameManager.CoordKey(cobj);
                             }
                         } catch {}
@@ -346,6 +356,7 @@ public class TeleportMapManager : MonoBehaviour
                                 _labels[padKey] = ntxt;
                             }
                             _markers[padKey] = go;
+                            try { NoteHandle(padKey, pad); } catch {} // P2-5：建 marker 时写入 pad 句柄
                             Plugin.L.LogInfo($"[TS][Map] 创建标记(prefab) pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}");
                         }
                         catch (Exception exPrefab)
@@ -361,6 +372,7 @@ public class TeleportMapManager : MonoBehaviour
                             go.transform.SetParent(mapParent, false); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
                             try { var btnFb = go.AddComponent<Button>(); btnFb.interactable = true; var capFb = pad; btnFb.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capFb); } catch {} })); } catch {}
                             _markers[padKey] = go;
+                            try { NoteHandle(padKey, pad); } catch {} // P2-5：建 marker 时写入 pad 句柄（prefab 回退分支）
                             var labelGO2 = new GameObject("Label"); labelGO2.transform.SetParent(go.transform, false);
                             var txt2 = labelGO2.AddComponent<Text>(); txt2.alignment = TextAnchor.UpperCenter; txt2.horizontalOverflow = HorizontalWrapMode.Overflow; txt2.verticalOverflow = VerticalWrapMode.Overflow; txt2.fontSize = 12; txt2.fontStyle = FontStyle.Bold; txt2.supportRichText = true; txt2.color = Color.white; ApplyFont(txt2);
                             var lrt2 = txt2.rectTransform; lrt2.anchorMin = new Vector2(0.5f,0.5f); lrt2.anchorMax = new Vector2(0.5f,0.5f); lrt2.pivot = new Vector2(0.5f,1f); lrt2.anchoredPosition = new Vector2(0f,-18f); lrt2.sizeDelta = new Vector2(120f,36f);
@@ -395,6 +407,7 @@ public class TeleportMapManager : MonoBehaviour
                         rt.localScale = Vector3.one;
 
                         _markers[padKey] = go;
+                        try { NoteHandle(padKey, pad); } catch {} // P2-5：建 marker 时写入 pad 句柄（自建分支）
 
                         var labelGO = new GameObject("Label");
                         labelGO.transform.SetParent(go.transform, false);
@@ -440,6 +453,7 @@ public class TeleportMapManager : MonoBehaviour
                         if (txt.text != t) txt.text = t;
                     }
                     if (go.transform.parent != mapParent) go.transform.SetParent(mapParent, false);
+                    try { NoteHandle(padKey, pad); } catch {} // P2-5：存量 marker 写透 pad 句柄（本分支其余行为不变）
                 }
             }
             // v0.9.61 远站补齐：持久坐标表中有、活体未画的站（未绑定/未加载/玩家在远处）同样建标记。
@@ -486,6 +500,8 @@ public class TeleportMapManager : MonoBehaviour
                 try { if (_markers.TryGetValue(k, out var go2) && go2 != null) UnityEngine.Object.Destroy(go2); } catch {}
                 _markers.Remove(k);
                 _labels.Remove(k);
+                try { _handleCache.Remove(k); _handleCache.Remove("peer:" + k); } catch {} // P2-5：随 marker 同删句柄
+                try { _handleVerifyAt.Remove(k); _handleVerifyAt.Remove("peer:" + k); } catch {}
             }
             if (toRemove.Count > 0) Plugin.L.LogInfo($"[TS][Map] 清理标记 {toRemove.Count} 余 {_markers.Count}");
         }
@@ -1288,6 +1304,48 @@ public class TeleportMapManager : MonoBehaviour
         try { return FindByKey(key) as TerrainObject; } catch { return null; }
     }
 
+    // P2-5：建 marker 时写入句柄（全程 try/catch，失败静默，标记行为不变）。
+    private void NoteHandle(string slot, TerrainObject handle)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(slot)) return;
+            float now = 0f; try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
+            if (handle != null) _handleCache[slot] = handle;
+            else _handleCache.Remove(slot);
+            _handleVerifyAt[slot] = now + HandleReverifySeconds;
+        } catch {}
+    }
+
+    // P2-5：句柄缓存＋节流复验。缓存命中且未销毁（Unity 销毁后 == null）且 0.25s 内有效 → 零反射直接返回；
+    // 缺失/已销毁/到期 → 单次 LookupKey 重取一次并刷新节流戳。失败返回 null（调用侧原有 null 检查兜底）。
+    private TerrainObject ResolveHandleCached(string slot, long key, Dictionary<long, TerrainObject> keyMap)
+    {
+        try
+        {
+            float now = 0f; try { now = Time.unscaledTime; } catch { now = Time.realtimeSinceStartup; }
+            try
+            {
+                if (!string.IsNullOrEmpty(slot) && _handleCache.TryGetValue(slot, out var cached) && cached != null)
+                {
+                    if (_handleVerifyAt.TryGetValue(slot, out var validUntil) && now < validUntil) return cached;
+                }
+            } catch {}
+            TerrainObject fresh = null;
+            try { fresh = LookupKey(keyMap, key); } catch { fresh = null; }
+            try
+            {
+                if (!string.IsNullOrEmpty(slot))
+                {
+                    if (fresh != null) _handleCache[slot] = fresh;
+                    else _handleCache.Remove(slot);
+                    _handleVerifyAt[slot] = now + HandleReverifySeconds;
+                }
+            } catch {}
+            return fresh;
+        } catch { return null; }
+    }
+
     private static List<TerrainObject> CollectBoundPads(Dictionary<long, TerrainObject> map)
     {
         var res = new List<TerrainObject>();
@@ -1342,19 +1400,10 @@ public class TeleportMapManager : MonoBehaviour
         return null;
     }
 
+    // P2 收尾：只读委托统一入口（查 900101+900102 两张 0.5s TTL 缓存表，命中零扫描；未中返 null，语义同旧直扫）。
     private static TerrainObject FindByKey(long key)
     {
-        try
-        {
-            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var list = f?.GetValue(null) as List<object>;
-            if (list != null) foreach (var o in list) { var comp = o as Component; if (comp == null) continue; var t = FindTerrainObject(comp.transform) as TerrainObject; if (t != null && GetInstanceKey(t) == key) return t; }
-            var prods = TerrainObject_Production.ActiveObjects_Production;
-            if (prods != null) for (int i = 0; i < prods.Count; i++) { var g = prods[i]; if (g == null) continue; var t = FindTerrainObject(g.transform) as TerrainObject; if (t != null && GetInstanceKey(t) == key) return t; }
-            var all = Resources.FindObjectsOfTypeAll<TerrainObject>();
-            if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
-        } catch {}
-        return null;
+        try { return TeleportObjectCache.FindByKey(key); } catch { return null; }
     }
 
     private static void ShowBubble(string msg)

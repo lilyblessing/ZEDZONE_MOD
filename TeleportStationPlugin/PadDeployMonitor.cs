@@ -23,6 +23,7 @@ public class PadDeployMonitor : MonoBehaviour
     private static float _lastRescan = -1f;
     private static float _srCacheAt = -1f;
     private static float _lastWarn = -100f; // W2 修复：启动期 3s 内的首次告警不被吞
+    private static int _characterLayerId = int.MinValue; // P2-9：Character 层 ID 常驻（建时取一次，int.MinValue=未初始化）
 
     private void Update()
     {
@@ -106,15 +107,35 @@ public class PadDeployMonitor : MonoBehaviour
                 srs = keep.ToArray();
                 _srCache[d.GetInstanceID()] = srs;
             }
+            // P2-9：层归属快照语义——已在目标层/order 则零重复写入；sortingLayerID 整型比较替代字符串比较
+            int layerId = GetCharacterLayerId();
+            bool useId = layerId != int.MinValue;
             foreach (var sr in srs)
             {
                 if (sr == null) continue;
-                sr.sortingLayerName = "Character";
-                sr.sortingOrder = -5;
+                try
+                {
+                    if (useId) { if (sr.sortingLayerID != layerId) sr.sortingLayerID = layerId; }
+                    else sr.sortingLayerName = "Character";
+                }
+                catch { try { sr.sortingLayerName = "Character"; } catch {} }
+                if (sr.sortingOrder != -5) sr.sortingOrder = -5;
                 if (_bodySprite != null) sr.sprite = _bodySprite;
             }
         }
         catch (Exception e) { LogWarnOnce($"Apply 异常: {e.Message.Split('\n')[0]}"); }
+    }
+
+    // P2-9：Character 层 ID 建时取一次常驻；取失败返回 int.MinValue 由调用方回退字符串赋值。全程 try/catch。
+    private static int GetCharacterLayerId()
+    {
+        try
+        {
+            if (_characterLayerId == int.MinValue)
+                _characterLayerId = SortingLayer.NameToID("Character");
+        }
+        catch { }
+        return _characterLayerId;
     }
 
     private static void EnsureBodySprite()

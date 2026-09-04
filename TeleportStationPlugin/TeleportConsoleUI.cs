@@ -447,10 +447,11 @@ public class TeleportConsoleUI : MonoBehaviour
                     if (!string.IsNullOrEmpty(pck0) && TeleportBindingManager.IsPadCoordPaired(pck0))
                     {
                         list.Add(pad);
-                        Plugin.L.LogInfo($"[TS][UI] 候选(坐标对回链) {pu} coord={pck0}（活体未绑但配对文件有记录）");
+                        // P2-8：逐项说明进 Verbose（默认关；失败 Warning 保留）
+                        if (VerboseUI) Plugin.L.LogInfo($"[TS][UI] 候选(坐标对回链) {pu} coord={pck0}（活体未绑但配对文件有记录）");
                         continue;
                     }
-                    Plugin.L.LogInfo($"[TS][UI] 排除未配对圆盘 {pu} coord={pck0}（未绑定且坐标对无记录，不进列表）");
+                    if (VerboseUI) Plugin.L.LogInfo($"[TS][UI] 排除未配对圆盘 {pu} coord={pck0}（未绑定且坐标对无记录，不进列表）");
                 } catch {}
             }
         } catch {}
@@ -748,7 +749,8 @@ public class TeleportConsoleUI : MonoBehaviour
                     }, greyLook: !staleOnline);
                     if (btn == null) continue;
                     added++;
-                    Plugin.L.LogInfo($"[TS][UI] 存量补行 {staleUid}({staleDisp}) dist={distStr} persistedOnline={st.online}");
+                    // P2-8：逐行补行明细进 Verbose（默认关；汇总行保留）
+                    if (VerboseUI) Plugin.L.LogInfo($"[TS][UI] 存量补行 {staleUid}({staleDisp}) dist={distStr} persistedOnline={st.online}");
                 } catch (Exception re) { Plugin.L.LogWarning($"[TS][UI] 存量补行失败 coord={st?.coord} ex={re}"); }
             }
             Plugin.L.LogInfo($"[TS][UI] 存量站载入 {stale.Count} 条，补行 {added} 个 {consoleUid0}");

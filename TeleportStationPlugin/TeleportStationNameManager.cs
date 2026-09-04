@@ -442,17 +442,10 @@ public static class TeleportStationNameManager
     }
 
     // ---- 工具 ----
+    // P2 收尾：只读委托统一入口（查 900101+900102 两张 0.5s TTL 缓存表，命中零扫描；未中返 null，语义同旧直扫）。
     private static TerrainObject FindByKey(long key)
     {
-        try
-        {
-            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var list = f?.GetValue(null) as List<object>;
-            if (list != null) foreach (var o in list) { var comp = o as Component; if (comp == null) continue; var t = FindTerrainObject(comp.transform) as TerrainObject; if (t != null && GetInstanceKey(t) == key) return t; }
-            var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
-            if (all != null) foreach (var t in all) if (t != null && GetInstanceKey(t) == key) return t;
-        } catch {}
-        return null;
+        try { return TeleportObjectCache.FindByKey(key); } catch { return null; }
     }
 
     // 取信封中 "key":{...} 的 {...} 子串（含括号），找不到返回 null。

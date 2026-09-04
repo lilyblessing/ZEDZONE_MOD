@@ -19,6 +19,20 @@ public class TeleportPadTrigger : MonoBehaviour
     private Component _activeEntrant = null; // HumanCharacterController or BasicVehicle
     private Transform _activeEntrantTr = null;
 
+    // P2-4 ShowBubble 缓存（抄 TeleportBindingManager.cs:502-503 范式，只读参考未改它）：
+    // Bubble Type/MethodInfo 查一次常驻；另记最近一次已发送文案，状态未变不重发。
+    // _activePad 切换/清空时重置 _lastBubbleMsg（见 Update），换盘与重进提示行为与原来一致。
+    private static System.Type _cachedBubbleType = null;
+    private static System.Reflection.MethodInfo _cachedBubbleMethod = null;
+    private static string _lastBubbleMsg = null;
+    // P2-4 drivingVehicle 结论缓存：FieldInfo 查一次常驻，含"无字段"负结论（_drvField=null）。
+    // 静默反射（Type.GetField，不走 AccessTools.Field）：线上玩家类型实为 BasicCharacterController、
+    // 根本无 drivingVehicle 字段——缓存负结论后每 tick 不再探路，HarmonyX warning 消失；
+    // 取不到时返回 null，走既有步行分支（行为不变）。玩家运行时类型变化时重查一次。
+    private static System.Type _drvPlayerType = null;
+    private static System.Reflection.FieldInfo _drvField = null;
+    private static bool _drvResolved = false;
+
     private static TeleportPadTrigger _instance;
     public static TeleportPadTrigger EnsureExists()
     {
@@ -52,9 +66,9 @@ public class TeleportPadTrigger : MonoBehaviour
             var playerTr = (player as Component)?.transform;
             if (playerTr == null) return;
 
-            // 判断是否在驾驶载具
+            // 判断是否在驾驶载具（P2-4：结论常驻缓存，命中负结论直接 null，不再每 tick 反射）
             BasicVehicle vehicle = null;
-            try { vehicle = Reflect.Get(player, "drivingVehicle") as BasicVehicle; } catch {}
+            try { vehicle = GetDrivingVehicle(player); } catch {}
             Transform entrantTr = playerTr;
             Component entrant = player as Component;
             bool inVehicle = false;
@@ -89,6 +103,7 @@ public class TeleportPadTrigger : MonoBehaviour
                     _activePad = nearestPad;
                     _activeEntrant = entrant;
                     _activeEntrantTr = entrantTr;
+                    _lastBubbleMsg = null; // P2-4：换盘重置气泡状态，新盘提示不受旧盘文案抑制
                     TryStartTeleport(nearestPad, entrant, entrantTr, inVehicle);
                 }
             }
@@ -98,6 +113,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 _activePad = null;
                 _activeEntrant = null;
                 _activeEntrantTr = null;
+                _lastBubbleMsg = null; // P2-4：离盘重置，重进同盘提示行为不变
             }
         }
         catch {}
@@ -313,14 +329,10 @@ public class TeleportPadTrigger : MonoBehaviour
         try { return (long)t.GetInstanceID(); } catch { try { return (long)t.Pointer; } catch { return t.GetHashCode(); } }
     }
 
+    // P2 收尾：只读委托统一入口（查 900101+900102 两张 0.5s TTL 缓存表，命中零扫描；未中返 null，语义同旧直扫）。
     private static TerrainObject FindByKey(long key)
     {
-        try
-        {
-            var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
-            if (all != null) foreach (var t in all) if (t!=null && GetInstanceKey(t)==key) return t;
-        } catch {}
-        return null;
+        try { return TeleportObjectCache.FindByKey(key); } catch { return null; }
     }
 
     private static List<TerrainObject> FindAllPads()
@@ -398,10 +410,44 @@ public class TeleportPadTrigger : MonoBehaviour
     {
         try
         {
-            var t = AccessTools.TypeByName("BasicCharacterController");
-            var m = t?.GetMethod("ShowDialogueBubble", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            // P2-4 状态缓存：与最近一次已发送文案相同则不重发（字符串比较，无拼接零查找）
+            try { if (msg != null && msg == _lastBubbleMsg) return; } catch {}
+            // P2-4 Type/MethodInfo 常驻缓存（BindingManager:502-503 范式）：首次解析后零查找
+            try
+            {
+                if (_cachedBubbleType == null)
+                {
+                    _cachedBubbleType = AccessTools.TypeByName("BasicCharacterController");
+                    if (_cachedBubbleType != null) _cachedBubbleMethod = _cachedBubbleType.GetMethod("ShowDialogueBubble", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                }
+            } catch {}
+            var m = _cachedBubbleMethod;
             var player = GetPlayer() as Component;
-            if (player!=null && m!=null) m.Invoke(player, new object[]{ msg, 4f });
+            if (player!=null && m!=null)
+            {
+                try { m.Invoke(player, new object[]{ msg, 4f }); } catch {}
+                _lastBubbleMsg = msg;
+            }
+            // 找不到玩家/方法时不记 _lastBubbleMsg：下次同文案仍会重试，降级语义与原来一致
         } catch {}
+    }
+
+    // P2-4 drivingVehicle 结论缓存读取：解析一次常驻（含负结论），后续 tick 零反射零 warning
+    private static BasicVehicle GetDrivingVehicle(object player)
+    {
+        try
+        {
+            if (player == null) return null;
+            var t = player.GetType();
+            if (!_drvResolved || !ReferenceEquals(t, _drvPlayerType))
+            {
+                _drvPlayerType = t;
+                _drvField = null;
+                try { _drvField = t.GetField("drivingVehicle", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance); } catch { _drvField = null; }
+                _drvResolved = true;
+            }
+            if (_drvField == null) return null; // 负结论：该玩家类型无此字段（如 BasicCharacterController），走步行分支
+            try { return _drvField.GetValue(player) as BasicVehicle; } catch { return null; }
+        } catch { return null; }
     }
 }

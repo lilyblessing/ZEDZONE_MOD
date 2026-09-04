@@ -11,6 +11,9 @@ namespace TeleportStationPlugin;
 public static class TeleportObjectCache
 {
     private const float TTL = 0.5f;
+    // P2-6：统一 FindByKey 入口覆盖的两表（与 TeleportBindingManager.ConsoleId/PadId 同值，缓存侧私有常量）
+    private const int ConsoleAttrId = 900101;
+    private const int PadAttrId = 900102;
     private static readonly Dictionary<int, List<TerrainObject>> _cache = new();
     private static readonly Dictionary<int, float> _cacheTime = new();
 
@@ -26,6 +29,40 @@ public static class TeleportObjectCache
         _cache[attrId] = new List<TerrainObject>(computed);
         _cacheTime[attrId] = now;
         return computed;
+    }
+
+    /// <summary>
+    /// P2-6 统一入口：按键找活体，供外部调用；复用 0.5s TTL 缓存（控制台 + 圆盘两表），命中零扫描。
+    /// 未命中返回 null（调用方按原语义处理）；全程 try/catch，行为保底。
+    /// </summary>
+    public static TerrainObject FindByKey(long key)
+    {
+        try
+        {
+            if (key == 0) return null;
+            var consoles = FindAllById(ConsoleAttrId);
+            if (consoles != null)
+            {
+                for (int i = 0; i < consoles.Count; i++)
+                {
+                    var t = consoles[i];
+                    if (t == null) continue;
+                    try { if (GetInstanceKey(t) == key) return t; } catch {}
+                }
+            }
+            var pads = FindAllById(PadAttrId);
+            if (pads != null)
+            {
+                for (int i = 0; i < pads.Count; i++)
+                {
+                    var t = pads[i];
+                    if (t == null) continue;
+                    try { if (GetInstanceKey(t) == key) return t; } catch {}
+                }
+            }
+        }
+        catch { }
+        return null;
     }
 
     public static void Invalidate(int attrId)

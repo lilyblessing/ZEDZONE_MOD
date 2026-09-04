@@ -568,19 +568,10 @@ public static class TeleportConsoleSelection
         return null;
     }
 
+    // P2 收尾：只读委托统一入口（查 900101+900102 两张 0.5s TTL 缓存表，命中零扫描；未中返 null，语义同旧直扫）。
     private static TerrainObject FindByKey(long key)
     {
-        try
-        {
-            var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            var list = f?.GetValue(null) as List<object>;
-            if (list != null) foreach (var o in list) { var comp = o as Component; if (comp == null) continue; var t = FindTerrainObject(comp.transform) as TerrainObject; if (t != null && GetInstanceKey(t) == key) return t; }
-            var prods = TerrainObject_Production.ActiveObjects_Production;
-            if (prods != null) for (int i=0;i<prods.Count;i++) { var g=prods[i]; if(g==null) continue; var t = FindTerrainObject(g.transform) as TerrainObject; if(t!=null && GetInstanceKey(t)==key) return t; }
-            var all = UnityEngine.Resources.FindObjectsOfTypeAll<TerrainObject>();
-            if (all != null) foreach (var t in all) if (t!=null && GetInstanceKey(t)==key) return t;
-        } catch {}
-        return null;
+        try { return TeleportObjectCache.FindByKey(key); } catch { return null; }
     }
 
     private static List<TerrainObject> FindAllTerrainObjectsById(int attrId)

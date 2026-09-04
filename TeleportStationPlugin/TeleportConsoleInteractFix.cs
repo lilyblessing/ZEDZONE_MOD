@@ -51,6 +51,12 @@ public static class TeleportConsoleInteractFix
     private static TerrainObject _currentConsole;
     private static float _nextTick = -1f;
     private const float TickInterval = 0.5f;
+    // P2-8：高频 Info 日志开关（默认关；失败 Warning 保留直发；成功/放行各入口只留 1 条 Info，逐项细节走 Verbose）
+    private static bool VerboseFix = false;
+    private static void LogVerbose(string msg)
+    {
+        try { if (VerboseFix && msg != null) Plugin.L.LogInfo(msg); } catch {}
+    }
 
     public static void EnsurePatch(Harmony h)
     {
@@ -333,7 +339,7 @@ public static class TeleportConsoleInteractFix
                 try { tId = tTrans!=null? tTrans.GetInstanceID():0; } catch {}
                 try { goId = t.gameObject!=null? t.gameObject.GetInstanceID():0; } catch {}
                 try { tPos = tTrans!=null? tTrans.position: Vector3.zero; } catch {}
-                Plugin.L.LogInfo($"[TS][Fix] interactObjectDataList count={count} tId={tId} goId={goId} tPos={tPos}");
+                LogVerbose($"[TS][Fix] interactObjectDataList count={count} tId={tId} goId={goId} tPos={tPos}");
                 for (int i=0;i<count;i++)
                 {
                     object data=null; try { if (getItem!=null) data=getItem.Invoke(listObj,new object[]{i}); } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Fix] getItem {i} fail {ex.Message.Split('\n')[0]}"); continue; }
@@ -389,18 +395,18 @@ public static class TeleportConsoleInteractFix
                     string ioType = io?.GetType().FullName ?? "null";
                     string tempType = tempOwner?.GetType().FullName ?? "null";
                     int ioInst = 0; try { ioInst = (int)(io?.GetType().GetMethod("GetInstanceID")?.Invoke(io,null) ?? 0); } catch {}
-                    Plugin.L.LogInfo($"[TS][Fix] data[{i}] isOurs={isOurs} reason={reason} ioType={ioType} ioId={ioInst} tempType={tempType} firstStr='{firstStr ?? "null"}'");
+                    LogVerbose($"[TS][Fix] data[{i}] isOurs={isOurs} reason={reason} ioType={ioType} ioId={ioInst} tempType={tempType} firstStr='{firstStr ?? "null"}'");
                     if (!isOurs) continue;
                     object dataList=null; try { dataList=Reflect.Get(data,"interactDataList"); } catch { try { dataList=data.GetType().GetField("interactDataList",BindingFlags.Public|BindingFlags.NonPublic|BindingFlags.Instance)?.GetValue(data); } catch {} }
                     if (dataList==null) { Plugin.L.LogWarning("[TS][Fix] dataList null"); continue; }
                     int dc=0; try { dc=Convert.ToInt32(Reflect.Get(dataList,"Count")); } catch { try { dc=(int)dataList.GetType().GetProperty("Count").GetValue(dataList); } catch {} }
                     var gItem=dataList.GetType().GetMethod("get_Item") ?? dataList.GetType().GetMethod("Get");
-                    Plugin.L.LogInfo($"[TS][Fix] found our InteractObjectData dc={dc}");
+                    LogVerbose($"[TS][Fix] found our InteractObjectData dc={dc}");
                     for (int j=0;j<dc;j++) {
                         object id=null; try { if (gItem!=null) id=gItem.Invoke(dataList,new object[]{j}); } catch { continue; }
                         if (id==null) continue;
                         string s=null; try { s=Reflect.Get(id,"interactStr") as string; } catch { try { s=id.GetType().GetField("interactStr")?.GetValue(id) as string; } catch {} }
-                        Plugin.L.LogInfo($"[TS][Fix]   InteractData[{j}] str='{s ?? "null"}'");
+                        LogVerbose($"[TS][Fix]   InteractData[{j}] str='{s ?? "null"}'");
                     }
                     if (dc>0) {
                         // If already hijacked (first str is our target) just re-hijack delegate to ensure fresh
@@ -939,11 +945,10 @@ public static class TeleportConsoleInteractFix
             // 明确可解析但非传送台（原生终端/原生条目）→ 放原生 DOS，但必须打日志，禁静默
             if (obj != null && (IsKnownInteractPayload(obj) || obj is GameObject || obj is Component))
             {
-                try { Plugin.L.LogInfo($"[TS][Fix] <>c 放行(明确非console) objType={objType} objVal={objVal}"); } catch {}
+                try { LogVerbose($"[TS][Fix] <>c 放行(明确非console) objType={objType} objVal={objVal}"); } catch {}
                 return true;
             }
-            // 不可解析（null/未知类型）→ 近距兜底；每条放行分支必 warn，禁静默
-            try { Plugin.L.LogInfo($"[TS][Fix] <>c obj不可解析走近距兜底 objType={objType} objVal={objVal}"); } catch {}
+            // 不可解析（null/未知类型）→ 近距兜底；P2-8 合并：中转 Info 并入终局 1 条（放行 warn / 拦截 Info），此处不再单独打一条
             var c = GetLiveConsole();
             int candCount = -1;
             if (c == null)

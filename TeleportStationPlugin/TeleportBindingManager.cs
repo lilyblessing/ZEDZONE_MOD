@@ -609,6 +609,14 @@ public static class TeleportBindingManager
 
     private static TerrainObject FindByKey(long key)
     {
+        // P2-6 统一入口：优先走 TeleportObjectCache.FindByKey（0.5s TTL 缓存，命中零扫描）；
+        // 缓存未命中回退旧三源直扫（行为保底，结果仍正确）。
+        try
+        {
+            var hit = TeleportObjectCache.FindByKey(key);
+            if (hit != null) return hit;
+        }
+        catch { }
         try
         {
             var f = typeof(ChargerPadFix).GetField("_knownClones", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
