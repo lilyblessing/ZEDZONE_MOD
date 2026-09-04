@@ -1618,7 +1618,7 @@ public static class ChargerPadFix
             }
             if (!IsBioGenSupplied(productionData))
             {
-                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning("[TS] ×4 诊断: IsPadPd=true 但供电判定无生物能（联网列表/距离均未命中）"); }
+                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogWarning($"[TS] ×4 诊断: IsPadPd=true 但供电判定无生物能（距离未命中） gridSupply={GridFactorDiag(productionData)}"); }
                 return true;
             }
             try
@@ -1670,24 +1670,12 @@ public static class ChargerPadFix
         catch { return false; }
     }
 
-    /// <summary>供电含生物能（900103）：真实路由联网列表优先，兜底 50m 距离检测。</summary>
+    /// <summary>供电含生物能（900103）：50m 距离检测（09-05 更新删除联网列表字段后唯一路径）。</summary>
     private static bool IsBioGenSupplied(ProductionData pd)
     {
         try
         {
-            var genList = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
-            if (genList != null)
-            {
-                for (int i = 0; i < genList.Count; i++)
-                {
-                    var gen = genList[i];
-                    if (gen == null) continue;
-                    var attr = gen.terrainObjectAttr;
-                    if (attr == null) continue;
-                    if (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) return true;
-                    if (AttrId(attr) == BioGenId) return true;
-                }
-            }
+            // 09-05 更新已删除 connectedElectricGeneratorList：原联网列表优先路径移除，改走距离检测；gridSupplyFactor 仅记诊断日志（见 ChargerUpdatePrefix），不参门。
             // 兜底：距离检测（真实路由尚未建立时）
             var to = pd.terrainObjectTemp;
             if (to == null) return false;
@@ -1712,6 +1700,12 @@ public static class ChargerPadFix
             return false;
         }
         catch { return false; }
+    }
+
+    /// <summary>gridSupplyFactor 只读观察（09-05 新增）：读取失败记 n/a，绝不参门、不抛异常。</summary>
+    private static string GridFactorDiag(ProductionData pd)
+    {
+        try { return Convert.ToSingle(Reflect.Get(pd, "gridSupplyFactor")).ToString("F2"); } catch { return "n/a"; }
     }
 
     private static int AttrId(object attr)

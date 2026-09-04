@@ -27,7 +27,7 @@ public static class TeleportConsoleSelection
     }
     private static string SelPath => TeleportSaveIdentity.SavePath("TeleportSelection.json");
 
-    // ===== 供电 AND 判定（与 PadTrigger 一致：consuming && sufficient>0.01 && list.Count>0） =====
+    // ===== 供电 AND 判定（与 PadTrigger 一致：consuming && !powerOff && sufficient>0.01） =====
     public static bool IsPowered(TerrainObject pad)
     {
         if (pad == null || pad.attr == null) return false;
@@ -38,9 +38,11 @@ public static class TeleportConsoleSelection
             bool consuming = pad.attr.electricConsuming;
             if (!consuming) return false;
             float sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat"));
-            var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
-            int cnt = list != null ? list.Count : -1;
-            return sufficient > 0.01f && list != null && cnt > 0;
+            bool powerOff = false;
+            try { powerOff = Convert.ToBoolean(Reflect.Get(pd, "powerSwitchOff")); } catch {}
+            float gridSupply = 0f;
+            try { gridSupply = Convert.ToSingle(Reflect.Get(pd, "gridSupplyFactor")); } catch {} // 仅诊断，不参门
+            return consuming && !powerOff && sufficient > 0.01f;
         }
         catch { return false; }
     }

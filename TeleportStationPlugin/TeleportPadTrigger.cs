@@ -167,7 +167,7 @@ public class TeleportPadTrigger : MonoBehaviour
             // 发送方供电判定（AND）
             var pd = GetProductionData(pad);
             bool powered = false;
-            float diagSufficient = -1f; int diagListCount = -1; bool diagConsuming = false;
+            float diagSufficient = -1f; float diagGridFactor = -1f; bool diagConsuming = false; bool diagPowerOff = false;
             if (pd != null && pad.attr != null)
             {
                 try
@@ -175,13 +175,14 @@ public class TeleportPadTrigger : MonoBehaviour
                     diagConsuming = pad.attr.electricConsuming;
                     var sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat"));
                     diagSufficient = sufficient;
-                    var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
-                    diagListCount = list != null ? list.Count : -1;
-                    powered = diagConsuming && sufficient > 0.01f && list != null && list.Count > 0;
+                    var powerOff = Convert.ToBoolean(Reflect.Get(pd, "powerSwitchOff"));
+                    diagPowerOff = powerOff;
+                    try { diagGridFactor = Convert.ToSingle(Reflect.Get(pd, "gridSupplyFactor")); } catch { }
+                    powered = diagConsuming && !powerOff && sufficient > 0.01f;
                 } catch (Exception ex) { Plugin.L?.LogWarning($"[TS][Teleport] 通电判定异常: {ex.Message}"); }
             }
-            else { diagSufficient = -999; diagListCount = -999; }
-            Plugin.L?.LogInfo($"[TS][Teleport] 发送方通电判定 {senderUid} consuming={diagConsuming} sufficient={diagSufficient:F2} list={diagListCount} powered={powered} 目的地={selectedUid}({dispTarget}) via={(viaPersisted ? "持久坐标" : "活体")}");
+            else { diagSufficient = -999; diagGridFactor = -999; }
+            Plugin.L?.LogInfo($"[TS][Teleport] 发送方通电判定 {senderUid} consuming={diagConsuming} sufficient={diagSufficient:F2} gridFactor={diagGridFactor:F2} powerOff={diagPowerOff} powered={powered} 目的地={selectedUid}({dispTarget}) via={(viaPersisted ? "持久坐标" : "活体")}");
             if (!powered)
             {
                 ShowBubble("未供电");

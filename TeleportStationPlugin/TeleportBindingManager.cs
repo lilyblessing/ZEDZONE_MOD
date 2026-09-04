@@ -197,9 +197,9 @@ public static class TeleportBindingManager
                 try
                 {
                     var sufficient = Convert.ToSingle(Reflect.Get(pd, "powerInputSufficientFloat"));
-                    if (sufficient > 0.01f) return true;
-                    var list = Reflect.Get(pd, "connectedElectricGeneratorList") as Il2CppSystem.Collections.Generic.List<ProductionData>;
-                    if (list != null && list.Count > 0) return true;
+                    bool powerOff = false;
+                    try { powerOff = Convert.ToBoolean(Reflect.Get(pd, "powerSwitchOff")); } catch { }
+                    if (sufficient > 0.01f && !powerOff) return true;
                     return false;
                 }
                 catch { }
