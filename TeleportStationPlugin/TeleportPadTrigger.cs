@@ -32,6 +32,11 @@ public class TeleportPadTrigger : MonoBehaviour
     private static System.Type _drvPlayerType = null;
     private static System.Reflection.FieldInfo _drvField = null;
     private static bool _drvResolved = false;
+    // 落地电网自愈 workaround（09-05 更新后跨区块传送偶发丢连接）：传送成功记到达时间戳＋目标站 UID，
+    // 后续未供电分支 30s 窗口内单次触发 ProductionManager.MarkElectricGridDirty()。一次性，无轮询。
+    private static float _lastArrivalTime = -999f;
+    private static string _lastArrivalUid = null;
+    private static bool _arrivalDirtyFired = true; // 初值 true：未传送过不触发
 
     private static TeleportPadTrigger _instance;
     public static TeleportPadTrigger EnsureExists()
@@ -187,6 +192,7 @@ public class TeleportPadTrigger : MonoBehaviour
             {
                 ShowBubble("未供电");
                 Plugin.L?.LogInfo($"[TS][Teleport] 未供电 {senderUid}");
+                TryFireArrivalGridDirty(senderUid);
                 return;
             }
             if (!TeleportBatteryManager.HasEnoughCharge(pad))
@@ -216,6 +222,7 @@ public class TeleportPadTrigger : MonoBehaviour
                 {
                     // 发送方离线（供电丢失）
                     ShowBubble("未供电");
+                    TryFireArrivalGridDirty(senderUidCap);
                     return;
                 }
                 if (!TeleportBatteryManager.HasEnoughCharge(pad))
@@ -243,11 +250,30 @@ public class TeleportPadTrigger : MonoBehaviour
                 {
                     // 传后清空选择（发送方控制台）
                     try { TeleportConsoleSelection.ClearByKey(consoleKey); Plugin.L.LogInfo($"[TS][Teleport] 已清空选择 {consoleUid}"); } catch {}
+                    // 落地电网自愈记点：目标站 UID＋到达时间，本次 dirty 未触发
+                    try { _lastArrivalUid = selUidCap; _lastArrivalTime = Time.unscaledTime; _arrivalDirtyFired = false; } catch {}
                 }
             });
             Plugin.L?.LogInfo($"[TS][Teleport] 开始倒计时 {senderUid} entrant={(inVehicle?"vehicle":"player")} target={selectedUid}({dispTarget})");
         }
         catch (Exception e) { Plugin.L?.LogWarning($"[TS][Teleport] TryStart异常: {e.Message}"); }
+    }
+
+    // 落地电网自愈：到达后 30s 内首次判未供电→单次 MarkElectricGridDirty() 逼原生重算。
+    // 失败安全：直接调用包 try/catch（签名不符抛异常也不炸传送流程，且只试一次）。
+    [HideFromIl2Cpp]
+    private static void TryFireArrivalGridDirty(string stationUid)
+    {
+        try
+        {
+            if (_arrivalDirtyFired) return;
+            if (Time.unscaledTime - _lastArrivalTime >= 30f) return;
+            _arrivalDirtyFired = true; // 先置位：只试一次，不重试
+            try { ProductionManager.MarkElectricGridDirty(); }
+            catch { return; }
+            Plugin.L?.LogInfo($"[TS][Tele] 落地电网重算已触发 站={stationUid ?? "?"} 到达站={_lastArrivalUid ?? "?"}");
+        }
+        catch { }
     }
 
     // v0.9.64 目标解析（用户定案：放弃接收方在线/离线判断）：有活体→活体坐标；
