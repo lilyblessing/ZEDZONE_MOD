@@ -33,6 +33,7 @@ public static class TeleportSaveIdentity
     // v0.9.69：本槽 saveEpoch（游戏内存档即一轮）；Load 期脏位抑制（各表 MarkDirty 读取）。
     public static int SlotEpoch { get; private set; } = 0;
     public static bool SuppressDirty = false;
+    internal static bool LoadInitiated = false;
     public const int ConvergeK = 3;
 
     // 由 GameData 对象派生身份键；null/空 id → ""。
@@ -276,6 +277,7 @@ public static class TeleportSaveIdentity
     // 暂停菜单读档确认 prefix：行对象 gameData(+0x20) 即游戏随后裸写装配的真选择。
     public static void OnLoadConfirmPrefix(GameDataUI_IngameLoad __instance)
     {
+        LoadInitiated = true;
         try
         {
             if (__instance == null) return;
@@ -300,6 +302,7 @@ public static class TeleportSaveIdentity
     // 与 postfix 采样同一 gameData，裸写前身份已切，消灭“先旧后新”窗口；原 postfix 语义被完全覆盖）。
     public static void TitleLoadClickPrefix(GameDataUI __instance)
     {
+        LoadInitiated = true;
         try
         {
             if (__instance == null) return;
@@ -311,12 +314,14 @@ public static class TeleportSaveIdentity
     // 死亡读最新档 postfix：裸写已发生，采样活对象。
     public static void LoadLatestPostfix()
     {
+        LoadInitiated = true;
         try { PinSession("死亡读档", CurrentKey()); } catch { }
     }
 
     // 新开局 postfix：采样活对象（新 id 即新命名空间；未就绪则跳过，由存档对账兜底）。
     public static void NewGamePostfix()
     {
+        LoadInitiated = true;
         try { PinSession("新开局", CurrentKey()); } catch { }
     }
 

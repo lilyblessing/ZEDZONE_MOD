@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.82")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.83")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -568,6 +568,7 @@ public static class SourceInjector
             int id = Convert.ToInt32(__0);
             if (id < 900101 || id > 900103) return;
             if (__result != null) return;
+            if (!(RegistrarState.Done && !RegistrarState.GaveUp)) return;
             var gc = typeof(GameController).GetProperty("instance", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)?.GetValue(null);
             if (gc == null) return;
             var m = typeof(GameController).GetMethod("GetTerrainObjectPrefabById");
@@ -741,7 +742,7 @@ internal static class RegistrarState
 {
     internal static bool Done;
     internal static bool RetryPending;
-    public static int FirstPlayerFrame = -1;
+    internal static bool GaveUp = false;
 
     internal static void RetryIn(float seconds) { RetryPending = true; }
 }
@@ -768,24 +769,11 @@ public class RegistrationProbe : MonoBehaviour
         _timer -= Time.unscaledDeltaTime; // 建造菜单打开时游戏暂停（timeScale=0），必须用 unscaled
         if (_timer > 0f) return;
         if (RegistrarState.RetryPending) { _timer = 30f; RegistrarState.RetryPending = false; }
-        // 注册门（帧沉降）：v0.9.80 的玩家出现门在读档中途即开仍崩（玩家对象加载中途已出现）。
-        // 改为玩家持续出现足够多渲染帧后才注册——加载期帧推进慢，沉降 gate 自动延后。
-        // 未就绪则 5s 后再探，不置 Done（主菜单挂机不注册，进存档沉降后自动补注册）。
-        try
-        {
-            var gcReady = GameController.instance;
-            if (gcReady == null || gcReady.playerCharacter == null) { RegistrarState.FirstPlayerFrame = -1; _timer = 5f; return; }
-            if (RegistrarState.FirstPlayerFrame < 0)
-            {
-                RegistrarState.FirstPlayerFrame = UnityEngine.Time.frameCount;
-                Plugin.L.LogInfo($"[TS] 注册门: 玩家出现 frame={RegistrarState.FirstPlayerFrame}");
-                _timer = 5f;
-                return;
-            }
-            if (UnityEngine.Time.frameCount - RegistrarState.FirstPlayerFrame < 1800) { _timer = 5f; return; }
-        }
-        catch { _timer = 5f; return; }
-        Plugin.L.LogInfo($"[TS] 注册门: 沉降通过 (frame={UnityEngine.Time.frameCount})，开始注册");
+        if (RegistrarState.GaveUp) return;
+        bool worldActive = false;
+        try { var gcW = GameController.instance; if (gcW != null && gcW.playerCharacter != null) worldActive = true; } catch { }
+        if (worldActive || TeleportSaveIdentity.LoadInitiated) { RegistrarState.GaveUp = true; Plugin.L.LogWarning("[TS] 注册放弃：世界已活跃，本会话不再注册（防 streaming 期 Instantiate 崩溃）"); return; }
+        Plugin.L.LogInfo("[TS] 启动期注册…");
         RegistrarState.Done = true;
         try { RegistrarLogic.Run(); }
         catch (Exception e) { Plugin.L.LogError($"[TS] 探测顶层异常: {e}"); }
