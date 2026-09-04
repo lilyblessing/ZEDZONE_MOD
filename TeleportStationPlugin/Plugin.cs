@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.91-diag")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.92")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -757,7 +757,7 @@ internal static class RegistrarState
 /// <summary>P1 注册探测与注入（触发器）。</summary>
 public class RegistrationProbe : MonoBehaviour
 {
-    private float _timer = 20f; // 等 ItemManager/场景就绪
+    private float _timer = 5f; // 等 ItemManager/场景就绪（5s抢在用户读档前注册；模板未齐/世界已活跃时靠 RetryPending 30s重试兜底）
 
     private void Update()
     {
@@ -779,11 +779,10 @@ public class RegistrationProbe : MonoBehaviour
         if (RegistrarState.GaveUp) return;
         bool worldActive = false;
         try { var gcW = GameController.instance; if (gcW != null && gcW.playerCharacter != null) worldActive = true; } catch { }
-        if (worldActive || TeleportSaveIdentity.LoadInitiated) { RegistrarState.GaveUp = true; Plugin.L.LogWarning("[TS] 注册放弃：世界已活跃，本会话不再注册（防 streaming 期 Instantiate 崩溃）"); return; }
+        if (worldActive || TeleportSaveIdentity.LoadInitiated) { Plugin.L.LogInfo("[TS] 注册推迟：世界已活跃，仅主菜单期执行，30s后重试"); RegistrarState.RetryIn(30); return; }
         Plugin.L.LogInfo("[TS] 启动期注册…");
-        RegistrarState.Done = true;
-        try { RegistrarLogic.Run(); }
-        catch (Exception e) { Plugin.L.LogError($"[TS] 探测顶层异常: {e}"); }
+        try { RegistrarLogic.Run(); RegistrarState.Done = true; }
+        catch (Exception e) { Plugin.L.LogError($"[TS] 探测顶层异常: {e}"); RegistrarState.RetryIn(30); }
     }
 
 }
@@ -884,13 +883,13 @@ internal static class RegistrarLogic
         }
 
         // ── 2. v0.5.0 克隆注册三建筑（克隆模板 → 改 id/名称/配方/techGenre=Electricity；原版不动）──
-        try
-        {
-            RegisterBuilding(Buildings.ConsoleDef, commuAttr);
-            RegisterBuilding(Buildings.PadDef, chargerAttr);   // v0.9.4：圆盘克隆源 斯特林120→充电台126（消费端：原生电网路由+原生充电逻辑）
-            RegisterBuilding(Buildings.BioGenDef, stirlingAttr);
-        }
-        catch (Exception e) { sb.AppendLine($"  注册异常: {e}"); }
+        // v0.9.92：单建筑独立 try/catch——一栋失败不连累另两栋，重试循环下幂等（Attrs 索引赋值覆盖）──
+        try { RegisterBuilding(Buildings.ConsoleDef, commuAttr); }
+        catch (Exception e) { sb.AppendLine($"  注册异常 900101: {e.Message.Split('\n')[0]}"); }
+        try { RegisterBuilding(Buildings.PadDef, chargerAttr); }   // v0.9.4：圆盘克隆源 斯特林120→充电台126（消费端：原生电网路由+原生充电逻辑）
+        catch (Exception e) { sb.AppendLine($"  注册异常 900102: {e.Message.Split('\n')[0]}"); }
+        try { RegisterBuilding(Buildings.BioGenDef, stirlingAttr); }
+        catch (Exception e) { sb.AppendLine($"  注册异常 900103: {e.Message.Split('\n')[0]}"); }
 
         // ── 3. 源头注入由 GameController hook 完成（GetAvailableTerrainObjectAttrsByTechGenre 追加）──
 
