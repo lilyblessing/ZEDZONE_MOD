@@ -135,7 +135,7 @@ public static class ChargerPadFix
     {
         try
         {
-            try { if (DiagCut) return true; } catch { } // v0.9.96-diag：切断断路器，放行原生OnEnable
+            try { if (DiagCut && !IsCloning) return true; } catch { } // v0.9.96-diag：运行时放行；克隆期保持断路器防SO
             int key = 0;
             try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
             _oeDepth.TryGetValue(key, out int d);
