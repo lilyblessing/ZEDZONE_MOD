@@ -23,7 +23,13 @@ public static class ChargerPadFix
     private const int VanillaChargerId = 126; // 原版电池充电台（v0.9.71 起同享生物能×4）
     private const int BioGenId = 900103;
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
-    internal static bool DiagCut = true; // v0.9.96-diag：手术二分总开关（写死true恒切；下版恢复改false）
+    internal static bool DiagCut = false; // v0.9.97-r5：恢复生产（r4五大切断证伪与塌无关，全部恢复）
+    // ═══ v0.9.97-r5 RegFill：跳过即记录、安静即补登记 ═══
+    internal static readonly System.Collections.Generic.HashSet<TerrainObject_Production> _skippedReg = new();
+    internal static int _regFillCap = 5000;
+    internal static double _lastTripUtc = 0; // epoch秒（DateTime.UtcNow计时，暂停不停）
+    internal static double _lastRegFillLog = -99;
+    internal static bool _regFillCapWarned = false;
     internal static System.DateTime _worldActiveFirstSeen = System.DateTime.MinValue; // v0.9.96-diag r3：世界首次活跃时刻
     internal static bool _diagCutArmedLogged = false; // v0.9.96-diag r3：武装日志只打一次
     internal static bool DiagCutArmed() // r4：恒返false（r3证伪：武装=开车流送风暴即时SO，断路器永不能开；计数恢复见X）
@@ -179,6 +185,8 @@ public static class ChargerPadFix
                     try { act = __instance != null && __instance.gameObject != null && __instance.gameObject.activeSelf; } catch { }
                     Plugin.L.LogWarning($"[TS][Breaker] 跳过重入 OnEnable #{_oeLogCount} key={key} name={nm} attr={aid} active={act} perInst={d} global={_oeGlobal}");
                 }
+                // v0.9.97-r5 RegFill：跳过即记录（Breaker_P/S共用，Stirling派生类直接Add进同一集）
+                try { _lastTripUtc = (System.DateTime.UtcNow - new System.DateTime(1970,1,1)).TotalSeconds; if (_skippedReg.Count < _regFillCap) { if (__instance != null) _skippedReg.Add(__instance); } else if (!_regFillCapWarned) { _regFillCapWarned = true; try { Plugin.L.LogWarning("[TS][RegFill] 队列满 cap=" + _regFillCap); } catch { } } } catch { }
                 return false;
             }
             _oeDepth[key] = d + 1;
@@ -210,6 +218,64 @@ public static class ChargerPadFix
             try { hasDepth = _oeDepth.ContainsKey(key); } catch { hasDepth = true; } // 读表失败不误报
             if (!hasDepth) { try { Plugin.L.LogWarning($"[TS][BreakerLeak] key={key}"); } catch { } } // v0.9.91-diag：P未加过或已泄漏
             if (_oeDepth.TryGetValue(key, out int d)) { if (d <= 1) _oeDepth.Remove(key); else _oeDepth[key] = d - 1; }
+        }
+        catch { }
+    }
+
+    // ═══ v0.9.97-r5 RegFill：安静即补登记（Add-if-absent + Mark）═══
+    internal static void DrainSkippedReg()
+    {
+        try
+        {
+            // ①世界未活跃直接返（抄DiagCutArmed_Old现成写法）
+            try { var gc = GameController.instance; if (gc == null || gc.playerCharacter == null) return; } catch { return; }
+            // ②安静门：风暴后3s内不补
+            double nowUtc = 0;
+            try { nowUtc = (System.DateTime.UtcNow - new System.DateTime(1970,1,1)).TotalSeconds; } catch { return; }
+            if ((nowUtc - _lastTripUtc) < 3.0) return;
+            // ③空集返
+            int pending = 0;
+            try { pending = _skippedReg.Count; } catch { return; }
+            if (pending <= 0) return;
+            // ④取表（Il2Cpp List；抄RebuildIO pre段现成路径）
+            Il2CppSystem.Collections.Generic.List<TerrainObject_Production> prodList = null;
+            try { prodList = TerrainObject_Production.ActiveObjects_Production; } catch { return; }
+            if (prodList == null) return;
+            // ⑤预算10个/次，快照防修改枚举
+            System.Collections.Generic.List<TerrainObject_Production> snap = null;
+            try { snap = new System.Collections.Generic.List<TerrainObject_Production>(_skippedReg); } catch { return; }
+            int added = 0, present = 0, dead = 0, budget = 10;
+            foreach (var inst in snap)
+            {
+                if (budget <= 0) break;
+                try
+                {
+                    if (inst == null) { dead++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
+                }
+                catch { try { dead++; _skippedReg.Remove(inst); } catch { } budget--; continue; }
+                bool contains = false;
+                try { contains = prodList.Contains(inst); } catch { contains = false; }
+                if (contains) { present++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
+                try { prodList.Add(inst); added++; } catch { }
+                try { _skippedReg.Remove(inst); } catch { }
+                budget--;
+            }
+            // ⑥added>0调一次Mark（抄TeleportPadTrigger.cs约110行直接调用写法）
+            if (added > 0)
+            {
+                try { ProductionManager.MarkElectricGridDirty(); } catch { }
+            }
+            // ⑦节流日志2s
+            try
+            {
+                int done = added + present + dead;
+                if (done > 0 && (nowUtc - _lastRegFillLog) > 2.0)
+                {
+                    _lastRegFillLog = nowUtc;
+                    try { Plugin.L.LogInfo($"[TS][RegFill] add={added} present={present} dead={dead} remain={_skippedReg.Count}"); } catch { }
+                }
+            }
+            catch { }
         }
         catch { }
     }
@@ -277,6 +343,7 @@ public static class ChargerPadFix
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
     public static void Tick()
     {
+        try { DrainSkippedReg(); } catch { } // v0.9.97-r5 RegFill：Tick入口驱动（节流门之前，每帧必经）
         try
         {
             float now = Time.unscaledTime;
