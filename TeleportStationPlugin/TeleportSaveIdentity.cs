@@ -37,6 +37,42 @@ public static class TeleportSaveIdentity
     public const int ConvergeK = 3;
 
     // 由 GameData 对象派生身份键；null/空 id → ""。
+    // v0.9.99 N1：键内 id 段 / 槽号段抽取（键形如 {id}_SlotIndex{slot}；Sanitize 只替换非法文件名字符，不动该分隔形）。
+    internal static string IdOfKey(string key)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(key)) return "";
+            int i = key.IndexOf("_SlotIndex", StringComparison.Ordinal);
+            return i >= 0 ? key.Substring(0, i) : key;
+        }
+        catch { return ""; }
+    }
+
+    internal static int SlotOfKey(string key)
+    {
+        try
+        {
+            if (string.IsNullOrEmpty(key)) return int.MinValue;
+            int i = key.IndexOf("_SlotIndex", StringComparison.Ordinal);
+            if (i < 0) return int.MinValue;
+            int slot;
+            if (int.TryParse(key.Substring(i + "_SlotIndex".Length), out slot)) return slot;
+            return int.MinValue;
+        }
+        catch { return int.MinValue; }
+    }
+
+    // v0.9.99 N1：同 id 判定（比 KeyFromGameData 的 id 段，不只比槽号）。
+    internal static bool SameGameId(string a, string b)
+    {
+        try
+        {
+            string ia = IdOfKey(a), ib = IdOfKey(b);
+            return ia.Length > 0 && ia == ib;
+        }
+        catch { return false; }
+    }
     public static string KeyFromGameData(GameData gd)
     {
         try
@@ -138,6 +174,9 @@ public static class TeleportSaveIdentity
             ResetAll();
             _current = newKey; // 先切 key，LoadAll 才读新 namespace
             LoadAll();
+            // v0.9.99 N2：切换后补存档覆盖——内存表刚 Load 空表时活体 properties[2] 是唯一真相，补盖一次
+            // （与 NameManager.Load() 内同源逻辑同一方法，覆盖/切槽后空表愈合）。
+            try { TeleportStationNameManager.ApplySaveOverlay(); } catch { }
             int n1 = CountAll();
             Plugin.L.LogInfo($"[TS][SaveId] 身份切换 {(string.IsNullOrEmpty(old) ? "主菜单/未知" : old)}({n0}条{(flushed > 0 ? $"，已落盘旧key{flushed}条" : "")}) -> {(string.IsNullOrEmpty(newKey) ? "主菜单/未知" : newKey)}({n1}条)");
         }
@@ -340,20 +379,34 @@ public static class TeleportSaveIdentity
     }
 
     // SaveGameData postfix：写回活槽号（屏蔽 slot=5 硬编码的原地翻转，仅内存），再走本槽 epoch。
+    // v0.9.99 N1：自动档不对账——快照槽==5（自动档硬编码）且 pending 与当前是同 id 另一槽 namespace 时，
+    // 跳过 PinSession("存档对账")（内存表保持；写回与 OnGameSavedForCurrentSlot 照常，key 对不上自动 skip，语义安全）。
+    // 手动槽之间的标题读档切换保持原样（走 PinSession 各事件）。
     public static void SaveGameDataPostfix(GameData __0)
     {
         try
         {
-            if (__0 != null && _saveSnapSlot != int.MinValue && __0.saveSlotIndex != _saveSnapSlot)
+            int snapSlot = _saveSnapSlot;
+            if (__0 != null && snapSlot != int.MinValue && __0.saveSlotIndex != snapSlot)
             {
                 int flipped = __0.saveSlotIndex;
-                __0.saveSlotIndex = _saveSnapSlot;
-                Plugin.L.LogInfo($"[TS][SaveId] 存档槽回写 {flipped} -> {_saveSnapSlot}（自动档硬编码屏蔽，仅内存）");
+                __0.saveSlotIndex = snapSlot;
+                Plugin.L.LogInfo($"[TS][SaveId] 存档槽回写 {flipped} -> {snapSlot}（自动档硬编码屏蔽，仅内存）");
             }
             _saveSnapSlot = int.MinValue;
             string pending = null; // P2-10：消费 prefix 快照的对账键（存档体执行完后再 pin，对账语义不变）
             try { pending = _savePendingKey; _savePendingKey = null; } catch { pending = null; }
-            try { if (!string.IsNullOrEmpty(pending) && pending != _current) PinSession("存档对账", pending); } catch { }
+            bool skipAutoPin = false;
+            try
+            {
+                if (!string.IsNullOrEmpty(pending) && pending != _current && snapSlot == 5
+                    && SameGameId(pending, _current)) skipAutoPin = true;
+            } catch { skipAutoPin = false; }
+            try
+            {
+                if (skipAutoPin) Plugin.L.LogInfo($"[TS][SaveId] 自动档不对账跳过pin {pending}（当前{_current}，同id同一世界，内存表保持）");
+                else if (!string.IsNullOrEmpty(pending) && pending != _current) PinSession("存档对账", pending);
+            } catch { }
             if (__0 == null) return;
             OnGameSavedForCurrentSlot(__0);
         }

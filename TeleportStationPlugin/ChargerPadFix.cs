@@ -41,6 +41,10 @@ public static class ChargerPadFix
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
+    private static bool _warnedX4NoTo = false;      // ×4 四出口诊断：terrainObjectTemp空（一次性）
+    private static bool _warnedX4TableEmpty = false; // ×4 四出口诊断：生产表空（一次性）
+    private static bool _warnedX4NoBio = false;     // ×4 四出口诊断：无900103候选（一次性）
+    private static bool _warnedX4MinDist = false;   // ×4 四出口诊断：最近对象距离（一次性）
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
     private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
@@ -1811,10 +1815,22 @@ public static class ChargerPadFix
             // 09-05 更新已删除 connectedElectricGeneratorList：原联网列表优先路径移除，改走距离检测；gridSupplyFactor 仅记诊断日志（见 ChargerUpdatePrefix），不参门。
             // 兜底：距离检测（真实路由尚未建立时）
             var to = pd.terrainObjectTemp;
-            if (to == null) return false;
+            if (to == null)
+            {
+                if (!_warnedX4NoTo) { _warnedX4NoTo = true; Plugin.L.LogWarning("[TS] ×4 诊断: ×4 定位: terrainObjectTemp空"); }
+                return false;
+            }
             var pos = to.transform.position;
             var list = TerrainObject_Production.ActiveObjects_Production;
-            if (list == null) return false;
+            if (list == null || list.Count == 0)
+            {
+                if (!_warnedX4TableEmpty) { _warnedX4TableEmpty = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 生产表空count={(list == null ? 0 : list.Count)}"); }
+                return false;
+            }
+            int prodCount = list.Count;
+            bool anyBio = false;
+            float best2 = float.MaxValue;
+            int bestAttr = -1;
             for (int i = 0; i < list.Count; i++)
             {
                 var g = list[i];
@@ -1827,8 +1843,39 @@ public static class ChargerPadFix
                 bool isBio = false;
                 try { isBio = (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) || AttrId(attr) == BioGenId; } catch { }
                 if (!isBio) continue;
+                anyBio = true;
                 var dp = g.transform.position - pos;
-                if (dp.x * dp.x + dp.y * dp.y <= 50f * 50f) return true;
+                float d2 = dp.sqrMagnitude;
+                if (d2 < best2) { best2 = d2; bestAttr = AttrId(attr); }
+                if (d2 <= 50f * 50f) return true;
+            }
+            // F2 第二路（仅第一路 miss 时执行，省性能）：直扫 StirlingGenerator 类型实例做 GenId 式判定
+            // （生物能实例若以发电子类形态存在，主表按名爬链可能漏；范式照抄 BatteryChargeFix.GenId :181-190）
+            for (int i = 0; i < list.Count; i++)
+            {
+                var sg = list[i] as TerrainObject_Production_StirlingGenerator;
+                if (sg == null) continue;
+                var sto = FindTerrainObject(sg.transform);
+                if (sto == null) continue;
+                object sattr = null;
+                try { sattr = Reflect.Get(sto, "attr"); } catch { }
+                if (sattr == null) continue;
+                int sid;
+                try { sid = (RegistrationStore.Attrs.TryGetValue(BioGenId, out var sours) && ReferenceEquals(sattr, sours)) ? BioGenId : AttrId(sattr); } catch { continue; }
+                if (sid != BioGenId) continue;
+                anyBio = true;
+                var sdp = sg.transform.position - pos;
+                float sd2 = sdp.sqrMagnitude;
+                if (sd2 < best2) { best2 = sd2; bestAttr = sid; }
+                if (sd2 <= 50f * 50f) return true;
+            }
+            if (!anyBio)
+            {
+                if (!_warnedX4NoBio) { _warnedX4NoBio = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 表中有{prodCount}个生产对象但无900103候选"); }
+            }
+            else
+            {
+                if (!_warnedX4MinDist) { _warnedX4MinDist = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 最近生产对象attr={bestAttr} dist2={best2:F1}"); }
             }
             return false;
         }

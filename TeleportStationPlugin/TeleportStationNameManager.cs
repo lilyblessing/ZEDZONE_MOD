@@ -323,6 +323,13 @@ public static class TeleportStationNameManager
                 }
             }
         } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Name] Load {ex.Message.Split('\n')[0]}"); return; }
+        ApplySaveOverlay();
+    }
+
+    // v0.9.99 N2：存档覆盖抽取（原 Load() 内:329-366 纯搬移）——活体 properties[2] 覆盖 + 坐标键回填。
+    // 调用点：Load() 尾 + TeleportSaveIdentity.SwitchTo 的 LoadAll() 之后（覆盖存档/切槽后内存表空时补盖）。
+    internal static void ApplySaveOverlay()
+    {
         // 活体 properties[2] 覆盖（存档权威，处理跨档/覆盖场景）
         try
         {
@@ -390,16 +397,33 @@ public static class TeleportStationNameManager
     {
         try
         {
-            // v0.9.61：只清理实例键表；坐标表是跨读档锚点，永不清（建筑拆除后由改名/覆盖自然更新）。
+            // v0.9.61：只清理实例键表；坐标表是跨读档锚点（实例ID每读档都变，坐标不动）。
+            // v0.9.99 N3：坐标表随拆除清理——活体 console+pad 的坐标键集合之外的一律删
+            // （拆了重建同位置时旧名不再阴魂不散；活体坐标键保留，跨读档锚点语义不变）。
             var alive = new HashSet<long>();
-            foreach (var t in FindAllTerrainObjectsById(ConsoleId)) alive.Add(GetInstanceKey(t));
-            foreach (var t in FindAllTerrainObjectsById(PadId)) alive.Add(GetInstanceKey(t));
+            var aliveCoord = new HashSet<string>();
+            foreach (var t in FindAllTerrainObjectsById(ConsoleId))
+            {
+                if (t == null) continue;
+                alive.Add(GetInstanceKey(t));
+                try { string ck = CoordKey(t); if (!string.IsNullOrEmpty(ck)) aliveCoord.Add(ck); } catch {}
+            }
+            foreach (var t in FindAllTerrainObjectsById(PadId))
+            {
+                if (t == null) continue;
+                alive.Add(GetInstanceKey(t));
+                try { string ck = CoordKey(t); if (!string.IsNullOrEmpty(ck)) aliveCoord.Add(ck); } catch {}
+            }
             if (alive.Count == 0) return;
             var dead = new List<long>();
             foreach (var kv in _names)
                 if (!alive.Contains(kv.Key)) dead.Add(kv.Key);
             foreach (var k in dead) _names.Remove(k);
-            if (dead.Count > 0) Plugin.L.LogInfo($"[TS][Name] 清理死键{dead.Count} 余{_names.Count} (byCoord保留{_namesByCoord.Count})");
+            var deadCoord = new List<string>();
+            foreach (var kv in _namesByCoord)
+                if (!aliveCoord.Contains(kv.Key)) deadCoord.Add(kv.Key);
+            foreach (var k in deadCoord) _namesByCoord.Remove(k);
+            if (dead.Count > 0 || deadCoord.Count > 0) Plugin.L.LogInfo($"[TS][Name] 清理死键{dead.Count} 余{_names.Count} (byCoord清{deadCoord.Count}余{_namesByCoord.Count})");
         } catch {}
     }
 
