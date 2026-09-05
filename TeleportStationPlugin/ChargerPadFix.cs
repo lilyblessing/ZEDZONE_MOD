@@ -26,7 +26,11 @@ public static class ChargerPadFix
     internal static bool DiagCut = true; // v0.9.96-diag：手术二分总开关（写死true恒切；下版恢复改false）
     internal static System.DateTime _worldActiveFirstSeen = System.DateTime.MinValue; // v0.9.96-diag r3：世界首次活跃时刻
     internal static bool _diagCutArmedLogged = false; // v0.9.96-diag r3：武装日志只打一次
-    internal static bool DiagCutArmed() // r3：克隆期永不武装；世界活跃150s后武装（避开读档OnEnable风暴SO）
+    internal static bool DiagCutArmed() // r4：恒返false（r3证伪：武装=开车流送风暴即时SO，断路器永不能开；计数恢复见X）
+    {
+        return false;
+    }
+    internal static bool DiagCutArmed_Old() // r3遗留（已退役）：克隆期永不武装；世界活跃150s后武装（避开读档OnEnable风暴SO）
     {
         try
         {
@@ -186,7 +190,7 @@ public static class ChargerPadFix
     {
         try
         {
-            try { if (DiagCut) return; } catch { } // v0.9.96-diag：切断（void postfix无跳过语义，return即放行；与P成对跳过计数保平衡）
+            try { if (false && DiagCut) return; } catch { } // r4：恢复计数（断路器回生产逻辑，P/X配对平衡；读stall期跳过数即判据①证据）
             try // v0.9.91-diag：断路器计数峰值普查（只读+日志，零行为改动；减前采样，天然覆盖真峰值）
             {
                 int curKeys = 0;
