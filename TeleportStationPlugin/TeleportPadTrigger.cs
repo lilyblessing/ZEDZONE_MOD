@@ -64,7 +64,6 @@ public class TeleportPadTrigger : MonoBehaviour
             float now = Time.unscaledTime;
             if (now < _nextScan) return;
             _nextScan = now + 0.5f; // P6.1 性能：0.2→0.5s，结合 0.5s 缓存，总扫描从 ~9 次/秒 降至 ~2 次/秒
-            try { BiogenGateSampler.Tick(); } catch { } // v0.9.94-diag：生物能重建门一次性采样（只读+日志，零行为改动）
             // 落地电网自愈（到达窗口驱动）：传送成功后 120s 内对到达站做供电评估，持续离线则每 15s 补一次重算。
             // 只在 _arrivalDirtyFired==false 时跑（平时一个 if 即过，无新增每帧工作）；只有关窗条件（在线或窗口过期）才关窗，
             // 无活体/求值异常留旗待下次 0.5s 扫描重试（5s 内节流日志，之后静默重试）。

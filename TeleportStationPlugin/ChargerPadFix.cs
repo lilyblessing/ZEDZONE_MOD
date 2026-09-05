@@ -30,33 +30,9 @@ public static class ChargerPadFix
     internal static double _lastTripUtc = 0; // epoch秒（DateTime.UtcNow计时，暂停不停）
     internal static double _lastRegFillLog = -99;
     internal static bool _regFillCapWarned = false;
-    internal static System.DateTime _worldActiveFirstSeen = System.DateTime.MinValue; // v0.9.96-diag r3：世界首次活跃时刻
-    internal static bool _diagCutArmedLogged = false; // v0.9.96-diag r3：武装日志只打一次
     internal static bool DiagCutArmed() // r4：恒返false（r3证伪：武装=开车流送风暴即时SO，断路器永不能开；计数恢复见X）
     {
         return false;
-    }
-    internal static bool DiagCutArmed_Old() // r3遗留（已退役）：克隆期永不武装；世界活跃150s后武装（避开读档OnEnable风暴SO）
-    {
-        try
-        {
-            if (IsCloning) return false;
-            bool wa = false;
-            try { var gc = GameController.instance; if (gc != null && gc.playerCharacter != null) wa = true; } catch { }
-            if (!wa) return false;
-            if (_worldActiveFirstSeen == System.DateTime.MinValue)
-            {
-                _worldActiveFirstSeen = System.DateTime.UtcNow;
-                try { Plugin.L.LogInfo("[TS][DiagCut] 世界活跃，150s后切断断路器（读档沉降窗口）"); } catch { }
-            }
-            if ((System.DateTime.UtcNow - _worldActiveFirstSeen).TotalSeconds > 150)
-            {
-                if (!_diagCutArmedLogged) { _diagCutArmedLogged = true; try { Plugin.L.LogInfo("[TS][DiagCut] 断路器切断已武装（运行时放行原生OnEnable）"); } catch { } }
-                return true;
-            }
-            return false;
-        }
-        catch { return false; }
     }
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
@@ -130,40 +106,13 @@ public static class ChargerPadFix
         finally { try { _onEnableDepth--; } catch { } }
     }
 
-    public static void OnEnableRecorder_S(TerrainObject_Production_StirlingGenerator __instance)
-    {
-        if (IsCloning) return;
-        if (!RegistrarState.Done) return;
-        if (_onEnableDepth > 4) return;
-        try
-        {
-            _onEnableDepth++;
-            try
-            {
-                if (__instance == null) return;
-                int id = -1;
-                try { var a = __instance.attr; if (a != null) id = a.id; } catch { }
-                if (id == 900101 || id == 900102 || id == 900103)
-                {
-                    if (!_knownClones.Contains(__instance))
-                    {
-                        _knownClones.Add(__instance);
-                        try { _pdTablesCompleted = false; } catch { } // P2-1：新克隆注册→脏位复位，下次GridConsume重做一次全扫
-                    }
-                    try { StampConsumingFlag(__instance); } catch { }
-                }
-            }
-            catch { }
-        }
-        finally { try { _onEnableDepth--; } catch { } }
-    }
-
     // ═══ OnEnable 断路器（诊断版）：Harmony prefix 返回 false 跳过重入过深的原生 OnEnable ═══
     private static readonly Dictionary<int, int> _oeDepth = new Dictionary<int, int>();
     private static int _oeGlobal = 0;
     private static int _oeLogCount = 0;
     private static int _oePeakGlobal = 0; // v0.9.91-diag：断路器计数历史峰值（只读普查用）
     private static int _oePeakInst = 0;
+    private static float _lastBreakerStatLog = -999f; // P4-B2：BreakerStat日志5s窗（峰值照常更新，只压日志）
     // 断路器 prefix（bool 返回：false 跳过原生；pair postfix 必配对减计数。Harmony 里 prefix 跳过后 postfix 照跑，计数平衡。）
     public static bool OnEnableBreaker_P(TerrainObject_Production __instance)
     {
@@ -207,7 +156,12 @@ public static class ChargerPadFix
                 {
                     if (_oeGlobal > _oePeakGlobal) _oePeakGlobal = _oeGlobal;
                     if (curKeys > _oePeakInst) _oePeakInst = curKeys;
-                    try { Plugin.L.LogInfo($"[TS][BreakerStat] peakGlobal={_oePeakGlobal} peakInst={_oePeakInst}"); } catch { }
+                    try // P4-B2：5s窗节流（峰值照常更新，只压日志）
+                    {
+                        float nbs = Time.unscaledTime;
+                        if (nbs - _lastBreakerStatLog >= 5f) { _lastBreakerStatLog = nbs; try { Plugin.L.LogInfo($"[TS][BreakerStat] peakGlobal={_oePeakGlobal} peakInst={_oePeakInst}"); } catch { } }
+                    }
+                    catch { }
                 }
             }
             catch { }
@@ -227,7 +181,7 @@ public static class ChargerPadFix
     {
         try
         {
-            // ①世界未活跃直接返（抄DiagCutArmed_Old现成写法）
+            // ①世界未活跃直接返（世界活跃判定：gc+playerCharacter非空）
             try { var gc = GameController.instance; if (gc == null || gc.playerCharacter == null) return; } catch { return; }
             // ②安静门：风暴后3s内不补
             double nowUtc = 0;
@@ -343,12 +297,12 @@ public static class ChargerPadFix
     /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流）。</summary>
     public static void Tick()
     {
-        try { DrainSkippedReg(); } catch { } // v0.9.97-r5 RegFill：Tick入口驱动（节流门之前，每帧必经）
         try
         {
             float now = Time.unscaledTime;
             if (now - _lastScan < 0.5f) return;
             _lastScan = now;
+            try { DrainSkippedReg(); } catch { } // P4-B3：挪入0.5s门（语义不变，安静3s才补）
             try { ProbeOnce(); } catch { }
             try { EnsureGameDictionaries(); } catch { }
             try { EnsurePadSprites(); } catch { }
@@ -714,24 +668,6 @@ public static class ChargerPadFix
             try { if (doLog) Plugin.L.LogInfo($"[TS][RebuildIO] pre ActiveObjects={preAO} prodList={prePD}"); } catch { }
         }
         catch { }
-        try // v0.9.96-diag：切断GridConsume写分支（零写表零补表；上方pre快照只读日志保留不断流）
-        {
-            if (DiagCut)
-            {
-                LogThrottled("[TS][DiagCut] GridConsume已切断(零写表零补表)");
-                try
-                {
-                    int dAO = -1, dPD = -1, dBkt = -1;
-                    try { var dao = TerrainObject_Production.ActiveObjects_Production; if (dao != null) dAO = dao.Count; } catch { }
-                    try { var dpd = __instance != null ? __instance.productionDataList : null; if (dpd != null) dPD = dpd.Count; } catch { }
-                    try { var dtd = __instance != null ? __instance.productionDataTypeDic : null; if (dtd != null) dBkt = dtd.Count; } catch { }
-                    try { if (doLog) Plugin.L.LogInfo($"[TS][DiagCut] pre AO={dAO} prodList={dPD} buckets={dBkt}"); } catch { }
-                }
-                catch { }
-                return;
-            }
-        }
-        catch { return; }
         try
         {
             try { CompleteAllPdTables(__instance); } catch { } // 脏位门（廉价），每 tick 照跑
@@ -742,8 +678,7 @@ public static class ChargerPadFix
             try
             {
                 int reinforceAdds = 0; // v0.9.91-diag：实际 Add 计数（只读计数+尾部日志，零行为改动）
-                var all = _knownClones.ToArray();
-                try { if (DiagCut) { all = new object[0]; try { if (doLog) Plugin.L.LogInfo("[TS][Reinforce] 已切断(回灌跳过)"); } catch { } } } catch { } // v0.9.96-diag：切断克隆回灌；尾部adds只读日志保留
+                var all = _knownClones.ToArray(); // P4-A3：DiagCut恒false，切断回灌分支已删
                 foreach (var o in all)
                 {
                     try
@@ -1153,7 +1088,9 @@ public static class ChargerPadFix
                 try { if (doLog) Plugin.L.LogInfo($"[TS][RebuildIO] post ActiveObjects={postAO} prodList={postPD}"); } catch { }
             }
             catch { }
-            try // v0.9.91-diag：杆普查（只读+日志，零行为改动；EnableDiag 门控之外独立运行）
+            try { if (doLog) _nextHeavyLog = nowF + 5f; } catch { } // P4-B1：窗置位前提（原杆普查尾，保pre/post同窗节流语义）
+            if (EnableDiag) // P4-B1：杆普查加门（EnableDiag恒false，常态跳过全表扫描）
+            try // v0.9.91-diag：杆普查（只读+日志，零行为改动）
             {
                 int emptyPoles = 0, totalPoles = 0;
                 try
@@ -1184,7 +1121,6 @@ public static class ChargerPadFix
                 }
                 catch { }
                 try { if (doLog) Plugin.L.LogInfo($"[TS][PoleCensus] emptyPoles={emptyPoles}/total={totalPoles}"); } catch { }
-                if (doLog) _nextHeavyLog = nowF + 5f; // v0.9.95-perf：窗置位放最后进入处，同 tick 内 pre/Reinforce/post 自然同过
             }
             catch { }
             if (!EnableDiag) return;
