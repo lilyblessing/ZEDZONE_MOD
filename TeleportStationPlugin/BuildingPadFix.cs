@@ -37,6 +37,7 @@ public static class BuildingPadFix
     {
         try
         {
+            try { if (ChargerPadFix.DiagCut) return; } catch { } // v0.9.96-diag：整停周期扫描
             float now = Time.unscaledTime;
             if (now - _lastScan < 1.0f) return;
             _lastScan = now;

@@ -23,6 +23,7 @@ public static class ChargerPadFix
     private const int VanillaChargerId = 126; // 原版电池充电台（v0.9.71 起同享生物能×4）
     private const int BioGenId = 900103;
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
+    internal static bool DiagCut = true; // v0.9.96-diag：手术二分总开关（写死true恒切；下版恢复改false）
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
     internal static TerrainObject_Production[] _sharedProdSnapshot; // P2-2：双Tick共享快照（任一Tick先到且过期则拷贝一次刷新）
@@ -134,6 +135,7 @@ public static class ChargerPadFix
     {
         try
         {
+            try { if (DiagCut) return true; } catch { } // v0.9.96-diag：切断断路器，放行原生OnEnable
             int key = 0;
             try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
             _oeDepth.TryGetValue(key, out int d);
@@ -160,6 +162,7 @@ public static class ChargerPadFix
     {
         try
         {
+            try { if (DiagCut) return; } catch { } // v0.9.96-diag：切断（void postfix无跳过语义，return即放行；与P成对跳过计数保平衡）
             try // v0.9.91-diag：断路器计数峰值普查（只读+日志，零行为改动；减前采样，天然覆盖真峰值）
             {
                 int curKeys = 0;
@@ -616,6 +619,24 @@ public static class ChargerPadFix
             try { if (doLog) Plugin.L.LogInfo($"[TS][RebuildIO] pre ActiveObjects={preAO} prodList={prePD}"); } catch { }
         }
         catch { }
+        try // v0.9.96-diag：切断GridConsume写分支（零写表零补表；上方pre快照只读日志保留不断流）
+        {
+            if (DiagCut)
+            {
+                LogThrottled("[TS][DiagCut] GridConsume已切断(零写表零补表)");
+                try
+                {
+                    int dAO = -1, dPD = -1, dBkt = -1;
+                    try { var dao = TerrainObject_Production.ActiveObjects_Production; if (dao != null) dAO = dao.Count; } catch { }
+                    try { var dpd = __instance != null ? __instance.productionDataList : null; if (dpd != null) dPD = dpd.Count; } catch { }
+                    try { var dtd = __instance != null ? __instance.productionDataTypeDic : null; if (dtd != null) dBkt = dtd.Count; } catch { }
+                    try { if (doLog) Plugin.L.LogInfo($"[TS][DiagCut] pre AO={dAO} prodList={dPD} buckets={dBkt}"); } catch { }
+                }
+                catch { }
+                return;
+            }
+        }
+        catch { return; }
         try
         {
             try { CompleteAllPdTables(__instance); } catch { } // 脏位门（廉价），每 tick 照跑
@@ -627,6 +648,7 @@ public static class ChargerPadFix
             {
                 int reinforceAdds = 0; // v0.9.91-diag：实际 Add 计数（只读计数+尾部日志，零行为改动）
                 var all = _knownClones.ToArray();
+                try { if (DiagCut) { all = new object[0]; try { if (doLog) Plugin.L.LogInfo("[TS][Reinforce] 已切断(回灌跳过)"); } catch { } } } catch { } // v0.9.96-diag：切断克隆回灌；尾部adds只读日志保留
                 foreach (var o in all)
                 {
                     try
@@ -881,6 +903,7 @@ public static class ChargerPadFix
     private static int CompleteAllPdTables(ProductionManager mgr)
     {
         int n = 0;
+        try { if (DiagCut) return 0; } catch { } // v0.9.96-diag：切断PD补空表（LoadGuardFix.cs不动，读档安全保留）
         // P2-1 脏位：会话内全扫一次即够；增量实例不依赖本全扫（Tick.EnsurePdTablesOnce经_pdFixed去重逐个补，OnEnable新注册复位脏位）。
         try { if (_pdTablesCompleted) return 0; } catch { }
         try { if (_knownClones.Count == 0) return 0; } catch { } // 无克隆早退（不置脏位，后续新放盘仍会全扫一次）
