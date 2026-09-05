@@ -323,7 +323,77 @@ public static class TeleportStationNameManager
                 }
             }
         } catch (Exception ex) { Plugin.L.LogWarning($"[TS][Name] Load {ex.Message.Split('\n')[0]}"); return; }
+        MergeLegacySlotSiblings(); // v0.9.100 N5 一次性继承（规范文件缺失时合并旧 {id}_SlotIndex*.json；旧文件留盘备份）
         ApplySaveOverlay();
+    }
+
+    // v0.9.100 N5 一次性继承：规范文件（TeleportStationNames_{id}.json）缺失时，把同目录下旧分槽文件
+    // TeleportStationNames_{id}_SlotIndex*.json 全部读出合并；同站多槽重名冲突取 epoch 大者
+    // （各槽 epoch 读同名 TeleportSaveEpoch_*.json，缺失按 0；同 epoch 按文件名序后者赢，确定性）。
+    // 旧分槽文件留盘不动（当备份，不删除不回写）；随后 ApplySaveOverlay 用活体 properties[2] 覆盖一切。
+    // （绑定/选择/地图表不做继承，只随新 namespace 共享；其旧分槽文件同样留盘。）
+    // 注意：id 含 glob 通配符（[ ] * ?）时枚举不到，继承静默跳过（内存表照常用）。
+    private static void MergeLegacySlotSiblings()
+    {
+        try
+        {
+            string id = TeleportSaveIdentity.Current;
+            if (string.IsNullOrEmpty(id)) return;
+            string nsPath = TeleportSaveIdentity.SavePath("TeleportStationNames.json");
+            if (File.Exists(nsPath)) return; // 一次性：规范文件已存在则跳过
+            string dir;
+            try { dir = Path.GetDirectoryName(nsPath); } catch { return; }
+            if (string.IsNullOrEmpty(dir) || !Directory.Exists(dir)) return;
+            string[] sibs;
+            try { sibs = Directory.GetFiles(dir, $"TeleportStationNames_{id}_SlotIndex*.json"); } catch { return; }
+            if (sibs == null || sibs.Length == 0) return;
+            var ordered = new List<KeyValuePair<string, int>>();
+            foreach (var s in sibs) ordered.Add(new KeyValuePair<string, int>(s, ReadSiblingEpoch(s)));
+            ordered.Sort((a, b) => { int c = a.Value.CompareTo(b.Value); return c != 0 ? c : StringComparer.Ordinal.Compare(a.Key, b.Key); });
+            int f = 0, b1 = 0, b2 = 0;
+            foreach (var e in ordered)
+            {
+                string txt;
+                try { txt = File.ReadAllText(e.Key); } catch { continue; }
+                if (string.IsNullOrWhiteSpace(txt)) continue;
+                try
+                {
+                    if (txt.Contains("\"byId\"") || txt.Contains("\"byCoord\""))
+                    {
+                        string byId = ExtractSection(txt, "\"byId\"");
+                        string byCoord = ExtractSection(txt, "\"byCoord\"");
+                        if (byId != null) foreach (var kv in ParseJson(byId)) { _names[kv.Key] = kv.Value; b1++; }
+                        if (byCoord != null) foreach (var kv in ParseStrMap(byCoord)) { _namesByCoord[kv.Key] = kv.Value; b2++; }
+                    }
+                    else { foreach (var kv in ParseJson(txt)) { _names[kv.Key] = kv.Value; b1++; } }
+                    f++;
+                } catch { }
+            }
+            if (f == 0) return;
+            try { SaveNow(); } catch {} // 继承结果立即落规范文件（ durable + 下次 Load 因规范文件存在而跳过，真正一次性）
+            Plugin.L.LogInfo($"[TS][Name] 一次性继承同id分槽文件{f}个 byId+{b1} byCoord+{b2}（旧文件留盘备份）");
+        } catch { }
+    }
+
+    // 旧分槽名字文件 TeleportStationNames_{id}_SlotIndex{N}.json 的 epoch 读同名
+    // TeleportSaveEpoch_{id}_SlotIndex{N}.json（{"epoch":N}）；缺失/解析失败按 0。
+    private static int ReadSiblingEpoch(string siblingNamesPath)
+    {
+        try
+        {
+            string fn = Path.GetFileName(siblingNamesPath);
+            if (string.IsNullOrEmpty(fn)) return 0;
+            string efn = fn.Replace("TeleportStationNames_", "TeleportSaveEpoch_");
+            if (efn == fn) return 0;
+            string dir = Path.GetDirectoryName(siblingNamesPath);
+            string ep = Path.Combine(dir ?? "", efn);
+            if (!File.Exists(ep)) return 0;
+            string txt = File.ReadAllText(ep);
+            int ci = txt.IndexOf(':');
+            int e;
+            if (ci > 0 && int.TryParse(txt.Substring(ci + 1).Trim().Trim('}', ' ', '"'), out e) && e > 0) return e;
+        } catch { }
+        return 0;
     }
 
     // v0.9.99 N2：存档覆盖抽取（原 Load() 内:329-366 纯搬移）——活体 properties[2] 覆盖 + 坐标键回填。

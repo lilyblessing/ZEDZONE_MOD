@@ -6,7 +6,8 @@ namespace TeleportStationPlugin;
 
 /// <summary>
 /// v0.9.67 存档隔离（方案A：文件名嵌入身份键）。
-/// 身份键 = $"{GameData.id}_SlotIndex{GameData.saveSlotIndex}"（与 {gameId}_SlotIndex{slot}.game 同构；
+/// 身份键 = GameData.id 纯 id（v0.9.100 N5 去槽化：同 id 各槽共用一套名字，“同id合并”语义；
+/// 旧 {id}_SlotIndex{slot} 键只残留在磁盘旧文件名中作备份，不再参与键拼接）；
 /// GameController.instance.gameData 编译期直访，禁反射读实例字段）。
 /// v0.9.70 pin 设计（反编译实证 subagent/data/saveid-hijack-decompile.md）：
 /// 真读档三处（GameDataUI_IngameLoad.OnLoadConfirm 0x180689FE0 / 基类 GameDataUI.OnClick 0x18068B5C0（标题栏行）/
@@ -37,7 +38,7 @@ public static class TeleportSaveIdentity
     public const int ConvergeK = 3;
 
     // 由 GameData 对象派生身份键；null/空 id → ""。
-    // v0.9.99 N1：键内 id 段 / 槽号段抽取（键形如 {id}_SlotIndex{slot}；Sanitize 只替换非法文件名字符，不动该分隔形）。
+    // v0.9.100 N5：IdOfKey 保留兼容（旧 {id}_SlotIndex{slot} 键仍能剥出 id 段；新键为纯 id，原样返回）。
     internal static string IdOfKey(string key)
     {
         try
@@ -49,21 +50,8 @@ public static class TeleportSaveIdentity
         catch { return ""; }
     }
 
-    internal static int SlotOfKey(string key)
-    {
-        try
-        {
-            if (string.IsNullOrEmpty(key)) return int.MinValue;
-            int i = key.IndexOf("_SlotIndex", StringComparison.Ordinal);
-            if (i < 0) return int.MinValue;
-            int slot;
-            if (int.TryParse(key.Substring(i + "_SlotIndex".Length), out slot)) return slot;
-            return int.MinValue;
-        }
-        catch { return int.MinValue; }
-    }
-
-    // v0.9.99 N1：同 id 判定（比 KeyFromGameData 的 id 段，不只比槽号）。
+    // v0.9.100 N5：SlotOfKey 已删除（去槽化后无槽号段；删除前已 grep 全工程零调用点）。
+    // v0.9.100 N5：同 id 判定保留（新键即纯 id 时退化为相等比较；SaveGameDataPostfix 自动档 skip 分支无害化保留）。
     internal static bool SameGameId(string a, string b)
     {
         try
@@ -73,6 +61,8 @@ public static class TeleportSaveIdentity
         }
         catch { return false; }
     }
+    // v0.9.100 N5 身份键去槽化：返回纯 id（同 id 各槽共用一套名字；N1 漏网路径
+    // “手动存 slot0 而身份在 slot5 时 pin 切换”自愈——同 id 键相等，永不切换）。
     public static string KeyFromGameData(GameData gd)
     {
         try
@@ -80,8 +70,7 @@ public static class TeleportSaveIdentity
             if (gd == null) return "";
             string id = gd.id;
             if (string.IsNullOrEmpty(id)) return "";
-            int slot = gd.saveSlotIndex;
-            return Sanitize($"{id}_SlotIndex{slot}");
+            return Sanitize(id);
         }
         catch { return ""; }
     }
@@ -162,7 +151,8 @@ public static class TeleportSaveIdentity
         {
             if (newKey == null) newKey = "";
             if (_current == null) { _current = newKey; return; } // Init 前不动作
-            if (newKey == _current) return;
+            // v0.9.100 N5：同 id no-op（只打一行 info 日志）；仅 id 变化才 Flush 旧表 + Load 新表。
+            if (newKey == _current) { Plugin.L.LogInfo($"[TS][SaveId] 同id no-op，不切换（{(string.IsNullOrEmpty(newKey) ? "主菜单/未知" : newKey)}）"); return; }
             string old = _current;
             int n0 = CountAll();
             // v0.9.68 切换先落盘：_current 仍是旧 key，路径函数仍指旧 namespace；
@@ -268,13 +258,14 @@ public static class TeleportSaveIdentity
         } catch {}
     }
 
-    // 游戏内存档即一轮：仅当前槽推进；K 轮未见记录从本槽剔除并强制落盘。
+    // 游戏内存档即一轮：v0.9.100 N5 起收敛 epoch 按 id 算（同 id 各槽共享同一 epoch 文件/计数器；
+    // 行为变化：K=3 按合并后 seen 集判定——见 TeleportMapManager.PruneUnseen(epoch - seenEpoch >= K 即剔除)）。
     public static void OnGameSavedForCurrentSlot(GameData __0)
     {
         try
         {
             if (__0 == null || string.IsNullOrEmpty(_current)) return;
-            if (KeyFromGameData(__0) != _current) return;
+            if (KeyFromGameData(__0) != _current) return; // N5：纯 id 比较，同 id 分槽存档恒相等（N1 漏网路径已死）
             SlotEpoch++; // P2-10：先快照内存 epoch
             _epochDirty = true;
             int removed = 0;
@@ -282,9 +273,9 @@ public static class TeleportSaveIdentity
             if (removed > 0)
             {
                 try { TeleportMapManager.ForceSavePersisted(); } catch {}
-                Plugin.L.LogInfo($"[TS][SaveId] 收敛剔除 {removed} 站（本槽 epoch={SlotEpoch}，K={ConvergeK} 轮未见；仅本槽文件）");
+                Plugin.L.LogInfo($"[TS][SaveId] 收敛剔除 {removed} 站（本id epoch={SlotEpoch}，K={ConvergeK} 轮未见；仅本id文件）");
             }
-            else Plugin.L.LogInfo($"[TS][SaveId] 本槽存档 epoch={SlotEpoch}（无剔除）");
+            else Plugin.L.LogInfo($"[TS][SaveId] 本id存档 epoch={SlotEpoch}（无剔除）");
             try { _epochDirty = false; SaveEpochFile(); } catch { } // P2-10：epoch 文件延后写（收敛写盘之后）
         }
         catch { }
@@ -397,6 +388,7 @@ public static class TeleportSaveIdentity
             string pending = null; // P2-10：消费 prefix 快照的对账键（存档体执行完后再 pin，对账语义不变）
             try { pending = _savePendingKey; _savePendingKey = null; } catch { pending = null; }
             bool skipAutoPin = false;
+            // v0.9.100 N5：去槽化后同 id 的 pending == _current 恒成立，本分支恒 false（无害化保留，仅跨 id 时 pin）。
             try
             {
                 if (!string.IsNullOrEmpty(pending) && pending != _current && snapSlot == 5

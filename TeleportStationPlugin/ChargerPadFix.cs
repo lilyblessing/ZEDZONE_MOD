@@ -41,10 +41,12 @@ public static class ChargerPadFix
     private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
+    private static bool _warnedX4Hit;    // ×4 成功行独立旗标（失败行消费_warnedHit后成功仍可留痕）
     private static bool _warnedX4NoTo = false;      // ×4 四出口诊断：terrainObjectTemp空（一次性）
     private static bool _warnedX4TableEmpty = false; // ×4 四出口诊断：生产表空（一次性）
     private static bool _warnedX4NoBio = false;     // ×4 四出口诊断：无900103候选（一次性）
     private static bool _warnedX4MinDist = false;   // ×4 四出口诊断：最近对象距离（一次性）
+    private static bool _warnedX4NoAttrPos = false; // ×4 五出口诊断：temp空且attr无坐标（一次性；dump.cs:81055-81136实证TerrainObjectAttr无坐标类字段）
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
     private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
@@ -1762,7 +1764,7 @@ public static class ChargerPadFix
             {
                 productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat * 4f;
                 _boosted = true;
-                if (!_warnedHit) { _warnedHit = true; Plugin.L.LogInfo("[TS] ×4 倍率生效: sufficient×4"); }
+                if (!_warnedX4Hit) { _warnedX4Hit = true; Plugin.L.LogInfo("[TS] ×4 倍率生效: sufficient×4"); }
             }
             catch { }
         }
@@ -1818,6 +1820,18 @@ public static class ChargerPadFix
             if (to == null)
             {
                 if (!_warnedX4NoTo) { _warnedX4NoTo = true; Plugin.L.LogWarning("[TS] ×4 诊断: ×4 定位: terrainObjectTemp空"); }
+                // v0.9.99-X2 temp空fallback：pd.terrainObjectAttr(0x98)非空时查坐标类字段走距离判定；
+                // dump.cs:81055-81136实证TerrainObjectAttr全字段无坐标类字段（仅id/名称/贴图/colliderSize/spriteOffset/electric等，
+                // spriteOffset 0x60系贴图偏移非世界坐标）→ 记第五出口后return false（零表扫描，性能红线内）。
+                try
+                {
+                    var attr0 = pd.terrainObjectAttr;
+                    if (attr0 != null)
+                    {
+                        if (!_warnedX4NoAttrPos) { _warnedX4NoAttrPos = true; Plugin.L.LogWarning("[TS] ×4 诊断: ×4 定位: temp空且attr无坐标"); }
+                    }
+                }
+                catch { }
                 return false;
             }
             var pos = to.transform.position;
