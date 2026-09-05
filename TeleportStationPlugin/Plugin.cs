@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.92")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.93")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -236,6 +236,20 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] UpdateBatteryCharger 挂钩失败（方法未找到）");
             }
             catch (Exception ek) { Log.LogWarning($"[TS] UpdateBatteryCharger 挂钩异常: {ek.Message.Split('\n')[0]}"); }
+            // ═══ v0.9.93 读档去重守卫：ProductionManager.OnLoadGame prefix（09-05 更新后存档体自带重复
+            // productionObjectId，原生循环 Add 无守卫读档崩；prefix 只剔除多余表项留首个，void 永不跳过原生）═══
+            try
+            {
+                var olg = AccessTools.Method(typeof(ProductionManager), "OnLoadGame");
+                if (olg != null)
+                {
+                    h.Patch(olg, prefix: new HarmonyMethod(typeof(LoadGuardFix).GetMethod(
+                        nameof(LoadGuardFix.OnLoadGamePrefix), BindingFlags.Public | BindingFlags.Static)));
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.OnLoadGame（读档去重守卫）");
+                }
+                else Log.LogWarning("[TS] OnLoadGame 挂钩失败（方法未找到）");
+            }
+            catch (Exception eo) { Log.LogWarning($"[TS] OnLoadGame 挂钩异常: {eo.Message.Split('\n')[0]}"); }
             // ═══ v0.9.73：状态字 16 槽上限屏蔽（8×8 下槽位号≥16 的 Set/Get 原生 throw → prefix 吞掉保充电）═══
             try
             {
