@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.94-diag")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.95")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -187,10 +187,21 @@ public class Plugin : BasePlugin
             {
                 try
                 {
-                    var tm = AccessTools.Method(typeof(InventoryData), tn);
+                    System.Reflection.MethodInfo tm;
+                    string prefixName;
+                    if (tn == "TryAddItem")
+                    {
+                        tm = AccessTools.Method(typeof(InventoryData), tn, new Type[] { typeof(ItemData), typeof(bool), typeof(bool) });
+                        prefixName = nameof(BioGenFuel.WhitelistPrefix);
+                    }
+                    else
+                    {
+                        tm = AccessTools.Method(typeof(InventoryData), tn, new Type[] { typeof(ItemData), typeof(bool) });
+                        prefixName = nameof(BioGenFuel.WhitelistPrefixInt);
+                    }
                     if (tm == null) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩失败（方法未找到，跳过）"); continue; }
                     h.Patch(tm, prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                        nameof(BioGenFuel.WhitelistPrefix), BindingFlags.Public | BindingFlags.Static)));
+                        prefixName, BindingFlags.Public | BindingFlags.Static)));
                     Log.LogInfo($"[TS] 已挂钩 InventoryData.{tn}（BioGen 严格白名单）");
                 }
                 catch (Exception e9) { Log.LogWarning($"[TS] InventoryData.{tn} 挂钩异常: {e9.Message.Split('\n')[0]}"); }
@@ -376,6 +387,7 @@ public class Plugin : BasePlugin
                     h.Patch(onAll, postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(nameof(ChargerPadFix.OnEnableRecorder_All), BindingFlags.Public | BindingFlags.Static)));
                     Log.LogInfo("[TS] 已挂钩 TerrainObject.OnEnable（通用克隆注册表 P6.1）");
                 }
+                else Log.LogWarning("[TS] TerrainObject.OnEnable 挂钩失败（方法未找到）");
             }
             catch (Exception ea) { Log.LogWarning($"[TS] TerrainObject.OnEnable 挂钩异常: {ea.Message.Split('\n')[0]}"); }
             // v0.9.23 Fix: 强制克隆缩放为1（根治虚影小+存量污染，Init 是唯一覆写点，postfix 最终写回 Vector3.one）

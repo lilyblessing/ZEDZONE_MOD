@@ -32,13 +32,13 @@ public static class BuildingPadFix
     private static readonly Dictionary<int, SortingGroup> _sgCache = new(); // P1-5 盘SortingGroup句柄缓存（使用前判空，被销毁删键回退重取）
     private static float _nextFullScan = -1f; // P1-5 10s整表重扫兜底（到期清空_classified强制重判，不清_sgCache）
 
-    /// <summary>由 RegistrationProbe.Update 每帧调用（内部 0.5s 节流——实例级微秒开销）。</summary>
+    /// <summary>由 RegistrationProbe.Update 每帧调用（内部 1.0s 节流——实例级微秒开销）。</summary>
     public static void Tick()
     {
         try
         {
             float now = Time.unscaledTime;
-            if (now - _lastScan < 0.5f) return;
+            if (now - _lastScan < 1.0f) return;
             _lastScan = now;
             if (_fxBgId < 0) _fxBgId = SortingLayer.NameToID("FX_BG");
             if (_fxBgId <= 0) return; // FX_BG 未注册（内置层，理论不存在）

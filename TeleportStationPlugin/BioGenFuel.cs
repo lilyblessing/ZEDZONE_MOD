@@ -92,19 +92,36 @@ public static class BioGenFuel
         catch { return true; }
     }
 
-    /// <summary>v0.8.9 D：TryAddItem/AddItem prefix——item 级严格白名单（腐肉205 / 炭6 / 过期食品）。</summary>
-    public static bool WhitelistPrefix(InventoryData __instance, ItemData __0)
+    /// <summary>v0.8.9 D：TryAddItem prefix——item 级严格白名单（腐肉205 / 炭6 / 过期食品）。</summary>
+    public static bool WhitelistPrefix(InventoryData __instance, ItemData __0, ref bool __result)
     {
         try
         {
             if (__instance == null) return true;
             if (!IsMarked(__instance)) return true;
-            if (__0 == null) { LogReject(-2); return false; }
+            if (__0 == null) { LogReject(-2); __result = false; return false; }
             if (IsAllowedFuel(__0)) return true;
             LogReject(FuelItemId(__0));
+            __result = false;
             return false; // 拒绝放入（物品回到原处）
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] WhitelistPrefix 异常: {e.Message.Split('\n')[0]}"); return true; }
+    }
+
+    /// <summary>v0.8.9 D：AddItem prefix——item 级严格白名单（腐肉205 / 炭6 / 过期食品，int 返回版）。</summary>
+    public static bool WhitelistPrefixInt(InventoryData __instance, ItemData __0, ref int __result)
+    {
+        try
+        {
+            if (__instance == null) return true;
+            if (!IsMarked(__instance)) return true;
+            if (__0 == null) { LogReject(-2); __result = 0; return false; }
+            if (IsAllowedFuel(__0)) return true;
+            LogReject(FuelItemId(__0));
+            __result = 0;
+            return false; // 拒绝放入（物品回到原处）
+        }
+        catch (Exception e) { Plugin.L.LogWarning($"[TS] WhitelistPrefixInt 异常: {e.Message.Split('\n')[0]}"); return true; }
     }
 
     /// <summary>v0.8.1 保留：get_fuelInventoryData postfix——UI 侧容器标记（双来源之一，不接管准入、不清 itemFeatureLimit）。</summary>

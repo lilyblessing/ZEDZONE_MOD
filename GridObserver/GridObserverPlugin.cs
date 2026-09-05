@@ -10,7 +10,7 @@ using UnityEngine;
 namespace GridObserver;
 
 /// <summary>电网只读观察插件：只记录、零干预（任何地方不 return false、不写游戏字段）。</summary>
-[BepInPlugin("com.zedzone.gridobserver", "GridObserver", "0.1.0")]
+[BepInPlugin("com.zedzone.gridobserver", "GridObserver", "0.1.1")]
 public class GridObserverPlugin : BasePlugin
 {
     internal static ManualLogSource L;
@@ -18,6 +18,7 @@ public class GridObserverPlugin : BasePlugin
     internal static long DirtyCount;
     internal static float BucketStart = -99f;
     internal static int BucketCount;
+    internal static int PostfixCount;
     internal static readonly System.Collections.Generic.List<int> BucketIds = new();
 
     public override void Load()
@@ -29,7 +30,7 @@ public class GridObserverPlugin : BasePlugin
         Patch(h, typeof(ProductionManager), "RebuildElectricGraph", nameof(Hooks.RebuildPrefix), nameof(Hooks.RebuildPostfix), "RebuildElectricGraph");
         PatchArg(h, "AddProductionData", nameof(Hooks.AddPostfix));
         PatchArg(h, "RemoveProductionData", nameof(Hooks.RemovePostfix));
-        Patch(h, typeof(TerrainObject_Production), "OnEnable", null, nameof(Hooks.EnablePostfix), "TerrainObject_Production.OnEnable");
+        Patch(h, typeof(TerrainObject_Production), "OnEnable", nameof(Hooks.EnablePrefix), nameof(Hooks.EnablePostfix), "TerrainObject_Production.OnEnable");
         try
         {
             ClassInjector.RegisterTypeInIl2Cpp<Beat>();
@@ -39,7 +40,7 @@ public class GridObserverPlugin : BasePlugin
             L.LogInfo(Pfx() + " [GO] 心跳已启动");
         }
         catch (Exception e) { L.LogWarning(Pfx() + " [GO] 心跳启动失败(仅缺心跳): " + OneLine(e)); }
-        L.LogInfo(Pfx() + " [GO] loaded v0.1.0（只读观察）");
+        L.LogInfo(Pfx() + " [GO] loaded v0.1.1（只读观察）");
     }
 
     internal static void Patch(Harmony h, Type t, string m, string pre, string post, string label)
@@ -58,7 +59,15 @@ public class GridObserverPlugin : BasePlugin
     {
         try
         {
-            var mi = AccessTools.Method(typeof(ProductionManager), m, new Type[] { typeof(ProductionData) });
+            MethodInfo mi = null;
+            try
+            {
+                foreach (var cand in typeof(ProductionManager).GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    try { if (cand.Name == m && cand.GetParameters().Length == 1) { mi = cand; break; } } catch { }
+                }
+            }
+            catch { }
             if (mi == null) { L.LogWarning(Pfx() + " [GO] 挂钩失败(未找到): ProductionManager." + m); return; }
             h.Patch(mi, null, Postfix(post));
             L.LogInfo(Pfx() + " [GO] 已挂钩 ProductionManager." + m);
@@ -156,7 +165,7 @@ public static class Hooks
         catch { }
     }
 
-    public static void EnablePostfix(TerrainObject_Production __instance)
+    public static void EnablePrefix(TerrainObject_Production __instance)
     {
         try
         {
@@ -169,16 +178,22 @@ public static class Hooks
                 {
                     string ids = "?";
                     try { ids = string.Join(",", GridObserverPlugin.BucketIds); } catch { }
-                    GridObserverPlugin.L.LogInfo(GridObserverPlugin.Pfx() + $" [GO][Enable] 桶内n={GridObserverPlugin.BucketCount} ids={{{ids}}}");
+                    try { GridObserverPlugin.L.LogInfo(GridObserverPlugin.Pfx() + $" [GO][Enable] 桶内n={GridObserverPlugin.BucketCount} ids={{{ids}}} pre={GridObserverPlugin.BucketCount} post={GridObserverPlugin.PostfixCount}"); } catch { }
                 }
                 GridObserverPlugin.BucketStart = now;
                 GridObserverPlugin.BucketCount = 0;
-                GridObserverPlugin.BucketIds.Clear();
+                try { GridObserverPlugin.BucketIds.Clear(); } catch { }
+                try { GridObserverPlugin.PostfixCount = 0; } catch { }
             }
             GridObserverPlugin.BucketCount++;
             if (GridObserverPlugin.BucketIds.Count < 8) GridObserverPlugin.BucketIds.Add(id);
         }
         catch { }
+    }
+
+    public static void EnablePostfix(TerrainObject_Production __instance)
+    {
+        try { GridObserverPlugin.PostfixCount++; } catch { }
     }
 }
 

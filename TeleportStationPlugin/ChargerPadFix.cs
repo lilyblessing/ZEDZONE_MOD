@@ -33,6 +33,8 @@ public static class ChargerPadFix
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
     private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
+    private static float _nextHeavyWork = -999f; // v0.9.95-perf：重型表操作 1s 节流门
+    private static float _nextHeavyLog = -999f; // v0.9.95-perf：诊断日志 5s 共享窗
     private static bool _stirProbed; // v0.9.11 延迟重试：Stirling表段完成旗标
     private static bool _prefabProbed; // v0.9.11 延迟重试：Prefab段完成旗标
     private static float _lastDicLog = -999f;
@@ -603,18 +605,23 @@ public static class ChargerPadFix
     public static void GridConsumePrefix(ProductionManager __instance)
     {
         if (!RegistrarState.Done) return; // 读档期冻结，沉降后才补表/劫持range
+        float nowF = Time.unscaledTime; // v0.9.95-perf：单快照驱动 heavy/log 双门
+        bool doHeavy = nowF >= _nextHeavyWork; if (doHeavy) _nextHeavyWork = nowF + 1f;
+        bool doLog = nowF >= _nextHeavyLog; // 置位点在 Postfix 末处 PoleCensus，同窗四处同 tick 同过
         try // v0.9.91-diag：重建前 IO 普查（只读+日志，零行为改动）
         {
             int preAO = -1, prePD = -1;
             try { var ao = TerrainObject_Production.ActiveObjects_Production; if (ao != null) preAO = ao.Count; } catch { }
             try { var pl = __instance != null ? __instance.productionDataList : null; if (pl != null) prePD = pl.Count; } catch { prePD = -1; }
-            try { Plugin.L.LogInfo($"[TS][RebuildIO] pre ActiveObjects={preAO} prodList={prePD}"); } catch { }
+            try { if (doLog) Plugin.L.LogInfo($"[TS][RebuildIO] pre ActiveObjects={preAO} prodList={prePD}"); } catch { }
         }
         catch { }
         try
         {
+            try { CompleteAllPdTables(__instance); } catch { } // 脏位门（廉价），每 tick 照跑
+            if (doHeavy) // v0.9.95-perf：重型段 1s 节流（Ensure/补表/range劫持/回灌/Stirling 原样内移）
+            {
             try { if (!_clonesScanDone || _knownClones.Count == 0) { EnsureClonesInTables(); _clonesScanDone = true; } } catch { }
-            try { CompleteAllPdTables(__instance); } catch { }
             // v0.9.22：从克隆注册表补表（H&D 下 FindObjectsOfType 不可见，注册表不依赖可见性）
             try
             {
@@ -650,7 +657,7 @@ public static class ChargerPadFix
                     }
                     catch { }
                 }
-                try { Plugin.L.LogInfo($"[TS][Reinforce] adds={reinforceAdds}"); } catch { }
+                try { if (doLog) Plugin.L.LogInfo($"[TS][Reinforce] adds={reinforceAdds}"); } catch { }
             }
             catch { }
             if (!_rangeHijacked)
@@ -849,6 +856,7 @@ public static class ChargerPadFix
                 }
             }
             catch { }
+            } // v0.9.95-perf：doHeavy 关
         }
         catch { }
     }
@@ -1002,6 +1010,8 @@ public static class ChargerPadFix
     /// <summary>ProductionManager.ConsumeElectricGridDirtyFlag postfix：重扫完成 → 采样三建筑 PD 连接表。</summary>
     public static void GridConsumePostfix(ProductionManager __instance)
     {
+        float nowF = Time.unscaledTime; // v0.9.95-perf：与 Prefix 同窗快照（置位在末处 PoleCensus）
+        bool doLog = nowF >= _nextHeavyLog;
         try
         {
             if (_rangeHijacked)
@@ -1022,7 +1032,7 @@ public static class ChargerPadFix
                 int postAO = -1, postPD = -1;
                 try { var ao = TerrainObject_Production.ActiveObjects_Production; if (ao != null) postAO = ao.Count; } catch { }
                 try { var pl = __instance != null ? __instance.productionDataList : null; if (pl != null) postPD = pl.Count; } catch { postPD = -1; }
-                try { Plugin.L.LogInfo($"[TS][RebuildIO] post ActiveObjects={postAO} prodList={postPD}"); } catch { }
+                try { if (doLog) Plugin.L.LogInfo($"[TS][RebuildIO] post ActiveObjects={postAO} prodList={postPD}"); } catch { }
             }
             catch { }
             try // v0.9.91-diag：杆普查（只读+日志，零行为改动；EnableDiag 门控之外独立运行）
@@ -1055,7 +1065,8 @@ public static class ChargerPadFix
                     }
                 }
                 catch { }
-                try { Plugin.L.LogInfo($"[TS][PoleCensus] emptyPoles={emptyPoles}/total={totalPoles}"); } catch { }
+                try { if (doLog) Plugin.L.LogInfo($"[TS][PoleCensus] emptyPoles={emptyPoles}/total={totalPoles}"); } catch { }
+                if (doLog) _nextHeavyLog = nowF + 5f; // v0.9.95-perf：窗置位放最后进入处，同 tick 内 pre/Reinforce/post 自然同过
             }
             catch { }
             if (!EnableDiag) return;
@@ -1712,7 +1723,7 @@ public static class ChargerPadFix
     // batteryChargeStateTemp uint @0xE0 按 2bit/槽打包共 16 槽；Set 用 if(0xf<index)throw，Get 用 if(index<0x10)；
     // UpdateBatteryCharger 传的是格子槽位号（sizeX*y+x），8×8 下 ≥16 即崩且掀翻当次充电。
     // 充电循环（ChargeBattery）与 index 无关 → 越界 Set/Get 直接吞掉，16+ 格无 LED（渲染本就只管前 totalBatterySoltNumber 槽）。
-    public static bool BatteryStateSetPrefix(int __0)
+    public static bool BatteryStateSetPrefix(int __0, int __1)
     {
         try { if (__0 < 0 || __0 > 15) return false; } catch { }
         return true;
