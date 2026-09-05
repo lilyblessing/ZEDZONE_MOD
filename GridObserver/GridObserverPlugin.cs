@@ -10,7 +10,7 @@ using UnityEngine;
 namespace GridObserver;
 
 /// <summary>电网只读观察插件：只记录、零干预（任何地方不 return false、不写游戏字段）。</summary>
-[BepInPlugin("com.zedzone.gridobserver", "GridObserver", "0.1.1")]
+[BepInPlugin("com.zedzone.gridobserver", "GridObserver", "0.1.2")]
 public class GridObserverPlugin : BasePlugin
 {
     internal static ManualLogSource L;
@@ -40,7 +40,7 @@ public class GridObserverPlugin : BasePlugin
             L.LogInfo(Pfx() + " [GO] 心跳已启动");
         }
         catch (Exception e) { L.LogWarning(Pfx() + " [GO] 心跳启动失败(仅缺心跳): " + OneLine(e)); }
-        L.LogInfo(Pfx() + " [GO] loaded v0.1.1（只读观察）");
+        L.LogInfo(Pfx() + " [GO] loaded v0.1.2（只读观察）");
     }
 
     internal static void Patch(Harmony h, Type t, string m, string pre, string post, string label)
@@ -141,24 +141,24 @@ public static class Hooks
         catch { }
     }
 
-    public static void AddPostfix(ProductionManager __instance, ProductionData pd)
+    public static void AddPostfix(ProductionManager __instance, ProductionData __0)
     {
         try
         {
             string shortId = "?"; int total = -1;
-            try { var s = pd?.productionObjectId; shortId = string.IsNullOrEmpty(s) ? "?" : (s.Length <= 8 ? s : s.Substring(0, 8)); } catch { }
+            try { var s = __0?.productionObjectId; shortId = string.IsNullOrEmpty(s) ? "?" : (s.Length <= 8 ? s : s.Substring(0, 8)); } catch { }
             try { var l = __instance?.productionDataList; if (l != null) total = l.Count; } catch { }
             GridObserverPlugin.L.LogInfo(GridObserverPlugin.Pfx() + $" [GO][Add] id={shortId} pl={total}");
         }
         catch { }
     }
 
-    public static void RemovePostfix(ProductionManager __instance, ProductionData pd)
+    public static void RemovePostfix(ProductionManager __instance, ProductionData __0)
     {
         try
         {
             string shortId = "?"; int total = -1;
-            try { var s = pd?.productionObjectId; shortId = string.IsNullOrEmpty(s) ? "?" : (s.Length <= 8 ? s : s.Substring(0, 8)); } catch { }
+            try { var s = __0?.productionObjectId; shortId = string.IsNullOrEmpty(s) ? "?" : (s.Length <= 8 ? s : s.Substring(0, 8)); } catch { }
             try { var l = __instance?.productionDataList; if (l != null) total = l.Count; } catch { }
             GridObserverPlugin.L.LogInfo(GridObserverPlugin.Pfx() + $" [GO][Remove] id={shortId} pl={total}");
         }
