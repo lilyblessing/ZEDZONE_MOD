@@ -24,6 +24,30 @@ public static class ChargerPadFix
     private const int BioGenId = 900103;
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
     internal static bool DiagCut = true; // v0.9.96-diag：手术二分总开关（写死true恒切；下版恢复改false）
+    internal static System.DateTime _worldActiveFirstSeen = System.DateTime.MinValue; // v0.9.96-diag r3：世界首次活跃时刻
+    internal static bool _diagCutArmedLogged = false; // v0.9.96-diag r3：武装日志只打一次
+    internal static bool DiagCutArmed() // r3：克隆期永不武装；世界活跃150s后武装（避开读档OnEnable风暴SO）
+    {
+        try
+        {
+            if (IsCloning) return false;
+            bool wa = false;
+            try { var gc = GameController.instance; if (gc != null && gc.playerCharacter != null) wa = true; } catch { }
+            if (!wa) return false;
+            if (_worldActiveFirstSeen == System.DateTime.MinValue)
+            {
+                _worldActiveFirstSeen = System.DateTime.UtcNow;
+                try { Plugin.L.LogInfo("[TS][DiagCut] 世界活跃，150s后切断断路器（读档沉降窗口）"); } catch { }
+            }
+            if ((System.DateTime.UtcNow - _worldActiveFirstSeen).TotalSeconds > 150)
+            {
+                if (!_diagCutArmedLogged) { _diagCutArmedLogged = true; try { Plugin.L.LogInfo("[TS][DiagCut] 断路器切断已武装（运行时放行原生OnEnable）"); } catch { } }
+                return true;
+            }
+            return false;
+        }
+        catch { return false; }
+    }
     private static readonly System.Collections.Generic.HashSet<long> _initKeys = new();
     private static float _lastScan = -1f;
     internal static TerrainObject_Production[] _sharedProdSnapshot; // P2-2：双Tick共享快照（任一Tick先到且过期则拷贝一次刷新）
@@ -135,7 +159,7 @@ public static class ChargerPadFix
     {
         try
         {
-            try { if (DiagCut && !IsCloning) return true; } catch { } // v0.9.96-diag：运行时放行；克隆期保持断路器防SO
+            try { if (DiagCut && DiagCutArmed()) return true; } catch { } // v0.9.96-diag r3：运行时+读档沉降后放行；克隆期/读档风暴不断路器防SO
             int key = 0;
             try { if (__instance != null) key = __instance.GetInstanceID(); } catch { }
             _oeDepth.TryGetValue(key, out int d);
