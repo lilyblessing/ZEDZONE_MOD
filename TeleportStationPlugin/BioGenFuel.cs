@@ -63,11 +63,11 @@ public static class BioGenFuel
     // 全部 attr 的 Combustible（游戏单线程串行，原子），postfix 恢复。原生扫描自然跳过燃料集、木头照烧；
     // BioGen 窗不摘除。prefix 恒返 true（不跳过原生；除燃料集标志位外不改变任何状态）；与既有
     // StirlingUpdatePrefix/Postfix 同挂一方法但条件互斥（BioGen vs 非 BioGen），顺序无关。
-    // 燃料集定义：唯一 source of truth = IsBioFuelAttr(attr, false)（见下；F1a 同一函数，grep 可验）。
+    // 燃料集定义：唯一 source of truth = IsBioGenFuel(itemId)（见下；F1a/F1b/D 环同一函数，grep 定义恰 1 处）。
     // 炭 6 排除在外（灰烬原生语义：B 环伪造已对其放行原版 attr，此处不摘除）。
     private static readonly System.Collections.Generic.List<ItemAttr> _fuelAttrs = new(); // 否决集缓存（懒建一次）
     private static bool _fuelResolved;
-    private static int _strippedCount; // 本窗摘除数（串行调用，无嵌套）
+    private static readonly System.Collections.Generic.List<ItemAttr> _stripped = new(); // 本窗实际摘除项（postfix 只恢复这些；串行调用，无嵌套）
     private static bool _fuelAttrWarned;
 
     private static void EnsureFuelSet()
@@ -83,8 +83,10 @@ public static class BioGenFuel
             {
                 var a = all[i];
                 if (a == null) continue;
+                int fid = -1;
+                try { fid = a.itemId; } catch { continue; }
                 bool hit = false;
-                try { hit = IsBioFuelAttr(a, false); } catch { continue; }
+                try { hit = IsBioGenFuel(fid); } catch { continue; }
                 if (!hit) continue;
                 bool dup = false;
                 for (int j = 0; j < _fuelAttrs.Count; j++) try { if (ReferenceEquals(_fuelAttrs[j], a)) { dup = true; break; } } catch { }
@@ -103,7 +105,7 @@ public static class BioGenFuel
             if (generatorData == null) return true;
             if (IsBioGenProduction(generatorData)) return true; // BioGen 不摘除（燃料集照烧）
             EnsureFuelSet();
-            _strippedCount = 0;
+            try { _stripped.Clear(); } catch { }
             for (int i = 0; i < _fuelAttrs.Count; i++)
             {
                 var m = _fuelAttrs[i];
@@ -111,7 +113,7 @@ public static class BioGenFuel
                 try
                 {
                     var feats = m.itemFeatures;
-                    if (feats != null && feats.Contains(ItemFeatureType.Combustible)) { feats.Remove(ItemFeatureType.Combustible); _strippedCount++; }
+                    if (feats != null && feats.Contains(ItemFeatureType.Combustible)) { feats.Remove(ItemFeatureType.Combustible); try { _stripped.Add(m); } catch { } }
                 }
                 catch { }
             }
@@ -124,11 +126,10 @@ public static class BioGenFuel
     {
         try
         {
-            if (_strippedCount <= 0) return;
-            _strippedCount = 0;
-            for (int i = 0; i < _fuelAttrs.Count; i++)
+            if (_stripped.Count == 0) return;
+            for (int i = 0; i < _stripped.Count; i++)
             {
-                var m = _fuelAttrs[i];
+                var m = _stripped[i];
                 if (m == null) continue;
                 try
                 {
@@ -137,6 +138,7 @@ public static class BioGenFuel
                 }
                 catch { }
             }
+            try { _stripped.Clear(); } catch { }
         }
         catch { }
     }
@@ -297,20 +299,35 @@ public static class BioGenFuel
         try { return _marked.Contains(GetInstanceKey(fd)); } catch { return false; }
     }
 
-    /// <summary>v0.9.104 燃料集唯一定义（attr 级，F1a/F1b/D 环共用，同一函数）：
-    /// 腐肉 205 + 所有 itemType 含 Food 的 attr（含一切带新鲜度的食物）；炭 6（灰烬副产品）是否计入由 includeAsh 决定——
-    /// D 环白名单（IsAllowedFuel）传 true（炭必须回仓），F1a 补键 / F1b 否决传 false（炭走原生语义，不动）。
-    /// 判定照抄既有 C/D 环逻辑（id 快路 + itemType.Contains("Food")），行为与 v0.8.10 白名单一致，不两份逻辑。</summary>
+    /// <summary>v0.9.104 燃料集唯一定义（E1，F1a/F1b/D 环共用同一函数，grep 定义恰 1 处）：
+    /// 所有带新鲜度的食物 = 腐肉 205（回归项）+ 一切 itemType 含 Food 的物品；炭 6 除外（灰烬走原生语义）。
+    /// 运行时可算：id 快路 + ItemManager 现场解析 attr 读 itemType，不硬编码零散 id。
+    /// 判定照抄既有 C/D 环逻辑，行为与 v0.8.10 白名单一致，不两份逻辑。</summary>
+    internal static bool IsBioGenFuel(int itemId)
+    {
+        try
+        {
+            if (itemId == 205) return true;   // 回归：腐肉
+            if (itemId == 6) return false;    // 炭：灰烬，原生语义，不计入燃料集
+            if (itemId <= 0) return false;    // 无法识别一律拒（含木头 id 0）
+            ItemAttr attr = null;
+            try { attr = ItemManager.instance?.GetItemAttrById(itemId); } catch { }
+            if (attr == null) return false;
+            try { return attr.itemType.ToString().Contains("Food"); } catch { return false; }
+        }
+        catch { return false; }
+    }
+
+    /// <summary>attr 级变体（含灰烬开关）：D 环白名单（IsAllowedFuel）传 includeAsh=true（炭必须回仓）；
+    /// F1a 补键 / F1b 否决一律走 IsBioGenFuel(id)（炭除外）。非灰烬路径直接委托 IsBioGenFuel，不两份逻辑。</summary>
     internal static bool IsBioFuelAttr(ItemAttr attr, bool includeAsh)
     {
         try
         {
             if (attr == null) return false;
             int id = -1; try { id = attr.itemId; } catch { }
-            if (id == 205) return true;              // 腐肉
             if (id == 6) return includeAsh;          // 炭：灰烬，原生语义
-            if (id <= 0) return false;               // 无法识别的物品一律拒（含木头 id 0）
-            try { return attr.itemType.ToString().Contains("Food"); } catch { return false; }
+            return IsBioGenFuel(id);
         }
         catch { return false; }
     }

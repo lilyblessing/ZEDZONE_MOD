@@ -434,7 +434,7 @@ public static class ChargerPadFix
     }
 
     // ── v0.9.104 F1a：生物燃料集原生可燃化（BioGen 读档掉线根治 + 燃料限定的前置一半）──
-    // 用户纠正：BioGen 燃料集 = 所有带新鲜度的食物（不止 205）。燃料集唯一定义见 BioGenFuel.IsBioFuelAttr(attr, false)
+    // 用户纠正：BioGen 燃料集 = 所有带新鲜度的食物（不止 205）。燃料集唯一定义见 BioGenFuel.IsBioGenFuel(itemId)
     // （205 + 全 Food，炭 6 除外；与 D 环白名单同源，includeAsh 区分）——本方法只枚举+补键，不另立定义。
     // 背景：900103 BioGen 烧燃料全靠启动门伪造窗（GetItemAttrById 返回木头 attr）；读档时原生启动判定早于
     // 伪造窗 → 永不起机 → 不入电网图。F1a 给燃料集逐个补原生 Combustible，读档原生判定直接放行。
@@ -456,8 +456,10 @@ public static class ChargerPadFix
             {
                 var a = all[k];
                 if (a == null) continue;
+                int fid = -1;
+                try { fid = a.itemId; } catch { continue; }
                 bool isFuel = false;
-                try { isFuel = BioGenFuel.IsBioFuelAttr(a, false); } catch { continue; }
+                try { isFuel = BioGenFuel.IsBioGenFuel(fid); } catch { continue; }
                 if (!isFuel) continue;
                 bool did = false;
                 try
