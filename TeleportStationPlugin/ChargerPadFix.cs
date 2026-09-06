@@ -442,10 +442,12 @@ public static class ChargerPadFix
     // Combustible 是纯标志位——dump 全表无 ItemFeature_Combustible 数据类，燃烧时长/功率是 ProductionManager
     // 全局静态 stirlingFuelBuringTime / stirlingGeneratorWattage（dump.cs:79252-79253），无逐燃料配平项——
     // 「对标同类燃料」即同一标志位（木头 id 0 同款），无 wattage 可配。禁区：只动可燃相关条目，其他字段不动。
+    // 顺序铁律（方案③）：加在原生门前（场景加载补键，早于原生启动判定）；摘在沉降后（BioGenSaveHealOnce 首行精确摘除）。
     internal static void EnsureBioFuelCombustible()
     {
         try
         {
+            try { BioGenFuel.SnapshotNativeCombustible(); } catch { } // 顺序铁律：先快照原生可燃集（原版斯特林燃料类），再补键；只拍一次
             ItemAttr[] all = null;
             try { all = UnityEngine.Resources.FindObjectsOfTypeAll<ItemAttr>(); } catch { }
             if (all == null || all.Length == 0) return; // 资产未就绪，下次场景加载重跑（幂等）
@@ -462,10 +464,11 @@ public static class ChargerPadFix
                 try { isFuel = BioGenFuel.IsBioGenFuel(fid); } catch { continue; }
                 if (!isFuel) continue;
                 bool did = false;
+                bool addedFlag = false;
                 try
                 {
                     var feats = a.itemFeatures;
-                    if (feats != null && !feats.Contains(ItemFeatureType.Combustible)) { feats.Add(ItemFeatureType.Combustible); did = true; }
+                    if (feats != null && !feats.Contains(ItemFeatureType.Combustible)) { feats.Add(ItemFeatureType.Combustible); did = true; addedFlag = true; }
                 }
                 catch { }
                 // 木头看齐（防御性镜像：若木头 attr 的 dic/config 带有 Combustible 条目则引用复制，供未来 InitItemAttr 重建复现；
@@ -497,6 +500,7 @@ public static class ChargerPadFix
                 }
                 catch { }
                 if (did) patched++;
+                if (addedFlag) { try { BioGenFuel.RecordBioFuelAdded(fid); } catch { } } // 精确恢复记账：只记实际补过标志的 id（原生已带的不入表）
             }
             if (patched > 0) Plugin.L.LogInfo($"[TS] F1a: 生物燃料集已补原生Combustible {patched}种（205+全Food，炭6除外）");
         }
@@ -1050,6 +1054,7 @@ public static class ChargerPadFix
     {
         try
         {
+            try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } // 方案③窗期摘除：借 A 自愈执行点（同一沉降信号+5s）；A 自愈逻辑不动
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null) { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects空（无在场实例，无需自愈）"); return; }
             var mgr = ProductionManager.instance;

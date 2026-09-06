@@ -13,8 +13,8 @@ namespace TeleportStationPlugin;
 /// 四件套：
 ///   A. UpdateStirlingGenerator prefix：900103 判定 → 标记 inventoryData1（真烧录容器）+ ref addedTime×0.5（半速）+ 开扫描窗
 ///   B. ItemManager.GetItemAttrById prefix：扫描窗内对白名单燃料返回木头 attr（自带 Combustible）→ 启动门放行（腐肉也能烧）
-///   C. PassesFeatureLimit prefix：生物容器 attr 级粗筛（205/炭/Food 放行，木头/金属拒）
-///   D. TryAddItem/AddItem prefix：item 级白名单（Food 类全放行 / 腐肉205 / 炭6 豁免；木头·金属拒）——v0.8.10 终版
+///   C. PassesFeatureLimit prefix：生物容器 attr 级粗筛（205/炭/木头/Food 放行，金属拒）
+///   D. TryAddItem/AddItem prefix：item 级白名单（Food 类全放行 / 腐肉205 / 木头0 / 炭6 豁免；金属拒）——v0.8.10 终版 + 木材类
 /// 容器识别：指针标记集合（来自 inventoryData1 + get_fuelInventoryData 双来源），不再依赖 ActiveObjects 遍历。
 /// </summary>
 public static class BioGenFuel
@@ -49,101 +49,59 @@ public static class BioGenFuel
         _inBioScan = false; // 窗口必须清除（哪怕原方法异常也由 Harmony 保证 postfix 执行）
     }
 
-    // ── v0.9.104 F1b：燃料集限定燃烧·消费侧否决（与 F1a 成对，缺一不可）──
-    // F1a 给燃料集原生 Combustible 后，原版斯特林（120，BioGen 克隆源）的燃料扫描也会命中燃料集，必须否决。
-    // 钩点选择实证（dump.cs 全表仅 2 处 Combustible 命中）：
-    //   - dump.cs:53597 ItemFeatureType.Combustible = 1（纯标志位定义）；
-    //   - dump.cs:79293 ProductionManager.FindLastCombustibleIndex(InventoryData)（燃料扫描，public static，
-    //     仅收燃料容器、无 burner 参数——任务书“fuel==205 且 burner.attr!=900103 返回 false”形状无干净钩点，
-    //     burner 身份不可得；判定体 Combustible 读取循环内联在 UpdateStirlingGenerator 体内，
-    //     dump 仅签名（dump.cs:79361，VA 0x1809ACA60），无独立方法）。
-    // 否决方案：hook 仍有 burner 身份的调用方——ProductionManager.UpdateStirlingGenerator /
-    // UpdateStoneFurnace（ProductionData.generatorData/productionData 经 terrainObjectAttr 直接判定，
-    // 复用 IsBioGenProduction，比 FindTerrainObject 爬链更直接）：非 BioGen burner 调用窗内临时摘除燃料集
-    // 全部 attr 的 Combustible（游戏单线程串行，原子），postfix 恢复。原生扫描自然跳过燃料集、木头照烧；
-    // BioGen 窗不摘除。prefix 恒返 true（不跳过原生；除燃料集标志位外不改变任何状态）；与既有
-    // StirlingUpdatePrefix/Postfix 同挂一方法但条件互斥（BioGen vs 非 BioGen），顺序无关。
-    // 燃料集定义：唯一 source of truth = IsBioGenFuel(itemId)（见下；F1a/F1b/D 环同一函数，grep 定义恰 1 处）。
-    // 炭 6 排除在外（灰烬原生语义：B 环伪造已对其放行原版 attr，此处不摘除）。
-    private static readonly System.Collections.Generic.List<ItemAttr> _fuelAttrs = new(); // 否决集缓存（懒建一次）
-    private static bool _fuelResolved;
-    private static readonly System.Collections.Generic.List<ItemAttr> _stripped = new(); // 本窗实际摘除项（postfix 只恢复这些；串行调用，无嵌套）
-    private static bool _fuelAttrWarned;
+    // ── v0.9.105 方案③：读档窗期标志 + 加法（F1b 否决已退役删除，见 git 历史）──
+    // 顺序铁律：加在原生门前——场景加载时 ChargerPadFix.EnsureBioFuelCombustible 先快照后补键，
+    // 早于原生启动判定，读档原生放行；摘在沉降后——读档沉降+5s 的 BioGenSaveHealOnce 首行
+    // RemoveBioFuelCombustible() 精确摘除；摘除后运行时认食物全靠 B 环加法窗伪造
+    // （窗期标志摘除后的运行时认食物路径，见 GetAttrByIdPrefix）。
+    // 精确恢复：补键时 RecordBioFuelAdded 记 _addedFuelIds（仅实际补过 Combustible 的 id，
+    // 原生已带标志的项不入表）；摘除只摘表内项，快照集（NativeCombustibleIds）内原生 id 永不碰，无全量摘除。
+    private static readonly System.Collections.Generic.HashSet<int> _addedFuelIds = new(); // 本次补过标志的燃料 id（摘完清空）
 
-    private static void EnsureFuelSet()
+    internal static void RecordBioFuelAdded(int itemId)
+    {
+        try { _addedFuelIds.Add(itemId); } catch { }
+    }
+
+    /// <summary>窗期标志摘除（沉降后执行，调用点见 ChargerPadFix.BioGenSaveHealOnce 首行；A 自愈逻辑不动）：
+    /// 只摘 _addedFuelIds 表内项（我们加的），快照集内原生 id 与炭 6 永不碰；摘完打 info 日志。</summary>
+    internal static void RemoveBioFuelCombustible()
     {
         try
         {
-            if (_fuelResolved) return;
-            _fuelResolved = true; // 先锁后建（资产未就绪则空集，本局后续tick不再扫描；F1a场景postfix会补，见注释）
-            ItemAttr[] all = null;
-            try { all = UnityEngine.Resources.FindObjectsOfTypeAll<ItemAttr>(); } catch { }
-            if (all == null) return;
-            for (int i = 0; i < all.Length; i++)
+            if (_addedFuelIds.Count == 0) { try { Plugin.L.LogInfo("[TS][Fuel] 窗期标志已摘除 n=0"); } catch { } return; }
+            int n = 0;
+            ItemManager mgr = null;
+            try { mgr = ItemManager.instance; } catch { }
+            System.Collections.Generic.List<int> ids = null;
+            try { ids = new System.Collections.Generic.List<int>(_addedFuelIds); } catch { }
+            try { _addedFuelIds.Clear(); } catch { } // 先清后摘（单线程；异常也不重摘）
+            if (ids != null && mgr != null)
             {
-                var a = all[i];
-                if (a == null) continue;
-                int fid = -1;
-                try { fid = a.itemId; } catch { continue; }
-                bool hit = false;
-                try { hit = IsBioGenFuel(fid); } catch { continue; }
-                if (!hit) continue;
-                bool dup = false;
-                for (int j = 0; j < _fuelAttrs.Count; j++) try { if (ReferenceEquals(_fuelAttrs[j], a)) { dup = true; break; } } catch { }
-                if (!dup) try { _fuelAttrs.Add(a); } catch { }
+                for (int i = 0; i < ids.Count; i++)
+                {
+                    int fid = ids[i];
+                    try { if (NativeCombustibleIds.Contains(fid)) continue; } catch { } // 原生 id 永不摘
+                    if (fid == 6) continue; // 炭：灰烬，原生语义
+                    ItemAttr a = null;
+                    try { a = mgr.GetItemAttrById(fid); } catch { continue; }
+                    if (a == null) continue;
+                    try
+                    {
+                        var feats = a.itemFeatures;
+                        if (feats != null && feats.Contains(ItemFeatureType.Combustible)) { feats.Remove(ItemFeatureType.Combustible); n++; }
+                    }
+                    catch { }
+                }
             }
-            if (_fuelAttrs.Count == 0 && !_fuelAttrWarned)
-            { _fuelAttrWarned = true; Plugin.L.LogWarning("[TS] F1b: 燃料集未就绪（本次跳过否决）"); }
+            try { Plugin.L.LogInfo($"[TS][Fuel] 窗期标志已摘除 n={n}"); } catch { }
         }
         catch { }
     }
 
-    public static bool MeatVetoPrefix(ProductionData generatorData)
-    {
-        try
-        {
-            if (generatorData == null) return true;
-            if (IsBioGenProduction(generatorData)) return true; // BioGen 不摘除（燃料集照烧）
-            EnsureFuelSet();
-            try { _stripped.Clear(); } catch { }
-            for (int i = 0; i < _fuelAttrs.Count; i++)
-            {
-                var m = _fuelAttrs[i];
-                if (m == null) continue;
-                try
-                {
-                    var feats = m.itemFeatures;
-                    if (feats != null && feats.Contains(ItemFeatureType.Combustible)) { feats.Remove(ItemFeatureType.Combustible); try { _stripped.Add(m); } catch { } }
-                }
-                catch { }
-            }
-            return true;
-        }
-        catch { return true; }
-    }
 
-    public static void MeatVetoPostfix()
-    {
-        try
-        {
-            if (_stripped.Count == 0) return;
-            for (int i = 0; i < _stripped.Count; i++)
-            {
-                var m = _stripped[i];
-                if (m == null) continue;
-                try
-                {
-                    var feats = m.itemFeatures;
-                    if (feats != null && !feats.Contains(ItemFeatureType.Combustible)) feats.Add(ItemFeatureType.Combustible);
-                }
-                catch { }
-            }
-            try { _stripped.Clear(); } catch { }
-        }
-        catch { }
-    }
-
-    /// <summary>v0.8.9 B：启动门伪造——扫描窗内 GetItemAttrById 对白名单燃料返回木头 attr（含 Combustible）。
+    /// <summary>v0.8.9 B → v0.9.105 加法窗：扫描窗内 GetItemAttrById 对燃料集（IsBioGenFuel 全集）返回木头 attr（含 Combustible）。
+    /// 窗期标志摘除后的运行时认食物路径：仅 BioGen burner 窗内（沿既有 _inBioScan 判定，不新增 hook 点），非燃料集直通。
     /// 炭(6) 放行原版 attr（灰烬注入需要真实炭 attr）；窗口外零开销直通。</summary>
     public static bool GetAttrByIdPrefix(ItemManager __instance, int itemId, ref ItemAttr __result)
     {
@@ -151,6 +109,14 @@ public static class BioGenFuel
         {
             if (!_inBioScan) return true;
             if (itemId == 6) return true;
+            bool isFuel = false;
+            try
+            {
+                bool save = _inBioScan; _inBioScan = false; // 防递归：IsBioGenFuel 内查 attr 走同方法，窗外直通取真值
+                try { isFuel = IsBioGenFuel(itemId); } finally { _inBioScan = save; }
+            }
+            catch { return true; }
+            if (!isFuel) return true; // 非燃料集直通（不伪造）
             if (_woodAttr == null)
             {
                 bool save = _inBioScan; _inBioScan = false; // 防递归
@@ -164,7 +130,7 @@ public static class BioGenFuel
         catch { return true; }
     }
 
-    /// <summary>v0.8.9 C：PassesFeatureLimit prefix——生物燃料仓 attr 级粗筛（205/炭/Food 放行；木头/金属等拒）。
+    /// <summary>v0.8.9 C：PassesFeatureLimit prefix——生物燃料仓 attr 级粗筛（205/炭/木头/Food 放行；金属等拒）。
     /// attr 直传（interop 直接访问，不走反射，杜绝 id=0 误读）。expiry 严格判定在 D 环。</summary>
     public static bool PassesFeatureLimitPrefix(InventoryData __instance, ItemAttr attr, ref bool __result)
     {
@@ -174,7 +140,7 @@ public static class BioGenFuel
             if (!IsMarked(__instance)) return true; // 非生物燃料仓走原版
             int id = -1; try { id = attr.itemId; } catch { }
             bool isFood = false; try { isFood = attr.itemType.ToString().Contains("Food"); } catch { }
-            if (id == 205 || id == 6 || isFood)
+            if (id == 205 || id == 6 || IsBioGenFuel(id) || isFood) // 木材类走快照集（IsBioGenFuel 内），零硬编码
             {
                 __result = true; // 粗筛放行（严格判定交给 WhitelistPrefix）
                 return false;
@@ -299,17 +265,46 @@ public static class BioGenFuel
         try { return _marked.Contains(GetInstanceKey(fd)); } catch { return false; }
     }
 
-    /// <summary>v0.9.104 燃料集唯一定义（E1，F1a/F1b/D 环共用同一函数，grep 定义恰 1 处）：
-    /// 所有带新鲜度的食物 = 腐肉 205（回归项）+ 一切 itemType 含 Food 的物品；炭 6 除外（灰烬走原生语义）。
-    /// 运行时可算：id 快路 + ItemManager 现场解析 attr 读 itemType，不硬编码零散 id。
-    /// 判定照抄既有 C/D 环逻辑，行为与 v0.8.10 白名单一致，不两份逻辑。</summary>
+    /// <summary>v0.9.104 燃料集唯一定义（E1，F1a/D 环共用同一函数，grep 定义恰 1 处）：
+    /// 快照集（原生自带 Combustible＝原版斯特林燃料类，木头/煤等天然在内，零硬编码）∪ 食物类（一切 itemType 含 Food，不过期判定）；
+    /// 炭 6 除外（灰烬走原生语义）。W1 手枚举已退役（用户拍板）：dump 证据仅作旁证（0=木材 dump.cs:31759＋75951；6=炭 dump.cs:79240；
+    /// 煤/木炭无独立 id），活体 source of truth 以快照集为准。
+    /// 顺序铁律：快照必须在 F1a 补键前完成（补键后 Food 也带 Combustible，重拍会污染）；只拍一次（_snapDone 锁存，资产未就绪则不限存等下次）。</summary>
+    internal static readonly System.Collections.Generic.HashSet<int> NativeCombustibleIds = new(); // 原生可燃快照集（static 只读引用；内容只增不改）
+    private static bool _snapDone;
+
+    /// <summary>快照原生可燃集：F1a 补键前调用（EnsureBioFuelCombustible 首行；补键前拍到真相，只拍一次）。</summary>
+    internal static void SnapshotNativeCombustible()
+    {
+        try
+        {
+            if (_snapDone) return;
+            ItemAttr[] all = null;
+            try { all = UnityEngine.Resources.FindObjectsOfTypeAll<ItemAttr>(); } catch { }
+            if (all == null || all.Length == 0) return; // 资产未就绪：不限存，下次再拍（仍在补键前）
+            _snapDone = true;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var a = all[i];
+                if (a == null) continue;
+                bool has = false;
+                try { var f = a.itemFeatures; has = (f != null && f.Contains(ItemFeatureType.Combustible)); } catch { continue; }
+                if (!has) continue;
+                try { NativeCombustibleIds.Add(a.itemId); } catch { }
+            }
+            try { Plugin.L.LogInfo($"[TS] F1a 原生可燃快照完成：{NativeCombustibleIds.Count} 种（原版斯特林燃料类）"); } catch { }
+        }
+        catch { }
+    }
+
     internal static bool IsBioGenFuel(int itemId)
     {
         try
         {
-            if (itemId == 205) return true;   // 回归：腐肉
+            if (itemId == 205) return true;   // 回归：腐肉（205 的 Food 归属未在 dump 验证，留一行兜底；非木材行，不触"无木材硬编码"验收，确认是 Food 后可删）
             if (itemId == 6) return false;    // 炭：灰烬，原生语义，不计入燃料集
-            if (itemId <= 0) return false;    // 无法识别一律拒（含木头 id 0）
+            try { if (NativeCombustibleIds.Contains(itemId)) return true; } catch { } // 原生燃料类（快照集，零硬编码）
+            if (itemId <= 0) return false;    // 无法识别一律拒
             ItemAttr attr = null;
             try { attr = ItemManager.instance?.GetItemAttrById(itemId); } catch { }
             if (attr == null) return false;
@@ -319,7 +314,7 @@ public static class BioGenFuel
     }
 
     /// <summary>attr 级变体（含灰烬开关）：D 环白名单（IsAllowedFuel）传 includeAsh=true（炭必须回仓）；
-    /// F1a 补键 / F1b 否决一律走 IsBioGenFuel(id)（炭除外）。非灰烬路径直接委托 IsBioGenFuel，不两份逻辑。</summary>
+    /// F1a 补键一律走 IsBioGenFuel(id)（炭除外）。非灰烬路径直接委托 IsBioGenFuel，不两份逻辑。</summary>
     internal static bool IsBioFuelAttr(ItemAttr attr, bool includeAsh)
     {
         try
@@ -332,7 +327,7 @@ public static class BioGenFuel
         catch { return false; }
     }
 
-    /// <summary>严格白名单（v0.8.10 终版）：Food 类物品全部可入（含腐肉 205、含未过期食品）+ 炭 6（副产品回仓）；木头/金属等非食品拒。
+    /// <summary>严格白名单（v0.8.10 终版 + 木材类）：Food 类物品全部可入（含腐肉 205、含未过期食品）+ 炭 6（副产品回仓）+ 木头 0；金属等非食品拒。
     /// 过期判定已按用户要求移除——「只要是有新鲜度的食物类都可以放入」。
     /// 注意：ItemData 无 itemAttr 成员（那是 BasicItem 的 protected 字段）——attr 一律经 ItemManager.GetItemAttrById(itemId) 解析（游戏同款路径）。
     /// 吞物品教训：D 环（TryAddItem/AddItem prefix）执行时物品可能已从源容器移除，拒绝=物品悬空丢失；
@@ -342,8 +337,8 @@ public static class BioGenFuel
         try
         {
             int id = it.itemId;
-            if (id == 205 || id == 6) return true;           // 腐肉 / 炭（副产品回仓）
-            if (id <= 0) return false;                       // 无法识别的物品一律拒
+            if (id == 205 || id == 6 || IsBioGenFuel(id)) return true;   // 腐肉 / 炭（副产品回仓）/ 原生燃料类（快照集，零硬编码）
+            if (id <= 0) return false;                       // 无法识别的物品一律拒（木头 id 0 已在上方命中）
             var attr = ItemManager.instance?.GetItemAttrById(id);
             return IsBioFuelAttr(attr, true);                // Food 判定走共用函数（含未过期）
         }

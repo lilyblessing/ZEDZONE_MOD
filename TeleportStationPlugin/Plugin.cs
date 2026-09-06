@@ -156,41 +156,7 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] UpdateStirlingGenerator 挂钩失败（方法未找到）");
             }
             catch (Exception eu) { Log.LogWarning($"[TS] UpdateStirlingGenerator 挂钩异常: {eu.Message.Split('\n')[0]}"); }
-            // ═══ v0.9.104 F1b：燃料集限定燃烧·消费侧否决（与 F1a 成对；详见 BioGenFuel.MeatVetoPrefix/Postfix 注释）═══
-            // 非 BioGen burner 的 UpdateStirlingGenerator / UpdateStoneFurnace 调用窗内临时摘除燃料集 Combustible，
-            // postfix 恢复（单线程原子；prefix 恒返 true 不跳过原生）。BioGen 窗不摘除。
-            try
-            {
-                var usg2 = AccessTools.Method(typeof(ProductionManager), "UpdateStirlingGenerator",
-                    new Type[] { typeof(ProductionData), typeof(float) });
-                if (usg2 != null)
-                {
-                    h.Patch(usg2,
-                        prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                            nameof(BioGenFuel.MeatVetoPrefix), BindingFlags.Public | BindingFlags.Static)),
-                        postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                            nameof(BioGenFuel.MeatVetoPostfix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateStirlingGenerator（F1b 腐肉否决）");
-                }
-                else Log.LogWarning("[TS] F1b UpdateStirlingGenerator 挂钩失败（方法未找到）");
-            }
-            catch (Exception ev) { Log.LogWarning($"[TS] F1b UpdateStirlingGenerator 挂钩异常: {ev.Message.Split('\n')[0]}"); }
-            try // 熔炉同理（若其燃料扫描共用 Combustible 判定，腐肉同样只能 BioGen 烧；无害——不读 205 标志即零操作）
-            {
-                var usf = AccessTools.Method(typeof(ProductionManager), "UpdateStoneFurnace",
-                    new Type[] { typeof(ProductionData), typeof(float) });
-                if (usf != null)
-                {
-                    h.Patch(usf,
-                        prefix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                            nameof(BioGenFuel.MeatVetoPrefix), BindingFlags.Public | BindingFlags.Static)),
-                        postfix: new HarmonyMethod(typeof(BioGenFuel).GetMethod(
-                            nameof(BioGenFuel.MeatVetoPostfix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateStoneFurnace（F1b 腐肉否决·熔炉）");
-                }
-                else Log.LogWarning("[TS] F1b UpdateStoneFurnace 挂钩失败（方法未找到，跳过）");
-            }
-            catch (Exception ew) { Log.LogWarning($"[TS] F1b UpdateStoneFurnace 挂钩异常: {ew.Message.Split('\n')[0]}"); }
+            // （F1b 否决已退役删除：方案③窗期标志+加法，无消费侧否决；见 BioGenFuel 方案③注释）
             // B. 启动门：GetItemAttrById 扫描窗内为白名单燃料伪造 Combustible（木头 attr 复用）
             try
             {
