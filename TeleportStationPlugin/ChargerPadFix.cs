@@ -1765,9 +1765,9 @@ public static class ChargerPadFix
             }
             try
             {
-                productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat * 4f;
+                productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat * 10f;
                 _boosted = true;
-                if (!_warnedX4Hit) { _warnedX4Hit = true; Plugin.L.LogInfo("[TS] ×4 倍率生效: sufficient×4"); }
+                if (!_warnedX4Hit) { _warnedX4Hit = true; Plugin.L.LogInfo("[TS] ×10 倍率生效: sufficient×10"); } // 临时测试档，正式版待定
             }
             catch { }
         }
@@ -1779,7 +1779,7 @@ public static class ChargerPadFix
     {
         if (!_boosted) return;
         _boosted = false;
-        try { productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat / 4f; } catch { }
+        try { productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat / 10f; } catch { }
     }
 
     // ═══ v0.9.73 状态字位域上限屏蔽（反编译实证 subagent/data/battery-state-cap-decompile.md）═══
