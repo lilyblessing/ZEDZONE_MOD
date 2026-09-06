@@ -427,7 +427,76 @@ public static class ChargerPadFix
                 }
             }
             catch { }
+            try { EnsureBioFuelCombustible(); } catch { } // v0.9.104 F1a：燃料集原生可燃化（见下；幂等，场景重建可重跑）
             if (did) Plugin.L.LogInfo("[TS] InitTerrainObjectAttrs 补键完成（attr/prefab 已补）");
+        }
+        catch { }
+    }
+
+    // ── v0.9.104 F1a：生物燃料集原生可燃化（BioGen 读档掉线根治 + 燃料限定的前置一半）──
+    // 用户纠正：BioGen 燃料集 = 所有带新鲜度的食物（不止 205）。燃料集唯一定义见 BioGenFuel.IsBioFuelAttr(attr, false)
+    // （205 + 全 Food，炭 6 除外；与 D 环白名单同源，includeAsh 区分）——本方法只枚举+补键，不另立定义。
+    // 背景：900103 BioGen 烧燃料全靠启动门伪造窗（GetItemAttrById 返回木头 attr）；读档时原生启动判定早于
+    // 伪造窗 → 永不起机 → 不入电网图。F1a 给燃料集逐个补原生 Combustible，读档原生判定直接放行。
+    // 字段实证（dump.cs）：ItemFeatureType.Combustible = 1（dump.cs:53597）；ItemAttr.itemFeatures（dump.cs:52689）；
+    // Combustible 是纯标志位——dump 全表无 ItemFeature_Combustible 数据类，燃烧时长/功率是 ProductionManager
+    // 全局静态 stirlingFuelBuringTime / stirlingGeneratorWattage（dump.cs:79252-79253），无逐燃料配平项——
+    // 「对标同类燃料」即同一标志位（木头 id 0 同款），无 wattage 可配。禁区：只动可燃相关条目，其他字段不动。
+    internal static void EnsureBioFuelCombustible()
+    {
+        try
+        {
+            ItemAttr[] all = null;
+            try { all = UnityEngine.Resources.FindObjectsOfTypeAll<ItemAttr>(); } catch { }
+            if (all == null || all.Length == 0) return; // 资产未就绪，下次场景加载重跑（幂等）
+            ItemAttr wood = null;
+            try { wood = ItemManager.instance?.GetItemAttrById(0); } catch { }
+            int patched = 0;
+            for (int k = 0; k < all.Length; k++)
+            {
+                var a = all[k];
+                if (a == null) continue;
+                bool isFuel = false;
+                try { isFuel = BioGenFuel.IsBioFuelAttr(a, false); } catch { continue; }
+                if (!isFuel) continue;
+                bool did = false;
+                try
+                {
+                    var feats = a.itemFeatures;
+                    if (feats != null && !feats.Contains(ItemFeatureType.Combustible)) { feats.Add(ItemFeatureType.Combustible); did = true; }
+                }
+                catch { }
+                // 木头看齐（防御性镜像：若木头 attr 的 dic/config 带有 Combustible 条目则引用复制，供未来 InitItemAttr 重建复现；
+                // 实测预期为空——Combustible 无数据类，list 标志位即全部）。
+                try
+                {
+                    if (wood != null)
+                    {
+                        try
+                        {
+                            var wdic = wood.itemFeatureDataDic; var mdic = a.itemFeatureDataDic;
+                            if (wdic != null && mdic != null && wdic.ContainsKey(ItemFeatureType.Combustible) && !mdic.ContainsKey(ItemFeatureType.Combustible))
+                            { mdic.Add(ItemFeatureType.Combustible, wdic[ItemFeatureType.Combustible]); did = true; }
+                        }
+                        catch { }
+                        try
+                        {
+                            var wcfg = wood.itemFeatureConfigDatas; var mcfg = a.itemFeatureConfigDatas;
+                            if (wcfg != null && mcfg != null)
+                            {
+                                ItemFeatureConfigData wHit = null; bool mHas = false;
+                                for (int i = 0; i < wcfg.Count; i++) try { if (wcfg[i] != null && wcfg[i].featureType == ItemFeatureType.Combustible) { wHit = wcfg[i]; break; } } catch { }
+                                for (int i = 0; i < mcfg.Count; i++) try { if (mcfg[i] != null && mcfg[i].featureType == ItemFeatureType.Combustible) { mHas = true; break; } } catch { }
+                                if (wHit != null && !mHas) { mcfg.Add(wHit); did = true; }
+                            }
+                        }
+                        catch { }
+                    }
+                }
+                catch { }
+                if (did) patched++;
+            }
+            if (patched > 0) Plugin.L.LogInfo($"[TS] F1a: 生物燃料集已补原生Combustible {patched}种（205+全Food，炭6除外）");
         }
         catch { }
     }
@@ -934,6 +1003,106 @@ public static class ChargerPadFix
             if (m != null) m.Invoke(null, null);
         }
         catch { }
+    }
+
+    // ── v0.9.103 A：读档沉降自检自愈（一次性；tick 零新增扫描）──
+    // 背景：900103 BioGen 烧腐肉(205)；腐肉原生无 Combustible，读档时原生启动判定早于我方伪造窗 → 永不起机 →
+    // 不入电网图（L293 无候选铁证）；手动挪燃料的停机→启动（L360-361）恢复。
+    // 触发点：RegistrationProbe.Update 内每帧调用 BioGenSaveHealPoll（须在 Done 早退之前，见 Plugin.cs）；
+    // 沉降信号 = RegistrarState.Done || RegistrarState.GaveUp || 世界活跃（GameController.instance.playerCharacter 非空，
+    // 照抄 RegistrationProbe 世界活跃判定）；沉降后 +5s 执行一次，自愈体 BioGenSaveHealOnce。
+    // 幂等：_saveHealDone 静态 bool 锁，每局最多执行一次（先锁后做，异常也不重跑）。
+    // 自检判据（900103 实例在 ActiveObjects_Production 却无电）：其 ProductionData 缺席
+    // ProductionManager.productionDataList，或 EnsurePdTables(现成复用)补过六表（返回值>0 即表曾空）。
+    // 供电门说明：IsBioGenSupplied 是消费侧"附近有 BioGen 供电商"判定，对 BioGen 自身 pd（自距≡0）恒 true，
+    // 故自检不适用，本自愈以 PD 侧判据（入表 + 六表齐）为准。
+    // 自愈（全现成调用，不新造轮子）：缺席则 mgr.AddProductionData 入表 + EnsurePdTables 六表齐 +
+    // ProductionManager.MarkElectricGridDirty 重扫。
+    private static bool _saveHealSettled;
+    private static float _saveHealSettleT;
+    private static bool _saveHealDone;
+
+    public static void BioGenSaveHealPoll()
+    {
+        try
+        {
+            if (_saveHealDone) return;
+            bool settled = false;
+            try { settled = RegistrarState.Done || RegistrarState.GaveUp; } catch { }
+            if (!settled)
+            {
+                try { var gcW = GameController.instance; if (gcW != null && gcW.playerCharacter != null) settled = true; } catch { }
+            }
+            if (!settled) return;
+            float now = 0f;
+            try { now = Time.unscaledTime; } catch { }
+            if (!_saveHealSettled) { _saveHealSettled = true; _saveHealSettleT = now; return; }
+            if (now - _saveHealSettleT < 5f) return;
+            _saveHealDone = true;
+            try { BioGenSaveHealOnce(); } catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自愈异常: {e.Message.Split('\n')[0]}"); } catch { } }
+        }
+        catch { }
+    }
+
+    private static void BioGenSaveHealOnce()
+    {
+        try
+        {
+            var list = TerrainObject_Production.ActiveObjects_Production;
+            if (list == null) { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects空（无在场实例，无需自愈）"); return; }
+            var mgr = ProductionManager.instance;
+            if (mgr == null) { Plugin.L.LogInfo("[TS] 读档自检: ProductionManager未就绪（跳过）"); return; }
+            int found = 0, healed = 0;
+            for (int i = 0; i < list.Count; i++)
+            {
+                TerrainObject_Production g = null;
+                try { g = list[i]; } catch { continue; }
+                if (g == null) continue;
+                int aid = -1;
+                try { aid = GetClonedAttrId(g); } catch { continue; }
+                if (aid != BioGenId) continue;
+                found++;
+                object pd = null;
+                try
+                {
+                    var tod = Reflect.Get(g, "objectData");
+                    if (tod != null) pd = Reflect.Get(tod, "productionData");
+                }
+                catch { }
+                if (pd == null) { try { Plugin.L.LogInfo("[TS] 读档自检: 900103实例无productionData（跳过，待原生启动链补建）"); } catch { } continue; }
+                var ppd = pd as ProductionData;
+                if (ppd == null) continue;
+                bool inList = false;
+                try
+                {
+                    var all = mgr.productionDataList;
+                    if (all != null)
+                    {
+                        try { inList = all.Contains(ppd); }
+                        catch { for (int k = 0; k < all.Count; k++) if (ReferenceEquals(all[k], ppd)) { inList = true; break; } }
+                    }
+                }
+                catch { }
+                int fixedTables = 0;
+                try { fixedTables = EnsurePdTables(ppd); } catch { }
+                if (inList && fixedTables == 0) continue; // 在表且六表齐 → 有电，无需自愈
+                try
+                {
+                    if (!inList) mgr.AddProductionData(ppd); // 原生入表（含类型字典注册）
+                    healed++;
+                    Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList={inList}) 六表补{fixedTables}字段 → 重扫电网");
+                }
+                catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
+            }
+            if (found == 0) { Plugin.L.LogInfo("[TS] 读档自检: 无900103在场实例（无需自愈）"); return; }
+            if (healed > 0)
+            {
+                try { ProductionManager.MarkElectricGridDirty(); } catch { }
+                Plugin.L.LogInfo($"[TS] 读档自愈完成: 在场900103={found} 自愈={healed}");
+            }
+            else Plugin.L.LogInfo($"[TS] 读档自检通过: 在场900103={found} 均在表且六表齐（无需自愈）");
+        }
+        catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自检异常: {e.Message.Split('\n')[0]}"); } catch { } }
     }
 
     /// <summary>v0.9.74 读档重扫 NRE 根治：重扫前把工作集里全部 PD（含原生物件）的六连接表补齐。

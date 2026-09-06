@@ -49,6 +49,98 @@ public static class BioGenFuel
         _inBioScan = false; // 窗口必须清除（哪怕原方法异常也由 Harmony 保证 postfix 执行）
     }
 
+    // ── v0.9.104 F1b：燃料集限定燃烧·消费侧否决（与 F1a 成对，缺一不可）──
+    // F1a 给燃料集原生 Combustible 后，原版斯特林（120，BioGen 克隆源）的燃料扫描也会命中燃料集，必须否决。
+    // 钩点选择实证（dump.cs 全表仅 2 处 Combustible 命中）：
+    //   - dump.cs:53597 ItemFeatureType.Combustible = 1（纯标志位定义）；
+    //   - dump.cs:79293 ProductionManager.FindLastCombustibleIndex(InventoryData)（燃料扫描，public static，
+    //     仅收燃料容器、无 burner 参数——任务书“fuel==205 且 burner.attr!=900103 返回 false”形状无干净钩点，
+    //     burner 身份不可得；判定体 Combustible 读取循环内联在 UpdateStirlingGenerator 体内，
+    //     dump 仅签名（dump.cs:79361，VA 0x1809ACA60），无独立方法）。
+    // 否决方案：hook 仍有 burner 身份的调用方——ProductionManager.UpdateStirlingGenerator /
+    // UpdateStoneFurnace（ProductionData.generatorData/productionData 经 terrainObjectAttr 直接判定，
+    // 复用 IsBioGenProduction，比 FindTerrainObject 爬链更直接）：非 BioGen burner 调用窗内临时摘除燃料集
+    // 全部 attr 的 Combustible（游戏单线程串行，原子），postfix 恢复。原生扫描自然跳过燃料集、木头照烧；
+    // BioGen 窗不摘除。prefix 恒返 true（不跳过原生；除燃料集标志位外不改变任何状态）；与既有
+    // StirlingUpdatePrefix/Postfix 同挂一方法但条件互斥（BioGen vs 非 BioGen），顺序无关。
+    // 燃料集定义：唯一 source of truth = IsBioFuelAttr(attr, false)（见下；F1a 同一函数，grep 可验）。
+    // 炭 6 排除在外（灰烬原生语义：B 环伪造已对其放行原版 attr，此处不摘除）。
+    private static readonly System.Collections.Generic.List<ItemAttr> _fuelAttrs = new(); // 否决集缓存（懒建一次）
+    private static bool _fuelResolved;
+    private static int _strippedCount; // 本窗摘除数（串行调用，无嵌套）
+    private static bool _fuelAttrWarned;
+
+    private static void EnsureFuelSet()
+    {
+        try
+        {
+            if (_fuelResolved) return;
+            _fuelResolved = true; // 先锁后建（资产未就绪则空集，本局后续tick不再扫描；F1a场景postfix会补，见注释）
+            ItemAttr[] all = null;
+            try { all = UnityEngine.Resources.FindObjectsOfTypeAll<ItemAttr>(); } catch { }
+            if (all == null) return;
+            for (int i = 0; i < all.Length; i++)
+            {
+                var a = all[i];
+                if (a == null) continue;
+                bool hit = false;
+                try { hit = IsBioFuelAttr(a, false); } catch { continue; }
+                if (!hit) continue;
+                bool dup = false;
+                for (int j = 0; j < _fuelAttrs.Count; j++) try { if (ReferenceEquals(_fuelAttrs[j], a)) { dup = true; break; } } catch { }
+                if (!dup) try { _fuelAttrs.Add(a); } catch { }
+            }
+            if (_fuelAttrs.Count == 0 && !_fuelAttrWarned)
+            { _fuelAttrWarned = true; Plugin.L.LogWarning("[TS] F1b: 燃料集未就绪（本次跳过否决）"); }
+        }
+        catch { }
+    }
+
+    public static bool MeatVetoPrefix(ProductionData generatorData)
+    {
+        try
+        {
+            if (generatorData == null) return true;
+            if (IsBioGenProduction(generatorData)) return true; // BioGen 不摘除（燃料集照烧）
+            EnsureFuelSet();
+            _strippedCount = 0;
+            for (int i = 0; i < _fuelAttrs.Count; i++)
+            {
+                var m = _fuelAttrs[i];
+                if (m == null) continue;
+                try
+                {
+                    var feats = m.itemFeatures;
+                    if (feats != null && feats.Contains(ItemFeatureType.Combustible)) { feats.Remove(ItemFeatureType.Combustible); _strippedCount++; }
+                }
+                catch { }
+            }
+            return true;
+        }
+        catch { return true; }
+    }
+
+    public static void MeatVetoPostfix()
+    {
+        try
+        {
+            if (_strippedCount <= 0) return;
+            _strippedCount = 0;
+            for (int i = 0; i < _fuelAttrs.Count; i++)
+            {
+                var m = _fuelAttrs[i];
+                if (m == null) continue;
+                try
+                {
+                    var feats = m.itemFeatures;
+                    if (feats != null && !feats.Contains(ItemFeatureType.Combustible)) feats.Add(ItemFeatureType.Combustible);
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
     /// <summary>v0.8.9 B：启动门伪造——扫描窗内 GetItemAttrById 对白名单燃料返回木头 attr（含 Combustible）。
     /// 炭(6) 放行原版 attr（灰烬注入需要真实炭 attr）；窗口外零开销直通。</summary>
     public static bool GetAttrByIdPrefix(ItemManager __instance, int itemId, ref ItemAttr __result)
@@ -205,6 +297,24 @@ public static class BioGenFuel
         try { return _marked.Contains(GetInstanceKey(fd)); } catch { return false; }
     }
 
+    /// <summary>v0.9.104 燃料集唯一定义（attr 级，F1a/F1b/D 环共用，同一函数）：
+    /// 腐肉 205 + 所有 itemType 含 Food 的 attr（含一切带新鲜度的食物）；炭 6（灰烬副产品）是否计入由 includeAsh 决定——
+    /// D 环白名单（IsAllowedFuel）传 true（炭必须回仓），F1a 补键 / F1b 否决传 false（炭走原生语义，不动）。
+    /// 判定照抄既有 C/D 环逻辑（id 快路 + itemType.Contains("Food")），行为与 v0.8.10 白名单一致，不两份逻辑。</summary>
+    internal static bool IsBioFuelAttr(ItemAttr attr, bool includeAsh)
+    {
+        try
+        {
+            if (attr == null) return false;
+            int id = -1; try { id = attr.itemId; } catch { }
+            if (id == 205) return true;              // 腐肉
+            if (id == 6) return includeAsh;          // 炭：灰烬，原生语义
+            if (id <= 0) return false;               // 无法识别的物品一律拒（含木头 id 0）
+            try { return attr.itemType.ToString().Contains("Food"); } catch { return false; }
+        }
+        catch { return false; }
+    }
+
     /// <summary>严格白名单（v0.8.10 终版）：Food 类物品全部可入（含腐肉 205、含未过期食品）+ 炭 6（副产品回仓）；木头/金属等非食品拒。
     /// 过期判定已按用户要求移除——「只要是有新鲜度的食物类都可以放入」。
     /// 注意：ItemData 无 itemAttr 成员（那是 BasicItem 的 protected 字段）——attr 一律经 ItemManager.GetItemAttrById(itemId) 解析（游戏同款路径）。
@@ -218,8 +328,7 @@ public static class BioGenFuel
             if (id == 205 || id == 6) return true;           // 腐肉 / 炭（副产品回仓）
             if (id <= 0) return false;                       // 无法识别的物品一律拒
             var attr = ItemManager.instance?.GetItemAttrById(id);
-            if (attr == null) return false;
-            return attr.itemType.ToString().Contains("Food"); // 所有食品类放行（含未过期）
+            return IsBioFuelAttr(attr, true);                // Food 判定走共用函数（含未过期）
         }
         catch { return false; }
     }
