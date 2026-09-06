@@ -47,6 +47,9 @@ public static class ChargerPadFix
     private static bool _warnedX4NoBio = false;     // ×4 四出口诊断：无900103候选（一次性）
     private static bool _warnedX4MinDist = false;   // ×4 四出口诊断：最近对象距离（一次性）
     private static bool _warnedX4NoAttrPos = false; // ×4 五出口诊断：temp空且attr无坐标（一次性；dump.cs:81055-81136实证TerrainObjectAttr无坐标类字段）
+    private static float _bioX, _bioY; // v0.9.101：BioGen位置会话缓存（表非空命中时写，清空窗Ride-Out读；XY平面判距）
+    private static float _bioSeenTime = -999f; // v0.9.101：缓存时间戳（Time.realtimeSinceStartup语义）
+    private static bool _warnedX4CacheHit = false; // v0.9.101：缓存命中诊断（一次性）
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
     private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
@@ -1839,6 +1842,21 @@ public static class ChargerPadFix
             if (list == null || list.Count == 0)
             {
                 if (!_warnedX4TableEmpty) { _warnedX4TableEmpty = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 生产表空count={(list == null ? 0 : list.Count)}"); }
+                // v0.9.101：清空窗Ride-Out——表非空命中时记下的BioGen坐标在有效期内（120s，可调）且to在50m内则判有电；表非空但无900103的出口不准用缓存
+                try
+                {
+                    if (to != null && Time.realtimeSinceStartup - _bioSeenTime <= 120f)
+                    {
+                        var tp = to.transform.position;
+                        float cdx = tp.x - _bioX, cdy = tp.y - _bioY;
+                        if (cdx * cdx + cdy * cdy <= 2500f)
+                        {
+                            if (!_warnedX4CacheHit) { _warnedX4CacheHit = true; Plugin.L.LogInfo("[TS] ×4 诊断: ×4 缓存命中（清空窗Ride-Out）"); }
+                            return true;
+                        }
+                    }
+                }
+                catch { }
                 return false;
             }
             int prodCount = list.Count;
@@ -1861,7 +1879,7 @@ public static class ChargerPadFix
                 var dp = g.transform.position - pos;
                 float d2 = dp.sqrMagnitude;
                 if (d2 < best2) { best2 = d2; bestAttr = AttrId(attr); }
-                if (d2 <= 50f * 50f) return true;
+                if (d2 <= 50f * 50f) { _bioX = pos.x + dp.x; _bioY = pos.y + dp.y; _bioSeenTime = Time.realtimeSinceStartup; return true; } // v0.9.101：命中写BioGen位置缓存（复用dp/pos，零新增扫描）
             }
             // F2 第二路（仅第一路 miss 时执行，省性能）：直扫 StirlingGenerator 类型实例做 GenId 式判定
             // （生物能实例若以发电子类形态存在，主表按名爬链可能漏；范式照抄 BatteryChargeFix.GenId :181-190）
@@ -1881,7 +1899,7 @@ public static class ChargerPadFix
                 var sdp = sg.transform.position - pos;
                 float sd2 = sdp.sqrMagnitude;
                 if (sd2 < best2) { best2 = sd2; bestAttr = sid; }
-                if (sd2 <= 50f * 50f) return true;
+                if (sd2 <= 50f * 50f) { _bioX = pos.x + sdp.x; _bioY = pos.y + sdp.y; _bioSeenTime = Time.realtimeSinceStartup; return true; } // v0.9.101：命中写BioGen位置缓存（复用sdp/pos，零新增扫描）
             }
             if (!anyBio)
             {
