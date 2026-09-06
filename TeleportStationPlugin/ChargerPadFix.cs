@@ -1021,8 +1021,11 @@ public static class ChargerPadFix
     // 沉降信号 = RegistrarState.Done || RegistrarState.GaveUp || 世界活跃（GameController.instance.playerCharacter 非空，
     // 照抄 RegistrationProbe 世界活跃判定）；沉降后 +5s 执行一次，自愈体 BioGenSaveHealOnce。
     // 幂等：_saveHealDone 静态 bool 锁，每局读档最多执行一次（先锁后做，异常也不重跑；v0.9.107 A3a 每局闭环：LoadGuard 读档钩点复位）。
-    // 自检判据（900103 实例在 ActiveObjects_Production 却无电）：其 ProductionData 缺席
-    // ProductionManager.productionDataList，或 EnsurePdTables(现成复用)补过六表（返回值>0 即表曾空）。
+    // v0.9.108 A4a：触发器改盯PD层（A线内修正：ActiveObjects在场曾致免自愈误判，M恒0掩盖PD层掉线）。
+    // 自检判据：productionDataList中有attr==900103的PD（IsBioGenPd本地判定，BioGenFuel.IsBioGenProduction同形）
+    // 但其供电门为假（IsPdPowered本地门，Selection.IsPowered同形consuming&&!powerOff&&sufficient>0.01）
+    // → 进强制起机+补表+脏标；PD缺席则走原补PD路径（在场实例AddProductionData入表）；PD层与在场侧双健康才判免自愈。
+    // ActiveObjects在场数只进N/M诊断日志（快照/完成/通过行），不再当门。
     // 供电门说明：IsBioGenSupplied 是消费侧"附近有 BioGen 供电商"判定，对 BioGen 自身 pd（自距≡0）恒 true，
     // 故自检不适用，本自愈以 PD 侧判据（入表 + 六表齐）为准。
     // 自愈（全现成调用，不新造轮子）：判离线实例先直调原生 OnGeneratorStart 强制起机（A2，趁窗期标志还在）+
@@ -1054,17 +1057,84 @@ public static class ChargerPadFix
         catch { }
     }
 
+    // v0.9.108 A4a：PD层attr判定（BioGenFuel.IsBioGenProduction同形，本地复用免跨类改动）：terrainObjectAttr引用/ID双保险
+    private static bool IsBioGenPd(ProductionData ppd)
+    {
+        try
+        {
+            if (ppd == null) return false;
+            var attr = ppd.terrainObjectAttr;
+            if (attr == null) return false;
+            if (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) return true;
+            try { return attr.id == BioGenId; } catch { return false; }
+        }
+        catch { return false; }
+    }
+
+    // v0.9.108 A4a：PD侧供电门（TeleportConsoleSelection.IsPowered同形：consuming&&!powerOff&&sufficient>0.01；
+    // consuming取PD挂载attr的electricConsuming；sufficient直读powerInputSufficientFloat；powerOff走Reflect，同全仓既有写法）
+    private static bool IsPdPowered(ProductionData ppd, out float sufficient)
+    {
+        sufficient = -1f;
+        try
+        {
+            if (ppd == null) return false;
+            bool consuming = false;
+            try { var a = ppd.terrainObjectAttr; if (a != null) consuming = a.electricConsuming; } catch { return false; }
+            if (!consuming) return false;
+            try { sufficient = ppd.powerInputSufficientFloat; } catch { return false; }
+            bool powerOff = false;
+            try { powerOff = Convert.ToBoolean(Reflect.Get(ppd, "powerSwitchOff")); } catch { }
+            return consuming && !powerOff && sufficient > 0.01f;
+        }
+        catch { return false; }
+    }
+
     private static void BioGenSaveHealOnce()
     {
         try
         {
             // v0.9.105 A2：窗期摘除从首行移至本方法末尾——自愈（强制起机+补PD+重扫）全程趁标志还在先起机，起完再摘；A自愈判据不动
             var list = TerrainObject_Production.ActiveObjects_Production;
-            if (list == null) { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects空（无在场实例，无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             var mgr = ProductionManager.instance;
             if (mgr == null) { Plugin.L.LogInfo("[TS] 读档自检: ProductionManager未就绪（跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
-            int found = 0, healed = 0;
-            for (int i = 0; i < list.Count; i++)
+            // v0.9.108 A4a：PD层枚举（只读）：productionDataList中attr==900103的PD数P+供电门真数S+代表sufficient
+            int pdBio = 0, pdPowered = 0;
+            float repSuff = -1f;
+            bool hasRep = false;
+            try
+            {
+                var all = mgr.productionDataList;
+                if (all != null)
+                {
+                    for (int k = 0; k < all.Count; k++)
+                    {
+                        ProductionData q = null;
+                        try { q = all[k]; } catch { continue; }
+                        if (q == null) continue;
+                        if (!IsBioGenPd(q)) continue;
+                        pdBio++;
+                        float sf = -1f;
+                        bool pw = false;
+                        try { pw = IsPdPowered(q, out sf); } catch { }
+                        if (!hasRep) { hasRep = true; repSuff = sf; }
+                        if (pw) pdPowered++;
+                    }
+                }
+            }
+            catch { }
+            // v0.9.108 A4b：每局一行供电快照（只读，不改行为，供下轮法医对局）
+            try
+            {
+                string repStr = hasRep ? repSuff.ToString("F1") : "无";
+                Plugin.L.LogInfo($"[TS] 读档供电快照: BioGenPD数={pdBio} 起机数={pdPowered} sufficient={repStr}");
+            }
+            catch { }
+            int found = 0, healed = 0, healFail = 0, noPd = 0;
+            int aoCount = 0;
+            try { if (list != null) aoCount = list.Count; } catch { }
+            if (list == null) { try { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects表空（PD层已评估，继续在场侧零实例）"); } catch { } }
+            for (int i = 0; i < aoCount; i++)
             {
                 TerrainObject_Production g = null;
                 try { g = list[i]; } catch { continue; }
@@ -1080,7 +1150,7 @@ public static class ChargerPadFix
                     if (tod != null) pd = Reflect.Get(tod, "productionData");
                 }
                 catch { }
-                if (pd == null) { try { Plugin.L.LogInfo("[TS] 读档自检: 900103实例无productionData（跳过，待原生启动链补建）"); } catch { } continue; }
+                if (pd == null) { noPd++; try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 900103实例无productionData（原因=PD缺席，待原生启动链补建）"); } catch { } continue; }
                 var ppd = pd as ProductionData;
                 if (ppd == null) continue;
                 bool inList = false;
@@ -1096,37 +1166,48 @@ public static class ChargerPadFix
                 catch { }
                 int fixedTables = 0;
                 try { fixedTables = EnsurePdTables(ppd); } catch { }
-                if (inList && fixedTables == 0) continue; // 在表且六表齐 → 有电，无需自愈
+                // v0.9.108 A4a：双层健康（在表+六表齐+PD供电门真）才跳过；在场数不当门，只进诊断日志
+                float gateSuff = -1f;
+                bool gatePw = false;
+                try { gatePw = IsPdPowered(ppd, out gateSuff); } catch { }
+                if (inList && fixedTables == 0 && gatePw) { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 900103实例供电门已真（原因=已在线）"); } catch { } continue; }
                 // v0.9.105 A2 强制起机（幂等，once锁内）：趁窗期标志还在（摘除已移至本方法末尾），对判离线实例直调原生
                 // TerrainObject_Production_StirlingGenerator.OnGeneratorStart（dump.cs:86207，VA:0x180A38C40，public无参；
                 // Plugin.cs:118-123既有hook其postfix为BioGenFuel.OnGeneratorStartPostfix观察链）——等效手动挪燃料的
                 // 停机→启动跃迁，触发原生状态机重估；失败只记日志不抛，不阻断后续补PD+重扫。
+                // v0.9.108 A4c：成功/失败/跳过+原因各一行
                 try
                 {
                     var sg = g as TerrainObject_Production_StirlingGenerator;
                     if (sg != null)
                     {
-                        try { sg.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机: 900103实例已触发OnGeneratorStart"); }
-                        catch (Exception es) { try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es.Message.Split('\n')[0]}"); } catch { } }
+                        try { sg.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机成功: 900103实例已触发OnGeneratorStart"); }
+                        catch (Exception es) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es.Message.Split('\n')[0]}"); } catch { } }
                     }
-                    else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态"); } catch { } }
+                    else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态（原因=非Stirling形态）"); } catch { } }
                 }
                 catch { }
                 try
                 {
-                    if (!inList) mgr.AddProductionData(ppd); // 原生入表（含类型字典注册）
+                    if (!inList) mgr.AddProductionData(ppd); // 原生入表（含类型字典注册；PD缺席走原补PD路径）
                     healed++;
                     Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList={inList}) 六表补{fixedTables}字段 → 重扫电网");
                 }
-                catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
+                catch (Exception e) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
             }
-            if (found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: ActiveObjects总数={list.Count} 其中900103={found}（无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
+            // v0.9.108 A4a：免自愈仅双健康分支（PD层全门真+在场侧零离线零缺PD+零失败）；在场数只进诊断
+            if (pdBio == 0 && found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: PD层900103=0 ActiveObjects总数={aoCount}其中900103=0（无BioGen部署，跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
             {
                 try { ProductionManager.MarkElectricGridDirty(); } catch { }
-                Plugin.L.LogInfo($"[TS] 读档自愈完成: 在场900103={found} 自愈={healed}");
+                Plugin.L.LogInfo($"[TS] 读档自愈完成: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 自愈={healed}");
             }
-            else Plugin.L.LogInfo($"[TS] 读档自检通过: 在场900103={found} 均在表且六表齐（无需自愈）");
+            else if (healFail == 0 && noPd == 0 && pdBio > 0 && pdPowered == pdBio) Plugin.L.LogInfo($"[TS] 读档自检通过: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 均健康（无需自愈）");
+            else
+            {
+                try { ProductionManager.MarkElectricGridDirty(); } catch { }
+                Plugin.L.LogWarning($"[TS] 读档自检: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 缺PD={noPd} 失败={healFail}（有离线但无可执行自愈，仅脏标重扫）");
+            }
             try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } // v0.9.105 A2：起完再摘（自愈体之后；趁标志还在先起机）
         }
         catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自检异常: {e.Message.Split('\n')[0]}"); } catch { } }
