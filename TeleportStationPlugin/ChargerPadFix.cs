@@ -89,6 +89,7 @@ public static class ChargerPadFix
 
     public static void OnEnableRecorder_P(TerrainObject_Production __instance)
     {
+        try { int caid0 = GetClonedAttrId(__instance); if (caid0 == 900103) { string nm0 = "?"; string px0 = "?", py0 = "?"; try { nm0 = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var pp0 = __instance.transform.position; px0 = pp0.x.ToString("F1"); py0 = pp0.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nm0} attr=900103 pos=({px0},{py0}) breakerSkip=False"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
         if (IsCloning) return;
         if (!RegistrarState.Done) return;
         if (_onEnableDepth > 4) return;
@@ -145,9 +146,11 @@ public static class ChargerPadFix
                 }
                 // v0.9.97-r5 RegFill：跳过即记录（Breaker_P/S共用，Stirling派生类直接Add进同一集）
                 try { _lastTripUtc = (System.DateTime.UtcNow - new System.DateTime(1970,1,1)).TotalSeconds; if (_skippedReg.Count < _regFillCap) { if (__instance != null) _skippedReg.Add(__instance); } else if (!_regFillCapWarned) { _regFillCapWarned = true; try { Plugin.L.LogWarning("[TS][RegFill] 队列满 cap=" + _regFillCap); } catch { } } } catch { }
+                try { int caidS = GetClonedAttrId(__instance); if (caidS == 900103) { string nmS = "?"; string pxS = "?", pyS = "?"; try { nmS = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var ppS = __instance.transform.position; pxS = ppS.x.ToString("F1"); pyS = ppS.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nmS} attr=900103 pos=({pxS},{pyS}) breakerSkip=True"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
                 return false;
             }
             _oeDepth[key] = d + 1;
+            try { int caidP = GetClonedAttrId(__instance); if (caidP == 900103) { string nmP = "?"; string pxP = "?", pyP = "?"; try { nmP = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var ppP = __instance.transform.position; pxP = ppP.x.ToString("F1"); pyP = ppP.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nmP} attr=900103 pos=({pxP},{pyP}) breakerSkip=False"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
         }
         catch { }
         return true;
@@ -219,7 +222,7 @@ public static class ChargerPadFix
                 bool contains = false;
                 try { contains = prodList.Contains(inst); } catch { contains = false; }
                 if (contains) { present++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
-                try { prodList.Add(inst); added++; } catch { }
+                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy})"); } catch { } } catch { } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
                 try { _skippedReg.Remove(inst); } catch { }
                 budget--;
             }
@@ -1117,7 +1120,7 @@ public static class ChargerPadFix
                 }
                 catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
             }
-            if (found == 0) { Plugin.L.LogInfo("[TS] 读档自检: 无900103在场实例（无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
+            if (found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: ActiveObjects总数={list.Count} 其中900103={found}（无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
             {
                 try { ProductionManager.MarkElectricGridDirty(); } catch { }
