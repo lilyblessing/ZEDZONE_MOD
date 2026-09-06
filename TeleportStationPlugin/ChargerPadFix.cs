@@ -1014,13 +1014,13 @@ public static class ChargerPadFix
         catch { }
     }
 
-    // ── v0.9.103 A：读档沉降自检自愈（一次性；tick 零新增扫描）──
+    // ── v0.9.103 A：读档沉降自检自愈（v0.9.107 A3a：每局闭环，每读档一次；tick 零新增扫描）──
     // 背景：900103 BioGen 烧腐肉(205)；腐肉原生无 Combustible，读档时原生启动判定早于我方伪造窗 → 永不起机 →
     // 不入电网图（L293 无候选铁证）；手动挪燃料的停机→启动（L360-361）恢复。
     // 触发点：RegistrationProbe.Update 内每帧调用 BioGenSaveHealPoll（须在 Done 早退之前，见 Plugin.cs）；
     // 沉降信号 = RegistrarState.Done || RegistrarState.GaveUp || 世界活跃（GameController.instance.playerCharacter 非空，
     // 照抄 RegistrationProbe 世界活跃判定）；沉降后 +5s 执行一次，自愈体 BioGenSaveHealOnce。
-    // 幂等：_saveHealDone 静态 bool 锁，每局最多执行一次（先锁后做，异常也不重跑）。
+    // 幂等：_saveHealDone 静态 bool 锁，每局读档最多执行一次（先锁后做，异常也不重跑；v0.9.107 A3a 每局闭环：LoadGuard 读档钩点复位）。
     // 自检判据（900103 实例在 ActiveObjects_Production 却无电）：其 ProductionData 缺席
     // ProductionManager.productionDataList，或 EnsurePdTables(现成复用)补过六表（返回值>0 即表曾空）。
     // 供电门说明：IsBioGenSupplied 是消费侧"附近有 BioGen 供电商"判定，对 BioGen 自身 pd（自距≡0）恒 true，
@@ -1028,9 +1028,9 @@ public static class ChargerPadFix
     // 自愈（全现成调用，不新造轮子）：判离线实例先直调原生 OnGeneratorStart 强制起机（A2，趁窗期标志还在）+
     // 缺席则 mgr.AddProductionData 入表 + EnsurePdTables 六表齐 + ProductionManager.MarkElectricGridDirty 重扫 +
     // 末尾 RemoveBioFuelCombustible 摘窗期标志（A2：起完再摘）。
-    private static bool _saveHealSettled;
-    private static float _saveHealSettleT;
-    private static bool _saveHealDone;
+    internal static bool _saveHealSettled; // v0.9.107 A3a：每局闭环——LoadGuard.OnLoadGamePrefix 读档时复位（internal 供跨类重置，同程序集零行为差）
+    internal static float _saveHealSettleT; // v0.9.107 A3a：沉降观测计时，复位后下次沉降重走“沉降→+5s”
+    internal static bool _saveHealDone; // v0.9.107 A3a：每局闭环——每读档一次（原每进程一次，现读档钩点复位；复位点见 LoadGuardFix.OnLoadGamePrefix）
 
     public static void BioGenSaveHealPoll()
     {

@@ -85,6 +85,23 @@ public static class LoadGuardFix
                 }
             }
             catch { }
+
+            // ═══ v0.9.107 A3a+A3b：每局闭环重置（读档钩点；去重逻辑不动，本块只追加复位行）═══
+            // A3b 结论（第二种：补键仅启动跑一次，读档不重跑）——证据：
+            // ① dump.cs:36001 InitTerrainObjectAttrs 为 GameController private 无参方法，居启动簇
+            // （Awake/Start/Init/InitCoroutine 同类相邻），只走游戏 init 路径；
+            // ② 托管侧调用链审计：工程内唯一引用即 Plugin.cs:343 钩点，无存档加载路径调用它；
+            // ③ 真读档三处全是裸写 in-place（TeleportSaveIdentity.cs:12-14 引 saveid-hijack 反编译实证），
+            // 不重建场景→读档时 EnsureBioFuelCombustible 不重跑→必须在此处读档先加窗期标志。
+            // A3a：复位自愈锁 + 沉降观测计时，下次 Poll 重走“沉降→+5s→评估→强制起机→摘标志”全套（每局闭环）。
+            try
+            {
+                try { ChargerPadFix.EnsureBioFuelCombustible(); } catch { } // A3b：读档时先加标志（prefix 先于原生循环，加在原生判定门前；幂等，快照_snapDone已锁存只补标志）
+                try { ChargerPadFix._saveHealDone = false; } catch { } // A3a：每局闭环——自愈锁复位
+                try { ChargerPadFix._saveHealSettled = false; } catch { } // A3a：沉降观测复位（与锁同处）
+                try { ChargerPadFix._saveHealSettleT = 0f; } catch { } // A3a：沉降计时清零（与锁同处）
+            }
+            catch { }
         }
         catch { }
     }
