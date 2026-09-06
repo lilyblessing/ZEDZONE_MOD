@@ -30,7 +30,7 @@ namespace TeleportStationPlugin;
 /// 经验教训：任何对 ConstructionPanel/detailIcon/statTime/ConstructionItemCardUI 的高频/实例级注入都会卡死，唯源头属性/字典安全。
 /// 建筑 id：900101 控制台电脑 / 900102 传送台圆盘 / 900103 生物能发电站。
 /// </summary>
-[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.104")]
+[BepInPlugin("com.zedzone.teleportstation", "TeleportStation", "0.9.105")]
 public class Plugin : BasePlugin
 {
     internal static Plugin Instance;
@@ -232,7 +232,7 @@ public class Plugin : BasePlugin
                 else Log.LogWarning("[TS] TimeController.ChangeTimeTo 挂钩失败（方法未找到）");
             }
             catch (Exception ej) { Log.LogWarning($"[TS] TimeController.ChangeTimeTo 挂钩异常: {ej.Message.Split('\n')[0]}"); }
-            // ═══ v0.9.4 P3 二期：充电台克隆盘的 ×4 倍率（UpdDateBatteryCharger 前后放大 sufficient）═══
+            // ═══ v0.9.4 P3 二期：充电台克隆盘的 ×10 倍率（UpdDateBatteryCharger 前后放大 sufficient）═══
             try
             {
                 var ubc = AccessTools.Method(typeof(ProductionManager), "UpdateBatteryCharger");
@@ -243,7 +243,7 @@ public class Plugin : BasePlugin
                             nameof(ChargerPadFix.ChargerUpdatePrefix), BindingFlags.Public | BindingFlags.Static)),
                         postfix: new HarmonyMethod(typeof(ChargerPadFix).GetMethod(
                             nameof(ChargerPadFix.ChargerUpdatePostfix), BindingFlags.Public | BindingFlags.Static)));
-                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateBatteryCharger（充电台盘 ×4 倍率）");
+                    Log.LogInfo("[TS] 已挂钩 ProductionManager.UpdateBatteryCharger（充电台盘 ×10 倍率）");
                 }
                 else Log.LogWarning("[TS] UpdateBatteryCharger 挂钩失败（方法未找到）");
             }

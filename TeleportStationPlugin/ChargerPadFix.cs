@@ -12,15 +12,15 @@ namespace TeleportStationPlugin;
 ///   1. 盘天然是电力消费端 → 游戏真实电线路由（电线杆接线）原生可用，充电走原版 UpdateBatteryCharger；
 ///   2. 本类只做两件事：
 ///      A. 容器微调（一次性）：productionData.inventoryData1（原版槽位扫描容器）→ 8×8 + 标题「电池仓」+ totalBatterySoltNumber=4；
-///      B. ×4 倍率 hook：Supply 源含生物能（900103）时，UpdateBatteryCharger 前后把 powerInputSufficientFloat ×4/恢复
+///      B. ×10 倍率 hook：Supply 源含生物能（900103）时，UpdateBatteryCharger 前后把 powerInputSufficientFloat ×10/恢复
 ///         （原版公式 totalWh = sufficient × electricWattage × addedTime × 24 → 放大 sufficient 即等效倍率）。
-///         v0.9.71 起目标含 126 原版充电台（同条件同享×4）。
+///         v0.9.71 起目标含 126 原版充电台（同条件同享×10）。
 ///   旧档斯特林组件盘继续由 BatteryChargeFix（虚拟供电充电）照顾。
 /// </summary>
 public static class ChargerPadFix
 {
     private const int PadId = 900102;
-    private const int VanillaChargerId = 126; // 原版电池充电台（v0.9.71 起同享生物能×4）
+    private const int VanillaChargerId = 126; // 原版电池充电台（v0.9.71 起同享生物能×10）
     private const int BioGenId = 900103;
     private static readonly bool EnableDiag = false; // 诊断开关：ScaleDiag/PadSRDump/Stirling/Grid 探针，正常运行关闭以减刷屏
     internal static bool DiagCut = false; // v0.9.97-r5：恢复生产（r4五大切断证伪与塌无关，全部恢复）
@@ -38,7 +38,7 @@ public static class ChargerPadFix
     private static float _lastScan = -1f;
     internal static TerrainObject_Production[] _sharedProdSnapshot; // P2-2：双Tick共享快照（任一Tick先到且过期则拷贝一次刷新）
     internal static float _sharedProdSnapTime = -999f; // P2-2：快照时间戳（Time.realtimeSinceStartup）
-    private static bool _boosted; // ×4 窗口（prefix 置位 / postfix 恢复）
+    private static bool _boosted; // ×10 窗口（prefix 置位 / postfix 恢复）
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
     private static bool _warnedX4Hit;    // ×4 成功行独立旗标（失败行消费_warnedHit后成功仍可留痕）
@@ -442,7 +442,7 @@ public static class ChargerPadFix
     // Combustible 是纯标志位——dump 全表无 ItemFeature_Combustible 数据类，燃烧时长/功率是 ProductionManager
     // 全局静态 stirlingFuelBuringTime / stirlingGeneratorWattage（dump.cs:79252-79253），无逐燃料配平项——
     // 「对标同类燃料」即同一标志位（木头 id 0 同款），无 wattage 可配。禁区：只动可燃相关条目，其他字段不动。
-    // 顺序铁律（方案③）：加在原生门前（场景加载补键，早于原生启动判定）；摘在沉降后（BioGenSaveHealOnce 首行精确摘除）。
+    // 顺序铁律（方案③）：加在原生门前（场景加载补键，早于原生启动判定）；摘在沉降后（BioGenSaveHealOnce 末尾精确摘除，A2：先起机后摘）。
     internal static void EnsureBioFuelCombustible()
     {
         try
@@ -1022,8 +1022,9 @@ public static class ChargerPadFix
     // ProductionManager.productionDataList，或 EnsurePdTables(现成复用)补过六表（返回值>0 即表曾空）。
     // 供电门说明：IsBioGenSupplied 是消费侧"附近有 BioGen 供电商"判定，对 BioGen 自身 pd（自距≡0）恒 true，
     // 故自检不适用，本自愈以 PD 侧判据（入表 + 六表齐）为准。
-    // 自愈（全现成调用，不新造轮子）：缺席则 mgr.AddProductionData 入表 + EnsurePdTables 六表齐 +
-    // ProductionManager.MarkElectricGridDirty 重扫。
+    // 自愈（全现成调用，不新造轮子）：判离线实例先直调原生 OnGeneratorStart 强制起机（A2，趁窗期标志还在）+
+    // 缺席则 mgr.AddProductionData 入表 + EnsurePdTables 六表齐 + ProductionManager.MarkElectricGridDirty 重扫 +
+    // 末尾 RemoveBioFuelCombustible 摘窗期标志（A2：起完再摘）。
     private static bool _saveHealSettled;
     private static float _saveHealSettleT;
     private static bool _saveHealDone;
@@ -1054,11 +1055,11 @@ public static class ChargerPadFix
     {
         try
         {
-            try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } // 方案③窗期摘除：借 A 自愈执行点（同一沉降信号+5s）；A 自愈逻辑不动
+            // v0.9.105 A2：窗期摘除从首行移至本方法末尾——自愈（强制起机+补PD+重扫）全程趁标志还在先起机，起完再摘；A自愈判据不动
             var list = TerrainObject_Production.ActiveObjects_Production;
-            if (list == null) { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects空（无在场实例，无需自愈）"); return; }
+            if (list == null) { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects空（无在场实例，无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             var mgr = ProductionManager.instance;
-            if (mgr == null) { Plugin.L.LogInfo("[TS] 读档自检: ProductionManager未就绪（跳过）"); return; }
+            if (mgr == null) { Plugin.L.LogInfo("[TS] 读档自检: ProductionManager未就绪（跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             int found = 0, healed = 0;
             for (int i = 0; i < list.Count; i++)
             {
@@ -1093,6 +1094,21 @@ public static class ChargerPadFix
                 int fixedTables = 0;
                 try { fixedTables = EnsurePdTables(ppd); } catch { }
                 if (inList && fixedTables == 0) continue; // 在表且六表齐 → 有电，无需自愈
+                // v0.9.105 A2 强制起机（幂等，once锁内）：趁窗期标志还在（摘除已移至本方法末尾），对判离线实例直调原生
+                // TerrainObject_Production_StirlingGenerator.OnGeneratorStart（dump.cs:86207，VA:0x180A38C40，public无参；
+                // Plugin.cs:118-123既有hook其postfix为BioGenFuel.OnGeneratorStartPostfix观察链）——等效手动挪燃料的
+                // 停机→启动跃迁，触发原生状态机重估；失败只记日志不抛，不阻断后续补PD+重扫。
+                try
+                {
+                    var sg = g as TerrainObject_Production_StirlingGenerator;
+                    if (sg != null)
+                    {
+                        try { sg.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机: 900103实例已触发OnGeneratorStart"); }
+                        catch (Exception es) { try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es.Message.Split('\n')[0]}"); } catch { } }
+                    }
+                    else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态"); } catch { } }
+                }
+                catch { }
                 try
                 {
                     if (!inList) mgr.AddProductionData(ppd); // 原生入表（含类型字典注册）
@@ -1101,13 +1117,14 @@ public static class ChargerPadFix
                 }
                 catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
             }
-            if (found == 0) { Plugin.L.LogInfo("[TS] 读档自检: 无900103在场实例（无需自愈）"); return; }
+            if (found == 0) { Plugin.L.LogInfo("[TS] 读档自检: 无900103在场实例（无需自愈）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
             {
                 try { ProductionManager.MarkElectricGridDirty(); } catch { }
                 Plugin.L.LogInfo($"[TS] 读档自愈完成: 在场900103={found} 自愈={healed}");
             }
             else Plugin.L.LogInfo($"[TS] 读档自检通过: 在场900103={found} 均在表且六表齐（无需自愈）");
+            try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } // v0.9.105 A2：起完再摘（自愈体之后；趁标志还在先起机）
         }
         catch (Exception e) { try { Plugin.L.LogWarning($"[TS] 读档自检异常: {e.Message.Split('\n')[0]}"); } catch { } }
     }
@@ -1923,7 +1940,7 @@ public static class ChargerPadFix
         return n;
     }
 
-    /// <summary>×4 倍率 prefix：pd 是 900102 传送盘或 126 原版充电台、且供电含生物能 → sufficient ×4（postfix 恢复）。</summary>
+    /// <summary>×10 倍率 prefix：pd 是 900102 传送盘或 126 原版充电台、且供电含生物能 → sufficient ×10（postfix 恢复）。</summary>
     public static bool ChargerUpdatePrefix(ProductionData productionData, float addedTime)
     {
         try
@@ -1943,7 +1960,7 @@ public static class ChargerPadFix
             {
                 productionData.powerInputSufficientFloat = productionData.powerInputSufficientFloat * 10f;
                 _boosted = true;
-                if (!_warnedX4Hit) { _warnedX4Hit = true; Plugin.L.LogInfo("[TS] ×10 倍率生效: sufficient×10"); } // 临时测试档，正式版待定
+                if (!_warnedX4Hit) { _warnedX4Hit = true; Plugin.L.LogInfo("[TS] ×10 倍率生效: sufficient×10"); }
             }
             catch { }
         }
@@ -1974,7 +1991,7 @@ public static class ChargerPadFix
         return true;
     }
 
-    /// <summary>×4 目标判定：900102 传送盘（克隆引用或 id）或 126 原版充电台。</summary>
+    /// <summary>×10 目标判定：900102 传送盘（克隆引用或 id）或 126 原版充电台。</summary>
     private static bool IsBoostPd(ProductionData pd)
     {
         try

@@ -51,8 +51,8 @@ public static class BioGenFuel
 
     // ── v0.9.105 方案③：读档窗期标志 + 加法（F1b 否决已退役删除，见 git 历史）──
     // 顺序铁律：加在原生门前——场景加载时 ChargerPadFix.EnsureBioFuelCombustible 先快照后补键，
-    // 早于原生启动判定，读档原生放行；摘在沉降后——读档沉降+5s 的 BioGenSaveHealOnce 首行
-    // RemoveBioFuelCombustible() 精确摘除；摘除后运行时认食物全靠 B 环加法窗伪造
+    // 早于原生启动判定，读档原生放行；摘在沉降后——读档沉降+5s 的 BioGenSaveHealOnce 末尾
+    // RemoveBioFuelCombustible() 精确摘除（v0.9.105 A2：自愈先起机后摘，首行摘除已废止）；摘除后运行时认食物全靠 B 环加法窗伪造
     // （窗期标志摘除后的运行时认食物路径，见 GetAttrByIdPrefix）。
     // 精确恢复：补键时 RecordBioFuelAdded 记 _addedFuelIds（仅实际补过 Combustible 的 id，
     // 原生已带标志的项不入表）；摘除只摘表内项，快照集（NativeCombustibleIds）内原生 id 永不碰，无全量摘除。
@@ -63,7 +63,7 @@ public static class BioGenFuel
         try { _addedFuelIds.Add(itemId); } catch { }
     }
 
-    /// <summary>窗期标志摘除（沉降后执行，调用点见 ChargerPadFix.BioGenSaveHealOnce 首行；A 自愈逻辑不动）：
+    /// <summary>窗期标志摘除（沉降后执行，调用点见 ChargerPadFix.BioGenSaveHealOnce 末尾及各提前返回处；A 自愈逻辑不动）：
     /// 只摘 _addedFuelIds 表内项（我们加的），快照集内原生 id 与炭 6 永不碰；摘完打 info 日志。</summary>
     internal static void RemoveBioFuelCombustible()
     {

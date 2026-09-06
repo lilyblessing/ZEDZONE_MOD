@@ -40,7 +40,7 @@ public class TeleportMapManager : MonoBehaviour
     private readonly Dictionary<string, float> _handleVerifyAt = new();
     private const float HandleReverifySeconds = 0.25f;
     // v0.9.61 远站持久坐标表（复用木牌“存量数据而非活体”思想，自建表不污染原生木牌）：
-    // coord "x,y" -> 站记录（静态坐标+上次实测名/在线态），存 TeleportMapStations.json。
+    // coord "x,y" -> 站记录（静态坐标+上次实测名/供电快照），存 TeleportMapStations.json。
     private readonly Dictionary<string, StationRec> _persisted = new();
     private bool _persistedLoaded = false;
     private float _lastPersistedSave = -999f;
@@ -245,7 +245,7 @@ public class TeleportMapManager : MonoBehaviour
                 Vector2 worldPos = new Vector2(pad.transform.position.x, pad.transform.position.y);
                 Vector2 anchoredPos = WorldToMapPos(worldPos);
                 bool online = TeleportConsoleSelection.IsOnline(pad);
-                string gateWhy = ""; // v0.9.91-diag：离线原因（只读+日志，零行为改动）
+                string gateWhy = ""; // v0.9.91-diag：未供电原因（只读+日志，零行为改动）
                 try { if (!online) { string _r; TeleportConsoleSelection.IsOnlineReason(pad, out _r); gateWhy = " reason=" + _r; } } catch { gateWhy = ""; }
                 string name = GetNameForPad(pad);
                 // v0.9.61 活体实测写入持久坐标表（远站补齐的数据源）
@@ -299,7 +299,7 @@ public class TeleportMapManager : MonoBehaviour
                                 if (_markerSprite != null) img.sprite = _markerSprite;
                                 img.preserveAspect = true;
                                 img.raycastTarget = true;
-                                img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+                                img.color = Color.white;
                             }
                             // 可点击：保留 Button 并接选点闭环（不再 Destroy，保证选点不断）。
                             try
@@ -314,7 +314,7 @@ public class TeleportMapManager : MonoBehaviour
                             var txt = go.GetComponentInChildren<Text>(true);
                             if (txt != null)
                             {
-                                txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                                txt.text = $"{name}";
                                 txt.alignment = TextAnchor.UpperCenter;
                                 txt.horizontalOverflow = HorizontalWrapMode.Overflow;
                                 txt.verticalOverflow = VerticalWrapMode.Overflow;
@@ -353,7 +353,7 @@ public class TeleportMapManager : MonoBehaviour
                                 lrt.pivot = new Vector2(0.5f, 1f);
                                 lrt.anchoredPosition = new Vector2(0f, -18f);
                                 lrt.sizeDelta = new Vector2(120f, 36f);
-                                ntxt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                                ntxt.text = $"{name}";
                                 try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
                                 _labels[padKey] = ntxt;
                             }
@@ -370,7 +370,7 @@ public class TeleportMapManager : MonoBehaviour
                             var rt2 = go.AddComponent<RectTransform>();
                             rt2.sizeDelta = new Vector2(36f, 36f);
                             rt2.anchorMin = new Vector2(0.5f, 0.5f); rt2.anchorMax = new Vector2(0.5f, 0.5f); rt2.pivot = new Vector2(0.5f, 0.5f); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
-                            var img2 = go.AddComponent<Image>(); img2.sprite = _markerSprite; img2.preserveAspect = true; img2.raycastTarget = true; img2.color = online ? Color.white : new Color(0.55f,0.55f,0.55f,1f);
+                            var img2 = go.AddComponent<Image>(); img2.sprite = _markerSprite; img2.preserveAspect = true; img2.raycastTarget = true; img2.color = Color.white;
                             go.transform.SetParent(mapParent, false); rt2.anchoredPosition = anchoredPos; rt2.localScale = Vector3.one;
                             try { var btnFb = go.AddComponent<Button>(); btnFb.interactable = true; var capFb = pad; btnFb.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capFb); } catch {} })); } catch {}
                             _markers[padKey] = go;
@@ -378,7 +378,7 @@ public class TeleportMapManager : MonoBehaviour
                             var labelGO2 = new GameObject("Label"); labelGO2.transform.SetParent(go.transform, false);
                             var txt2 = labelGO2.AddComponent<Text>(); txt2.alignment = TextAnchor.UpperCenter; txt2.horizontalOverflow = HorizontalWrapMode.Overflow; txt2.verticalOverflow = VerticalWrapMode.Overflow; txt2.fontSize = 12; txt2.fontStyle = FontStyle.Bold; txt2.supportRichText = true; txt2.color = Color.white; ApplyFont(txt2);
                             var lrt2 = txt2.rectTransform; lrt2.anchorMin = new Vector2(0.5f,0.5f); lrt2.anchorMax = new Vector2(0.5f,0.5f); lrt2.pivot = new Vector2(0.5f,1f); lrt2.anchoredPosition = new Vector2(0f,-18f); lrt2.sizeDelta = new Vector2(120f,36f);
-                            txt2.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                            txt2.text = $"{name}";
                             try { var ol = labelGO2.AddComponent<Outline>(); ol.effectColor = new Color(0f,0f,0f,0.5f); ol.effectDistance = new Vector2(1f,-1f); } catch {}
                             _labels[padKey] = txt2;
                             Plugin.L.LogInfo($"[TS][Map] 创建标记 pad={padKey} world={worldPos.x:F0},{worldPos.y:F0} anchored={anchoredPos.x:F0},{anchoredPos.y:F0} online={online}{gateWhy} (prefab回退)");
@@ -399,7 +399,7 @@ public class TeleportMapManager : MonoBehaviour
                         img.sprite = _markerSprite;
                         img.preserveAspect = true;
                         img.raycastTarget = true;
-                        img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+                        img.color = Color.white;
 
                         // 可点击：自建标记同样保留 Button（选点闭环不断）。
                         try { var btnNew = go.AddComponent<Button>(); btnNew.interactable = true; var capNew = pad; btnNew.onClick.AddListener(new System.Action(() => { try { Instance?.OnMarkerClick(capNew); } catch {} })); } catch {}
@@ -428,7 +428,7 @@ public class TeleportMapManager : MonoBehaviour
                         lrt.pivot = new Vector2(0.5f, 1f);
                         lrt.anchoredPosition = new Vector2(0f, -18f);
                         lrt.sizeDelta = new Vector2(120f, 36f);
-                        txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                        txt.text = $"{name}";
                         // 仅保留 Outline，不加 Shadow
                         try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
                         _labels[padKey] = txt;
@@ -444,14 +444,14 @@ public class TeleportMapManager : MonoBehaviour
                     if (img != null)
                     {
                         if (_markerSprite != null && img.sprite != _markerSprite) img.sprite = _markerSprite;
-                        img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+                        img.color = Color.white;
                     }
                     Text txt = null;
                     if (_labels.TryGetValue(padKey, out var cachedTxt) && cachedTxt != null) txt = cachedTxt;
                     else try { txt = go.GetComponentInChildren<Text>(true); if (txt != null) _labels[padKey] = txt; } catch {}
                     if (txt != null)
                     {
-                        string t = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                        string t = $"{name}";
                         if (txt.text != t) txt.text = t;
                     }
                     if (go.transform.parent != mapParent) go.transform.SetParent(mapParent, false);
@@ -487,7 +487,7 @@ public class TeleportMapManager : MonoBehaviour
                         else try { txt = pgo.GetComponentInChildren<Text>(true); if (txt != null) _labels[mkey] = txt; } catch {}
                         if (txt != null)
                         {
-                            string t = $"{rec.name}\n{(rec.online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+                            string t = $"{rec.name}";
                             if (txt.text != t) txt.text = t;
                         }
                         if (pgo.transform.parent != mapParent) pgo.transform.SetParent(mapParent, false);
@@ -595,10 +595,7 @@ public class TeleportMapManager : MonoBehaviour
                 {
                     if (inst._labels.TryGetValue(k, out var txt) && txt != null)
                     {
-                        string cur = txt.text ?? "";
-                        int nl = cur.IndexOf('\n');
-                        string suffix = nl >= 0 ? cur.Substring(nl) : "\n<color=#7CFF7C>在线</color>";
-                        txt.text = newName + suffix;
+                        txt.text = newName;
                     }
                 } catch {}
                 try
@@ -632,13 +629,13 @@ public class TeleportMapManager : MonoBehaviour
             img.sprite = _markerSprite;
             img.preserveAspect = true;
             img.raycastTarget = true;
-            img.color = online ? Color.white : new Color(0.55f, 0.55f, 0.55f, 1f);
+            img.color = Color.white;
             try
             {
                 var btn = go.AddComponent<Button>();
                 btn.interactable = true;
-                // v0.9.63 存量标记可点：persisted-online=true 即按 UID 选点（在线即传，无走近门控）；
-                // 从未在线的站仅气泡说明原因。mkey 形如 "c:x,y"。
+                // v0.9.63 存量标记可点：按 UID 选点（无走近门控）；
+                // 无坐标记录的站仅气泡说明原因。mkey 形如 "c:x,y"。
                 string coordCap = mkey.StartsWith("c:") ? mkey.Substring(2) : "";
                 btn.onClick.AddListener(new System.Action(() => { try { Instance?.OnOfflineMarkerClick(coordCap); } catch {} }));
             } catch {}
@@ -663,7 +660,7 @@ public class TeleportMapManager : MonoBehaviour
             lrt.pivot = new Vector2(0.5f, 1f);
             lrt.anchoredPosition = new Vector2(0f, -18f);
             lrt.sizeDelta = new Vector2(120f, 36f);
-            txt.text = $"{name}\n{(online ? "<color=#7CFF7C>在线</color>" : "<color=#FF6B6B>离线</color>")}";
+            txt.text = $"{name}";
             try { var ol = labelGO.AddComponent<Outline>(); ol.effectColor = new Color(0f, 0f, 0f, 0.5f); ol.effectDistance = new Vector2(1f, -1f); } catch {}
             _labels[mkey] = txt;
             return go;
@@ -924,7 +921,7 @@ public class TeleportMapManager : MonoBehaviour
     {
         try
         {
-            if (pad == null) { ShowBubble("该站当前离线"); return; }
+            if (pad == null) { ShowBubble("该站暂不可用"); return; }
             if (PendingConsole == null) { ShowBubble("请先在控制台选择传送"); return; }
             long ck = GetInstanceKey(PendingConsole);
             string cuid = TeleportStationUid.UidFor(PendingConsole);
@@ -934,7 +931,7 @@ public class TeleportMapManager : MonoBehaviour
             // 发送方需 IsSenderReady(供电+电池≥10000)；接收方无门控（用户定案 v0.9.64）
             if (!TeleportConsoleSelection.IsSenderReady(pendingPadObj))
             {
-                if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站离线（未通电或未绑定）");
+                if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站未供电（未通电或未绑定）");
                 else ShowBubble("本站电量不足（需≥10000）");
                 return;
             }
@@ -953,7 +950,7 @@ public class TeleportMapManager : MonoBehaviour
         catch (Exception ex) { Plugin.L.LogWarning($"[TS][Map] OnMarkerClick 异常: {ex.Message.Split('\n')[0]}"); }
     }
 
-    // v0.9.63 存量标记选点：无活体对象，以 UID 为身份；persisted-online=true 即选点（在线即传）。
+    // v0.9.63 存量标记选点：无活体对象，以 UID 为身份直接选点。
     [HideFromIl2Cpp]
     public void OnOfflineMarkerClick(string coord)
     {
@@ -973,11 +970,11 @@ public class TeleportMapManager : MonoBehaviour
             if (pendingPadKey == 0 || pendingPadObj == null) { ShowBubble("本站未绑定圆盘"); return; }
             if (!TeleportConsoleSelection.IsSenderReady(pendingPadObj))
             {
-                if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站离线（未通电或未绑定）");
+                if (!TeleportConsoleSelection.IsOnline(pendingPadObj)) ShowBubble("本站未供电（未通电或未绑定）");
                 else ShowBubble("本站电量不足（需≥10000）");
                 return;
             }
-            // v0.9.64 接收方无门控：persisted-online 仅显示，不拒绝。
+            // v0.9.64 接收方无门控。
             string selfUid = TeleportStationUid.UidFor(pendingPadObj);
             if (targetUid == selfUid) { ShowBubble("不能选择本站"); return; }
             TeleportConsoleSelection.SetSelectedByUid(cuid, targetUid);
@@ -1017,7 +1014,7 @@ public class TeleportMapManager : MonoBehaviour
         try { if (Instance != null) Instance._pendingClearAt = -1f; } catch {}
     }
 
-    // ===== v0.9.63 持久在线态静态查询（文件直读，不碰标记绘制，供选点/触发两路在线判） =====
+    // ===== v0.9.63 持久供电快照静态查询（文件直读，不碰标记绘制，供选点/触发两路查询） =====
     // TeleportMapStations.json: {"x,y":{"x":..,"y":..,"name":"..","online":0/1}}
     public static bool QueryPersistedStation(string coord, out int x, out int y, out string name, out bool online)
     {
