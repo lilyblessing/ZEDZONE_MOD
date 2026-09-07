@@ -16,6 +16,13 @@ namespace TeleportStationPlugin;
 ///   C. PassesFeatureLimit prefix：生物容器 attr 级粗筛（205/炭/木头/Food 放行，金属拒）
 ///   D. TryAddItem/AddItem prefix：item 级白名单（Food 类全放行 / 腐肉205 / 木头0 / 炭6 豁免；金属拒）——v0.8.10 终版 + 木材类
 /// 容器识别：指针标记集合（来自 inventoryData1 + get_fuelInventoryData 双来源），不再依赖 ActiveObjects 遍历。
+/// ── H1 原版产物炭去向定案（2026-09-07，只读交叉，无逻辑改动）──
+/// 结论：原版斯特林产物炭回燃料仓（同一容器），无独立产物仓；BioGen 现状已与原版一致，H2 无需改。
+/// dump 实证（out/il2cpp/dump.cs）：ashItemId=6（:79240）；ConsumeFuelByProcess(fuelInventory, ashInventory, …)（:79296）
+/// 为通用双参 helper；UpdateStoneFurnace（:79299）所属熔炉类具三仓 material/output/fuel（:85815-85819，有独立去向）；
+/// 而 StirlingGenerator 类（:86155-86175）仅暴露 fuelInventoryData 单仓（:86175），无 output/ash 仓——调 ConsumeFuelByProcess
+/// 时 ashInventory 只能回填燃料容器自身；Ghidra FUN_180930AB0 定案（本文件头 §4）“产出=TryAddItem(炭6)回仓”一致。
+/// BioGen 侧无独立灰烬路由代码（灰烬注入走原版 UpdateStirlingGenerator 本体，prefix 返回 true 放行），D 环仅豁免 6 号放行。
 /// </summary>
 public static class BioGenFuel
 {

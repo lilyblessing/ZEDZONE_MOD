@@ -211,6 +211,21 @@ public class TeleportMapManager : MonoBehaviour
     }
 
     // ===== RefreshMarkers =====
+    // M1 根因定位（v0.9.113）：持久化B站为何没渲染。
+    // 1) 渲染入口只枚举活体：首循环 `var pads = CollectBoundPads(keyMap)`（本文件:247），
+    //    `foreach (var pad in pads)`（:259）是 marker 的第一 driving source。
+    // 2) 活体三重门（CollectBoundPads :1393-1412）：全活体扫描 :1398 →
+    //    :1403 IsPadBound 不通过即 continue（未到访绑定=无绑定记录）→
+    //    :1404-1405 GetBoundConsole==0 即 continue → :1406-1407 对端 console 活体查不到即 continue
+    //    （远处区块未加载/未到访即无活体）。未到访 B 站一步即被筛掉，进不了渲染。
+    // 3) 写路径同被此门卡住：RecordPersisted 调用（:291）只在上述活体循环内，
+    //    从未绑定/从未活体观测的 B 站连 _persisted/文件坐标都进不了——“得到访才出现”的完整链条。
+    //    （收敛 PruneUnseen/epoch/K=3 只剔除“已在表内但连续 K 轮未见”的记录，与本根因无关，保持不动。）
+    // 4) v0.9.105 已洗脱嫌疑：渲染路径零 online 门（marker 色恒白 :321/:421/:466，label 纯站名），
+    //    数据层 QueryPersistedStation :1064 / QueryPersistedOnline :1108 保留完好；Transport/visited/fog
+    //    全工程零命中——“到访”门控在渲染层无残留，纯粹是上述活体枚举门。
+    // M2 对策：渲染改存量驱动——LoadPersisted 前提到入口（见本方法顶部），活体循环只做数据回填+enrichment，
+    // marker driving source 统一为 _persisted 全集（见下方存量主循环），无活体也渲染。
     [HideFromIl2Cpp]
     public void RefreshMarkers()
     {
@@ -222,6 +237,10 @@ public class TeleportMapManager : MonoBehaviour
             if (mp == null) return;
             var mapParent = GetMapParent(mp);
             if (mapParent == null) return;
+
+            // M2 存量驱动：先装载持久集（幂等，见 LoadPersisted；切换身份后 ReloadPersisted 已清标识重读），
+            // 本方法后续渲染以 _persisted 为 driving source，活体只做 enrichment。
+            LoadPersisted();
 
             // P1-9：入口一次建映射表（2×缓存FindAllById），本轮内 peer/配对查询全走表查，零逐pad全量扫描。
             var keyMap = BuildInstanceMap();
@@ -462,7 +481,9 @@ public class TeleportMapManager : MonoBehaviour
             // v0.9.66 配对门控已拆（入表即已配对，门控零收益且自造 paired=false 误拦）。
             try
             {
-                LoadPersisted();
+                // M2 存量驱动渲染主循环：枚举 _persisted 全集（入口已 LoadPersisted，此处不再重复加载）；
+                // 活体已画的（liveCoords）跳过，无活体记录走 BuildOfflineMarker（纯站名+坐标，无状态色——
+                // 在线显示已摘，不再引入）。
                 foreach (var kv in _persisted)
                 {
                     if (liveCoords.Contains(kv.Key)) continue;
@@ -735,6 +756,30 @@ public class TeleportMapManager : MonoBehaviour
             return inst != null ? inst._persisted.Count : 0;
         }
         catch { return 0; }
+    }
+
+    // M2 存量驱动快照（渲染层只读枚举口）：返回内存 _persisted 全集坐标键（先 LoadPersisted，幂等）。
+    // 控制台选单行以此为 driving source（与 PDA 同源；含本会话新记录，不受 5s 落盘节流滞后影响；
+    // 已收敛剔除的不在其中）。只给坐标键，详情走 QueryPersistedStation（内存优先+文件兜底）；
+    // 不暴露 online（在线显示已摘，不再引入）；收敛/写路径/存档 schema 均不动。
+    // （返回 List<string> 纯托管类型：本类已有 private static Dictionary<long,TerrainObject> 先例，
+    // 仅托管侧调用，不进原生边界，无需 HideFromIl2Cpp。）
+    public static List<string> SnapshotPersistedCoords()
+    {
+        var res = new List<string>();
+        try
+        {
+            var inst = Instance;
+            if (inst == null) return res;
+            try { inst.LoadPersisted(); } catch {}
+            foreach (var kv in inst._persisted)
+            {
+                if (string.IsNullOrEmpty(kv.Key) || kv.Value == null) continue;
+                if (string.IsNullOrEmpty(kv.Value.name)) continue;
+                res.Add(kv.Key);
+            }
+        } catch {}
+        return res;
     }
 
     public static void ReloadPersisted()

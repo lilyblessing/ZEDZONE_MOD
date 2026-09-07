@@ -370,6 +370,12 @@ public class TeleportConsoleUI : MonoBehaviour
 
     // P6.4 修空列表：先逐项清洗（坏项跳过，不毒化全表），排序独立 try（失败保序返回）。
     // 旧版 all.Sort 比较器直访 a.transform.position 且外层空 catch{}，任一坏项抛异常即整表清空且无日志。
+    // M1 根因定位（v0.9.113）：选单 driving source 曾是活体——本方法全活体扫描 FindAllPads（:789-791）
+    // + :443 IsPadBound 门（未到访绑定即排除）+ :446 坐标对回链（文件有记录才放行，但仍要求活体 pad 对象存在）。
+    // 未加载/未到访的 B 站无活体 pad，进不了 candidates；存量补充 AppendStaleRows（调用 :357，定义 :714）读的是磁盘文件
+    // （LoadStaleStations :557），滞后内存 _persisted 一个落盘节流（TeleportMapManager:943 5s），且与 PDA 非同源。
+    // M2 对策：存量行改以内存持久集 SnapshotPersistedCoords 为 driving source（文件仅作 manager 未就绪回退），
+    // 活体 candidates 保留作 enrichment（活体距离/直接 pad 句柄可传送★）；行渲染纯站名+坐标，无状态色。
     private List<TerrainObject> CollectCandidates()
     {
         var list = new List<TerrainObject>();
@@ -623,6 +629,30 @@ public class TeleportConsoleUI : MonoBehaviour
         return res;
     }
 
+    // M2：内存持久集驱动（渲染层只读；与 PDA 同源；online/paired 不参与显示，显示无状态色）。
+    // 首选 TeleportMapManager.SnapshotPersistedCoords（内存 _persisted 全集，含本会话新记录）；
+    // 详情走 QueryPersistedStation（内存优先+文件兜底）。manager 未就绪时返回空，调用方回退读文件。
+    private static List<StaleStation> LoadStaleStationsFromMemory()
+    {
+        var res = new List<StaleStation>();
+        try
+        {
+            var coords = TeleportMapManager.SnapshotPersistedCoords();
+            foreach (var c in coords)
+            {
+                if (string.IsNullOrEmpty(c) || res.Count >= 128) break;
+                try
+                {
+                    int x, y; string nm; bool on;
+                    if (!TeleportMapManager.QueryPersistedStation(c, out x, out y, out nm, out on)) continue;
+                    if (string.IsNullOrEmpty(nm)) continue;
+                    res.Add(new StaleStation { coord = c, x = x, y = y, name = nm });
+                } catch {}
+            }
+        } catch {}
+        return res;
+    }
+
     private static int ParseStaleInt(string body, string key)
     {
         try
@@ -687,7 +717,10 @@ public class TeleportConsoleUI : MonoBehaviour
         {
             if (_currentConsole == null || _currentConsole.transform == null) return;
             Vector3 cc = _currentConsole.transform.position;
-            var stale = LoadStaleStations();
+            // M2 存量驱动：渲染入口枚举内存持久集（SnapshotPersistedCoords，与 PDA 同源；无活体也渲染）；
+            // manager 未就绪（快照空）才回退读文件。活体已列（livePadCoords）/本站（selfPadCoord）去重逻辑不变。
+            var stale = LoadStaleStationsFromMemory();
+            if (stale.Count == 0) stale = LoadStaleStations();
             if (stale.Count == 0) { Plugin.L.LogInfo($"[TS][UI] 存量站载入 0 条 {consoleUid0}"); return; }
             // 按距离排序（失败保序）
             try

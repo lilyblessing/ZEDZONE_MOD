@@ -1492,6 +1492,20 @@ public static class ChargerPadFix
                         float qsf = -1f;
                         bool qpw = false;
                         try { qpw = IsPdPowered(q, out qsf); } catch { }
+                        // v0.9.114 EdgeCk：每台900103-PD一行边检查采样（只读日志，零行为改动；Once每局一次，在线/离线全覆盖）
+                        try
+                        {
+                            string es8 = "?";
+                            try { string eqid = q.productionObjectId; es8 = GhostLast8(eqid); } catch { }
+                            bool eOff = false;
+                            try { eOff = Convert.ToBoolean(Reflect.Get(q, "powerSwitchOff")); } catch { }
+                            string ex = "?", ey = "?";
+                            try { var et = q.terrainObjectDataTemp; if (et != null) { ex = et.localPositionX.ToString("F1"); ey = et.localPositionY.ToString("F1"); } } catch { }
+                            bool eStarted = false;
+                            try { eStarted = qsf > 0.01f; } catch { }
+                            try { Plugin.L.LogInfo($"[TS][BioReg] EdgeCk pdid={es8} powerOff={(eOff ? "T" : "F")} pos=({ex},{ey}) started={(eStarted ? "T" : "F")}"); } catch { }
+                        }
+                        catch { }
                         if (qpw) continue; // 在线PD不动
                         string qid = null;
                         try { qid = q.productionObjectId; } catch { }
