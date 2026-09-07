@@ -42,14 +42,10 @@ public static class ChargerPadFix
     private static bool _warnedTypeMiss; // 判定诊断（一次性）
     private static bool _warnedHit;      // ×4 判定诊断（一次性）
     private static bool _warnedX4Hit;    // ×4 成功行独立旗标（失败行消费_warnedHit后成功仍可留痕）
-    private static bool _warnedX4NoTo = false;      // ×4 四出口诊断：terrainObjectTemp空（一次性）
-    private static bool _warnedX4TableEmpty = false; // ×4 四出口诊断：生产表空（一次性）
-    private static bool _warnedX4NoBio = false;     // ×4 四出口诊断：无900103候选（一次性）
-    private static bool _warnedX4MinDist = false;   // ×4 四出口诊断：最近对象距离（一次性）
-    private static bool _warnedX4NoAttrPos = false; // ×4 五出口诊断：temp空且attr无坐标（一次性；dump.cs:81055-81136实证TerrainObjectAttr无坐标类字段）
+
     private static float _bioX, _bioY; // v0.9.101：BioGen位置会话缓存（表非空命中时写，清空窗Ride-Out读；XY平面判距）
     private static float _bioSeenTime = -999f; // v0.9.101：缓存时间戳（Time.realtimeSinceStartup语义）
-    private static bool _warnedX4CacheHit = false; // v0.9.101：缓存命中诊断（一次性）
+
     private static readonly System.Collections.Generic.HashSet<long> _pdFixed = new(); // PD 六表已补的实例（去重）
     private static bool _pdTablesCompleted; // P2-1：CompleteAllPdTables会话级脏位（OnEnable新克隆注册/读档重建时复位）
     private static float _lastGridLog;
@@ -89,7 +85,7 @@ public static class ChargerPadFix
 
     public static void OnEnableRecorder_P(TerrainObject_Production __instance)
     {
-        try { int caid0 = GetClonedAttrId(__instance); if (caid0 == 900103) { string nm0 = "?"; string px0 = "?", py0 = "?"; try { nm0 = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var pp0 = __instance.transform.position; px0 = pp0.x.ToString("F1"); py0 = pp0.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nm0} attr=900103 pos=({px0},{py0}) breakerSkip=False"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
+
         if (IsCloning) return;
         if (!RegistrarState.Done) return;
         if (_onEnableDepth > 4) return;
@@ -146,11 +142,11 @@ public static class ChargerPadFix
                 }
                 // v0.9.97-r5 RegFill：跳过即记录（Breaker_P/S共用，Stirling派生类直接Add进同一集）
                 try { _lastTripUtc = (System.DateTime.UtcNow - new System.DateTime(1970,1,1)).TotalSeconds; if (_skippedReg.Count < _regFillCap) { if (__instance != null) _skippedReg.Add(__instance); } else if (!_regFillCapWarned) { _regFillCapWarned = true; try { Plugin.L.LogWarning("[TS][RegFill] 队列满 cap=" + _regFillCap); } catch { } } } catch { }
-                try { int caidS = GetClonedAttrId(__instance); if (caidS == 900103) { string nmS = "?"; string pxS = "?", pyS = "?"; try { nmS = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var ppS = __instance.transform.position; pxS = ppS.x.ToString("F1"); pyS = ppS.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nmS} attr=900103 pos=({pxS},{pyS}) breakerSkip=True"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
+
                 return false;
             }
             _oeDepth[key] = d + 1;
-            try { int caidP = GetClonedAttrId(__instance); if (caidP == 900103) { string nmP = "?"; string pxP = "?", pyP = "?"; try { nmP = __instance != null && __instance.gameObject != null ? __instance.gameObject.name : "?"; } catch { } try { var ppP = __instance.transform.position; pxP = ppP.x.ToString("F1"); pyP = ppP.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] OnEnable name={nmP} attr=900103 pos=({pxP},{pyP}) breakerSkip=False"); } catch { } } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
+
         }
         catch { }
         return true;
@@ -222,7 +218,7 @@ public static class ChargerPadFix
                 bool contains = false;
                 try { contains = prodList.Contains(inst); } catch { contains = false; }
                 if (contains) { present++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
-                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } string ltt = "?"; try { ltt = inst.GetType().Name; } catch { } string lpd = "?"; try { var lod = Reflect.Get(inst, "objectData"); var lpd2 = lod != null ? Reflect.Get(lod, "productionData") as ProductionData : null; string lfull = lpd2 != null ? lpd2.productionObjectId : null; if (!string.IsNullOrEmpty(lfull)) lpd = lfull.Length > 8 ? lfull.Substring(lfull.Length - 8) : lfull; } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy}) type={ltt} pdid={lpd}"); } catch { } } catch { } } catch { } // v0.9.111-A7D1：RegFill追加PD短id（纯日志，零行为改动）
+                try { prodList.Add(inst); added++; } catch { }
                 try { _skippedReg.Remove(inst); } catch { }
                 budget--;
             }
@@ -1210,7 +1206,7 @@ public static class ChargerPadFix
                     try { _ghostMiss.TryGetValue(full, out miss); } catch { }
                     miss++;
                     try { _ghostMiss[full] = miss; changed = true; } catch { }
-                    try { Plugin.L.LogInfo($"[TS][Ghost] 缺席计数 guid=…{s8} miss={miss}"); } catch { }
+                    if (miss >= GhostMissK) { try { Plugin.L.LogInfo($"[TS][Ghost] 缺席计数 guid=…{s8} miss={miss}"); } catch { } }
                     if (miss >= GhostMissK) ghosts.Add(q);
                 }
                 catch { }
@@ -1365,7 +1361,7 @@ public static class ChargerPadFix
                         string ctt = "?"; try { ctt = cg.GetType().Name; } catch { }
                         string ccx = "?", ccy = "?"; try { var cpp = cg.transform.position; ccx = cpp.x.ToString("F1"); ccy = cpp.y.ToString("F1"); } catch { }
                         string cpd = "?"; try { var cod = Reflect.Get(cg, "objectData"); var cpd2 = cod != null ? Reflect.Get(cod, "productionData") as ProductionData : null; string cfull = cpd2 != null ? cpd2.productionObjectId : null; if (!string.IsNullOrEmpty(cfull)) cpd = cfull.Length > 8 ? cfull.Substring(cfull.Length - 8) : cfull; if (!string.IsNullOrEmpty(cfull)) { try { ghostHitFull.Add(cfull); ghostHitShort.Add(GhostLast8(cfull)); } catch { } } } catch { } // v0.9.112 G2：Census命中预埋（AO侧）
-                        try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={ctt} pos=({ccx},{ccy}) pdid={cpd} inAO=True"); } catch { }
+
                     }
                 }
                 try
@@ -1405,7 +1401,7 @@ public static class ChargerPadFix
                             string chtt = "?"; try { chtt = hg.GetType().Name; } catch { }
                             string chx = "?", chy = "?"; try { var chp = hg.transform.position; chx = chp.x.ToString("F1"); chy = chp.y.ToString("F1"); } catch { }
                             string chpd = "?"; try { var chod = Reflect.Get(hg, "objectData"); var chpd2 = chod != null ? Reflect.Get(chod, "productionData") as ProductionData : null; string chfull = chpd2 != null ? chpd2.productionObjectId : null; if (!string.IsNullOrEmpty(chfull)) chpd = chfull.Length > 8 ? chfull.Substring(chfull.Length - 8) : chfull; if (!string.IsNullOrEmpty(chfull)) { try { ghostHitFull.Add(chfull); ghostHitShort.Add(GhostLast8(chfull)); } catch { } } } catch { } // v0.9.112 G2：Census命中预埋（Resources侧）
-                            try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={chtt} pos=({chx},{chy}) pdid={chpd} inAO=False"); } catch { }
+
                         }
                     }
                 }
@@ -1590,7 +1586,7 @@ public static class ChargerPadFix
                                         if (!hit && qid != null) { try { string cid = cpd.productionObjectId; if (cid != null && cid == qid) hit = true; } catch { } }
                                         if (!hit) continue;
                                         comp = cand;
-                                        try { int rhAid = -1; try { rhAid = GetClonedAttrId(cand); } catch { } string rhT = "?"; try { rhT = cand.GetType().Name; } catch { } string rhX = "?", rhY = "?"; try { var rhP = cand.transform.position; rhX = rhP.x.ToString("F1"); rhY = rhP.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] ResHit attr={rhAid} type={rhT} pos=({rhX},{rhY})"); } catch { } } catch { } // v0.9.110-A6：基类全形态命中取证（纯日志，零行为改动；扫到即停、每局一次守卫保留）
+
                                         break;
                                     }
                                 }
@@ -1604,7 +1600,7 @@ public static class ChargerPadFix
                             int fx0 = 0;
                             try { fx0 = EnsurePdTables(q); } catch { }
                             orphan++;
-                            try { Plugin.L.LogInfo($"[TS] 读档自愈强制起机跳过: PD孤儿无活体组件（原因=组件未加载） PD={qid ?? "?"} 六表补{fx0}字段"); } catch { }
+
                             continue;
                         }
                         // v0.9.105 A2 强制起机（幂等，once锁内）：趁窗期标志还在，对判离线实例直调原生
@@ -1670,6 +1666,7 @@ public static class ChargerPadFix
             catch { }
             // v0.9.112 G2/G3：幽灵PD评估+运行时摘除（Census之后；命中集来自Census/三级定位/RegFill/启动预埋，full或后8位对齐；K=3标ghost；落盘剥离由SaveGameDataPrefix接力）
             try { GhostMissEvaluate(mgr, ghostHitFull, ghostHitShort); } catch { }
+            try { Plugin.L.LogInfo($"[TS] 读档自愈孤儿汇总: 孤儿PD数={orphan}"); } catch { }
             // v0.9.108 A4a：免自愈仅双健康分支（PD层全门真+在场侧零离线零缺PD+零失败）；在场数只进诊断
             if (pdBio == 0 && found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: PD层900103=0 ActiveObjects总数={aoCount}其中900103=0（无BioGen部署，跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
@@ -2574,7 +2571,7 @@ public static class ChargerPadFix
             var to = pd.terrainObjectTemp;
             if (to == null)
             {
-                if (!_warnedX4NoTo) { _warnedX4NoTo = true; Plugin.L.LogWarning("[TS] ×4 诊断: ×4 定位: terrainObjectTemp空"); }
+
                 // v0.9.99-X2 temp空fallback：pd.terrainObjectAttr(0x98)非空时查坐标类字段走距离判定；
                 // dump.cs:81055-81136实证TerrainObjectAttr全字段无坐标类字段（仅id/名称/贴图/colliderSize/spriteOffset/electric等，
                 // spriteOffset 0x60系贴图偏移非世界坐标）→ 记第五出口后return false（零表扫描，性能红线内）。
@@ -2583,7 +2580,7 @@ public static class ChargerPadFix
                     var attr0 = pd.terrainObjectAttr;
                     if (attr0 != null)
                     {
-                        if (!_warnedX4NoAttrPos) { _warnedX4NoAttrPos = true; Plugin.L.LogWarning("[TS] ×4 诊断: ×4 定位: temp空且attr无坐标"); }
+
                     }
                 }
                 catch { }
@@ -2593,7 +2590,7 @@ public static class ChargerPadFix
             var list = TerrainObject_Production.ActiveObjects_Production;
             if (list == null || list.Count == 0)
             {
-                if (!_warnedX4TableEmpty) { _warnedX4TableEmpty = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 生产表空count={(list == null ? 0 : list.Count)}"); }
+
                 // v0.9.101：清空窗Ride-Out——表非空命中时记下的BioGen坐标在有效期内（120s，可调）且to在50m内则判有电；表非空但无900103的出口不准用缓存
                 try
                 {
@@ -2603,7 +2600,7 @@ public static class ChargerPadFix
                         float cdx = tp.x - _bioX, cdy = tp.y - _bioY;
                         if (cdx * cdx + cdy * cdy <= 2500f)
                         {
-                            if (!_warnedX4CacheHit) { _warnedX4CacheHit = true; Plugin.L.LogInfo("[TS] ×4 诊断: ×4 缓存命中（清空窗Ride-Out）"); }
+
                             return true;
                         }
                     }
@@ -2612,7 +2609,6 @@ public static class ChargerPadFix
                 return false;
             }
             int prodCount = list.Count;
-            bool anyBio = false;
             float best2 = float.MaxValue;
             int bestAttr = -1;
             for (int i = 0; i < list.Count; i++)
@@ -2627,7 +2623,6 @@ public static class ChargerPadFix
                 bool isBio = false;
                 try { isBio = (RegistrationStore.Attrs.TryGetValue(BioGenId, out var ours) && ReferenceEquals(attr, ours)) || AttrId(attr) == BioGenId; } catch { }
                 if (!isBio) continue;
-                anyBio = true;
                 var dp = g.transform.position - pos;
                 float d2 = dp.sqrMagnitude;
                 if (d2 < best2) { best2 = d2; bestAttr = AttrId(attr); }
@@ -2647,20 +2642,12 @@ public static class ChargerPadFix
                 int sid;
                 try { sid = (RegistrationStore.Attrs.TryGetValue(BioGenId, out var sours) && ReferenceEquals(sattr, sours)) ? BioGenId : AttrId(sattr); } catch { continue; }
                 if (sid != BioGenId) continue;
-                anyBio = true;
                 var sdp = sg.transform.position - pos;
                 float sd2 = sdp.sqrMagnitude;
                 if (sd2 < best2) { best2 = sd2; bestAttr = sid; }
                 if (sd2 <= 50f * 50f) { _bioX = pos.x + sdp.x; _bioY = pos.y + sdp.y; _bioSeenTime = Time.realtimeSinceStartup; return true; } // v0.9.101：命中写BioGen位置缓存（复用sdp/pos，零新增扫描）
             }
-            if (!anyBio)
-            {
-                if (!_warnedX4NoBio) { _warnedX4NoBio = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 表中有{prodCount}个生产对象但无900103候选"); }
-            }
-            else
-            {
-                if (!_warnedX4MinDist) { _warnedX4MinDist = true; Plugin.L.LogWarning($"[TS] ×4 诊断: 最近生产对象attr={bestAttr} dist2={best2:F1}"); }
-            }
+
             return false;
         }
         catch { return false; }
