@@ -365,6 +365,13 @@ public static class TeleportSaveIdentity
             _saveSnapSlot = __0.saveSlotIndex;
             string liveKey = KeyFromGameData(__0); // prefix 时原地翻转尚未发生，活邮戳可信
             _savePendingKey = (!string.IsNullOrEmpty(liveKey) && liveKey != _current) ? liveKey : null;
+            // v0.9.112 G3：落盘payload幽灵PD剥离（__0即落盘体；ghost全guid精确匹配+IsBioGenPd门；payload不可达返回-1记fall back仅运行时移除）
+            try
+            {
+                int stripped = ChargerPadFix.StripGhostsFromSave(__0);
+                if (stripped < 0) { try { Plugin.L.LogInfo("[TS][Ghost] 落盘剥离跳过（payload不可达，fall back：仅运行时移除）"); } catch { } }
+            }
+            catch { }
         }
         catch { }
     }

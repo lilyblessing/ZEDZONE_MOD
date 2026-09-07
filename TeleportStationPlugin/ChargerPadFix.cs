@@ -1034,6 +1034,12 @@ public static class ChargerPadFix
     internal static bool _saveHealSettled; // v0.9.107 A3a：每局闭环——LoadGuard.OnLoadGamePrefix 读档时复位（internal 供跨类重置，同程序集零行为差）
     internal static float _saveHealSettleT; // v0.9.107 A3a：沉降观测计时，复位后下次沉降重走“沉降→+5s”
     internal static bool _saveHealDone; // v0.9.107 A3a：每局闭环——每读档一次（原每进程一次，现读档钩点复位；复位点见 LoadGuardFix.OnLoadGamePrefix）
+    // ═══ v0.9.112 幽灵PD标记清除（只动900103，IsBioGenPd门；gps其他attr一行不碰）═══
+    // live铁证：PD层900103恒2个幽灵（66af0505…/7cfc2f55…），真身c9a050b5（RegFill捡回+启动id全等+停机配对），双幽灵永无活体组件。
+    // mark存自家JSON TeleportGhostMiss.json（namespaced，缺文件/缺字段当空表；计数只增不减除命中清零外）。
+    private const int GhostMissK = 3; // G2：miss>=3标ghost
+    private static readonly Dictionary<string, int> _ghostMiss = new Dictionary<string, int>(StringComparer.Ordinal); // pdGuid(full)→缺席计数
+    private static string _ghostMissKey = null; // 已载入的namespace（切换后懒重载；ResetForIdentity只清内存，落盘按namespace隔离）
 
     public static void BioGenSaveHealPoll()
     {
@@ -1090,6 +1096,209 @@ public static class ChargerPadFix
         catch { return false; }
     }
 
+    // v0.9.112 G1：ghostMiss表存读（TeleportStationNameManager.Load/SaveNow同形：namespaced路径+手写JSON+缺字段兼容）。
+    private static string GhostMissPath() { try { return TeleportSaveIdentity.SavePath("TeleportGhostMiss.json"); } catch { return null; } }
+    private static string GhostMissLoadPath() { try { return TeleportSaveIdentity.LoadPath("TeleportGhostMiss.json"); } catch { return null; } }
+
+    private static void GhostMissEnsureLoaded()
+    {
+        try
+        {
+            string cur = null;
+            try { cur = TeleportSaveIdentity.Current; } catch { }
+            if (_ghostMissKey != null && _ghostMissKey == cur) return;
+            _ghostMissKey = cur;
+            _ghostMiss.Clear();
+            string p = GhostMissLoadPath();
+            if (string.IsNullOrEmpty(p)) return;
+            bool exists = false;
+            try { exists = System.IO.File.Exists(p); } catch { return; }
+            if (!exists) return;
+            string txt = null;
+            try { txt = System.IO.File.ReadAllText(p); } catch { return; }
+            if (string.IsNullOrWhiteSpace(txt) || !txt.Contains("ghostMiss")) return; // 缺字段当空表
+            // 手写解析 {"v":1,"ghostMiss":{"guid":n,...}}（只读ghostMiss段；其他字段忽略；guid键无转义字符可直拼）
+            try
+            {
+                int gi = txt.IndexOf("ghostMiss", StringComparison.Ordinal);
+                int bi = txt.IndexOf('{', gi);
+                int be = txt.IndexOf('}', bi);
+                if (gi < 0 || bi < 0 || be <= bi) return;
+                string body = txt.Substring(bi + 1, be - bi - 1);
+                foreach (var pair in body.Split(','))
+                {
+                    try
+                    {
+                        int ci = pair.LastIndexOf(':');
+                        if (ci <= 0) continue;
+                        string k = pair.Substring(0, ci).Trim().Trim('"', ' ', '\t', '\r', '\n');
+                        string v = pair.Substring(ci + 1).Trim().Trim('"', ' ', '\t', '\r', '\n');
+                        if (string.IsNullOrEmpty(k)) continue;
+                        if (int.TryParse(v, out int n) && n > 0) _ghostMiss[k] = n;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            try { Plugin.L.LogInfo($"[TS][Ghost] 载入ghostMiss {_ghostMiss.Count}条"); } catch { }
+        }
+        catch { }
+    }
+
+    private static void GhostMissSave()
+    {
+        try
+        {
+            string p = GhostMissPath();
+            if (string.IsNullOrEmpty(p)) return;
+            var sb = new System.Text.StringBuilder("{\"v\":1,\"ghostMiss\":{");
+            bool first = true;
+            foreach (var kv in _ghostMiss)
+            {
+                if (!first) sb.Append(",");
+                sb.Append($"\"{kv.Key}\":{kv.Value}");
+                first = false;
+            }
+            sb.Append("}}");
+            try { System.IO.File.WriteAllText(p, sb.ToString()); } catch { return; }
+            try { Plugin.L.LogInfo($"[TS][Ghost] 保存ghostMiss {_ghostMiss.Count}条"); } catch { }
+        }
+        catch { }
+    }
+
+    private static string GhostLast8(string full)
+    {
+        try { if (string.IsNullOrEmpty(full)) return "?"; return full.Length > 8 ? full.Substring(full.Length - 8) : full; } catch { return "?"; }
+    }
+
+    // v0.9.112 G2：每局评估（Once内Census之后调）：命中（Census/三级定位/RegFill/启动任一，full或后8位对齐）清零，否则miss+1并打Info行；K=3标ghost。
+    // hitFull/hitShort由Once内各命中点预埋（Census点名/①②③定位/RegFill待补扫描/启动成功）。
+    private static void GhostMissEvaluate(ProductionManager mgr, HashSet<string> hitFull, HashSet<string> hitShort)
+    {
+        try
+        {
+            if (mgr == null) return;
+            GhostMissEnsureLoaded();
+            List<ProductionData> snap = null;
+            try
+            {
+                var all = mgr.productionDataList;
+                if (all == null) return;
+                snap = new List<ProductionData>(all.Count);
+                for (int i = 0; i < all.Count; i++) { try { var q = all[i]; if (q != null) snap.Add(q); } catch { } }
+            }
+            catch { return; }
+            bool changed = false;
+            var ghosts = new List<ProductionData>();
+            foreach (var q in snap)
+            {
+                try
+                {
+                    if (!IsBioGenPd(q)) continue; // 只动900103
+                    string full = null;
+                    try { full = q.productionObjectId; } catch { }
+                    if (string.IsNullOrEmpty(full)) continue;
+                    string s8 = GhostLast8(full);
+                    bool hit = false;
+                    try { hit = (hitFull != null && hitFull.Contains(full)) || (hitShort != null && hitShort.Contains(s8)); } catch { }
+                    if (hit)
+                    {
+                        if (_ghostMiss.ContainsKey(full)) { try { _ghostMiss.Remove(full); changed = true; } catch { } }
+                        continue;
+                    }
+                    int miss = 0;
+                    try { _ghostMiss.TryGetValue(full, out miss); } catch { }
+                    miss++;
+                    try { _ghostMiss[full] = miss; changed = true; } catch { }
+                    try { Plugin.L.LogInfo($"[TS][Ghost] 缺席计数 guid=…{s8} miss={miss}"); } catch { }
+                    if (miss >= GhostMissK) ghosts.Add(q);
+                }
+                catch { }
+            }
+            // v0.9.112 G3：运行时摘除（快照遍历，LoadGuardFix.Dedup同形下标快照降序删，ReferenceEquals精确到同一对象+IsBioGenPd门，Warning行含guid）
+            if (ghosts.Count > 0)
+            {
+                try
+                {
+                    var all2 = mgr.productionDataList;
+                    if (all2 != null)
+                    {
+                        foreach (var g in ghosts)
+                        {
+                            try
+                            {
+                                string gf = null;
+                                try { gf = g.productionObjectId; } catch { }
+                                int removed = 0;
+                                try
+                                {
+                                    var idx = new List<int>();
+                                    for (int i = 0; i < all2.Count; i++)
+                                    {
+                                        try
+                                        {
+                                            var c = all2[i];
+                                            if (c == null) continue;
+                                            bool eq = false;
+                                            try { eq = ReferenceEquals(c, g); } catch { }
+                                            if (eq && IsBioGenPd(c)) idx.Add(i);
+                                        }
+                                        catch { }
+                                    }
+                                    for (int k = idx.Count - 1; k >= 0; k--) { try { all2.RemoveAt(idx[k]); removed++; } catch { } }
+                                }
+                                catch { }
+                                try { Plugin.L.LogWarning($"[TS][Ghost] 摘除幽灵PD guid=…{GhostLast8(gf)} 运行时移除={removed}"); } catch { }
+                            }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+            if (changed) { try { GhostMissSave(); } catch { } }
+        }
+        catch { }
+    }
+
+    // v0.9.112 G3：落盘剥离（TeleportSaveIdentity.SaveGameDataPrefix调）：对落盘payload（__0.productionDataList，
+    // LoadGuardFix同形编译期直访+下标快照降序删）同id剥离ghost（IsBioGenPd门+full精确匹配）。
+    // 只读本局内存表（Once评估权威，不懒加载旧文件）；payload不可达返回-1由调用方记fall back。
+    internal static int StripGhostsFromSave(GameData gd)
+    {
+        try
+        {
+            if (gd == null || _ghostMiss.Count == 0) return 0;
+            var list = gd.productionDataList;
+            if (list == null) return -1;
+            var targets = new HashSet<string>(StringComparer.Ordinal);
+            try { foreach (var kv in _ghostMiss) if (kv.Value >= GhostMissK && !string.IsNullOrEmpty(kv.Key)) targets.Add(kv.Key); } catch { }
+            if (targets.Count == 0) return 0;
+            var idx = new List<int>();
+            try
+            {
+                for (int i = 0; i < list.Count; i++)
+                {
+                    try
+                    {
+                        ProductionData ppd = null;
+                        try { ppd = list[i] as ProductionData; } catch { continue; }
+                        if (ppd == null || !IsBioGenPd(ppd)) continue; // 只动900103
+                        string id = null;
+                        try { id = ppd.productionObjectId; } catch { continue; }
+                        if (!string.IsNullOrEmpty(id) && targets.Contains(id)) idx.Add(i);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            for (int k = idx.Count - 1; k >= 0; k--) { try { list.RemoveAt(idx[k]); } catch { } }
+            if (idx.Count > 0) { try { Plugin.L.LogWarning($"[TS][Ghost] 落盘剥离幽灵PD {idx.Count}项"); } catch { } }
+            return idx.Count;
+        }
+        catch { return 0; }
+    }
+
     private static void BioGenSaveHealOnce()
     {
         try
@@ -1138,6 +1347,8 @@ public static class ChargerPadFix
             int aoCount = 0;
             try { if (list != null) aoCount = list.Count; } catch { }
             if (list == null) { try { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects表空（PD层已评估，继续在场侧零实例）"); } catch { } }
+            var ghostHitFull = new HashSet<string>(StringComparer.Ordinal); // v0.9.112 G2：本局命中集（full guid；Census/三级定位/RegFill/启动预埋）
+            var ghostHitShort = new HashSet<string>(StringComparer.Ordinal); // v0.9.112 G2：本局命中集（后8位对齐）
             // v0.9.111-A7D2：每局全量900103点名（纯日志，零行为改动；ActiveObjects+Resources基类扫全形态，每局一次）
             try
             {
@@ -1153,7 +1364,7 @@ public static class ChargerPadFix
                         if (caid != 900103) continue;
                         string ctt = "?"; try { ctt = cg.GetType().Name; } catch { }
                         string ccx = "?", ccy = "?"; try { var cpp = cg.transform.position; ccx = cpp.x.ToString("F1"); ccy = cpp.y.ToString("F1"); } catch { }
-                        string cpd = "?"; try { var cod = Reflect.Get(cg, "objectData"); var cpd2 = cod != null ? Reflect.Get(cod, "productionData") as ProductionData : null; string cfull = cpd2 != null ? cpd2.productionObjectId : null; if (!string.IsNullOrEmpty(cfull)) cpd = cfull.Length > 8 ? cfull.Substring(cfull.Length - 8) : cfull; } catch { }
+                        string cpd = "?"; try { var cod = Reflect.Get(cg, "objectData"); var cpd2 = cod != null ? Reflect.Get(cod, "productionData") as ProductionData : null; string cfull = cpd2 != null ? cpd2.productionObjectId : null; if (!string.IsNullOrEmpty(cfull)) cpd = cfull.Length > 8 ? cfull.Substring(cfull.Length - 8) : cfull; if (!string.IsNullOrEmpty(cfull)) { try { ghostHitFull.Add(cfull); ghostHitShort.Add(GhostLast8(cfull)); } catch { } } } catch { } // v0.9.112 G2：Census命中预埋（AO侧）
                         try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={ctt} pos=({ccx},{ccy}) pdid={cpd} inAO=True"); } catch { }
                     }
                 }
@@ -1193,7 +1404,7 @@ public static class ChargerPadFix
                             if (chid != 900103) continue;
                             string chtt = "?"; try { chtt = hg.GetType().Name; } catch { }
                             string chx = "?", chy = "?"; try { var chp = hg.transform.position; chx = chp.x.ToString("F1"); chy = chp.y.ToString("F1"); } catch { }
-                            string chpd = "?"; try { var chod = Reflect.Get(hg, "objectData"); var chpd2 = chod != null ? Reflect.Get(chod, "productionData") as ProductionData : null; string chfull = chpd2 != null ? chpd2.productionObjectId : null; if (!string.IsNullOrEmpty(chfull)) chpd = chfull.Length > 8 ? chfull.Substring(chfull.Length - 8) : chfull; } catch { }
+                            string chpd = "?"; try { var chod = Reflect.Get(hg, "objectData"); var chpd2 = chod != null ? Reflect.Get(chod, "productionData") as ProductionData : null; string chfull = chpd2 != null ? chpd2.productionObjectId : null; if (!string.IsNullOrEmpty(chfull)) chpd = chfull.Length > 8 ? chfull.Substring(chfull.Length - 8) : chfull; if (!string.IsNullOrEmpty(chfull)) { try { ghostHitFull.Add(chfull); ghostHitShort.Add(GhostLast8(chfull)); } catch { } } } catch { } // v0.9.112 G2：Census命中预埋（Resources侧）
                             try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={chtt} pos=({chx},{chy}) pdid={chpd} inAO=False"); } catch { }
                         }
                     }
@@ -1242,6 +1453,35 @@ public static class ChargerPadFix
             // （三级定位：①ActiveObjects按productionObjectId匹配；②_skippedReg待补集同id匹配；
             // ③Resources.FindObjectsOfTypeAll扫Production基类全形态同id匹配——resScanned守卫每局最多扫一次，结果缓存复用；本方法仅读档Once调用，非tick路径）。
             // 有组件→强制起机+补表（原:1179-1196体，g→comp/ppd→q；门假已在循环头确立）；无组件→孤儿行+EnsurePdTables补PD，脏标由尾部分支统一打。
+            // v0.9.112 G2：RegFill命中预埋（_skippedReg待补集内900103组件的PD id；full+后8位；已RegFill入表者由Census/①覆盖）
+            try
+            {
+                List<TerrainObject_Production> rfSnap = null;
+                try { rfSnap = new List<TerrainObject_Production>(_skippedReg); } catch { }
+                if (rfSnap != null)
+                {
+                    for (int ri = 0; ri < rfSnap.Count; ri++)
+                    {
+                        try
+                        {
+                            var rc = rfSnap[ri];
+                            if (rc == null) continue;
+                            int raid = -1;
+                            try { raid = GetClonedAttrId(rc); } catch { continue; }
+                            if (raid != BioGenId) continue;
+                            ProductionData rpd = null;
+                            try { var rtod = Reflect.Get(rc, "objectData"); if (rtod != null) rpd = Reflect.Get(rtod, "productionData") as ProductionData; } catch { continue; }
+                            if (rpd == null) continue;
+                            string rf = null;
+                            try { rf = rpd.productionObjectId; } catch { continue; }
+                            if (string.IsNullOrEmpty(rf)) continue;
+                            try { ghostHitFull.Add(rf); ghostHitShort.Add(GhostLast8(rf)); } catch { }
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch { }
             try
             {
                 var allPd = mgr.productionDataList;
@@ -1357,6 +1597,8 @@ public static class ChargerPadFix
                             }
                             catch { }
                         }
+                        // v0.9.112 G2：三级定位命中预埋（①②③任一命中comp即命中qid，full+后8位）
+                        if (comp != null && !string.IsNullOrEmpty(qid)) { try { ghostHitFull.Add(qid); ghostHitShort.Add(GhostLast8(qid)); } catch { } }
                         if (comp == null) // 孤儿PD：无活体组件→补PD+计数，脏标由尾部分支统一打
                         {
                             int fx0 = 0;
@@ -1382,6 +1624,7 @@ public static class ChargerPadFix
                             else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态（原因=非Stirling形态）"); } catch { } }
                         }
                         catch { }
+                        try { if (!string.IsNullOrEmpty(qid)) { ghostHitFull.Add(qid); ghostHitShort.Add(GhostLast8(qid)); } } catch { } // v0.9.112 G2：启动命中预埋
                         healed++; // q取自表内枚举恒在表，不调AddProductionData（防原生重复入表），只记补表+重扫
                         try { Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList=True) 六表补{fixedTables}字段 → 重扫电网"); } catch { }
                     }
@@ -1417,6 +1660,7 @@ public static class ChargerPadFix
                     try
                     {
                         mgr.AddProductionData(p2); // 表外PD走原补PD路径（原生入表含类型字典注册）
+                        try { string p2id = null; try { p2id = p2.productionObjectId; } catch { } if (!string.IsNullOrEmpty(p2id)) { ghostHitFull.Add(p2id); ghostHitShort.Add(GhostLast8(p2id)); } } catch { } // v0.9.112 G2：启动命中预埋（表外入表）
                         healed++;
                         Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList=False) 六表补{fx2}字段 → 重扫电网");
                     }
@@ -1424,6 +1668,8 @@ public static class ChargerPadFix
                 }
             }
             catch { }
+            // v0.9.112 G2/G3：幽灵PD评估+运行时摘除（Census之后；命中集来自Census/三级定位/RegFill/启动预埋，full或后8位对齐；K=3标ghost；落盘剥离由SaveGameDataPrefix接力）
+            try { GhostMissEvaluate(mgr, ghostHitFull, ghostHitShort); } catch { }
             // v0.9.108 A4a：免自愈仅双健康分支（PD层全门真+在场侧零离线零缺PD+零失败）；在场数只进诊断
             if (pdBio == 0 && found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: PD层900103=0 ActiveObjects总数={aoCount}其中900103=0（无BioGen部署，跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
@@ -2678,6 +2924,8 @@ public static class ChargerPadFix
             _consumingSwept = false;
             _stirProbed = false;
             _prefabProbed = false;
+            _ghostMiss.Clear(); // v0.9.112：ghostMiss内存清零（落盘按namespace隔离，切换后GhostMissEnsureLoaded懒重载）
+            _ghostMissKey = null;
         }
         catch { }
     }
