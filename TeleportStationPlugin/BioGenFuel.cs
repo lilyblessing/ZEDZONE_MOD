@@ -200,7 +200,28 @@ public static class BioGenFuel
         try
         {
             if (!IsBioGen(__instance)) return;
-            Plugin.L.LogInfo("[TS] BioGen 启动（开始观察）");
+            string sAid = "?"; // B=attr id（用户BioGen=900103，原版斯特林=120）
+            string sPid = "?"; // A=productionObjectId后8位（取不到则回退pos）
+            try
+            {
+                Component sto = null;
+                try { sto = __instance != null ? FindTerrainObject(__instance.transform) : null; } catch { }
+                object sattr = null;
+                try { sattr = sto != null ? Reflect.Get(sto, "attr") : null; } catch { }
+                if (sattr != null) { try { sAid = AttrId(sattr).ToString(); } catch { } }
+                string full = null;
+                try
+                {
+                    var sod = sto != null ? Reflect.Get(sto, "objectData") : null;
+                    var spd = sod != null ? Reflect.Get(sod, "productionData") as ProductionData : null;
+                    if (spd != null) full = spd.productionObjectId;
+                }
+                catch { }
+                if (!string.IsNullOrEmpty(full)) sPid = full.Length > 8 ? full.Substring(full.Length - 8) : full;
+                else { try { var spp = __instance.transform.position; sPid = $"({spp.x:F1},{spp.y:F1})"; } catch { } }
+            }
+            catch { }
+            Plugin.L.LogInfo($"[TS] BioGen 启动（开始观察） id={sPid} attr={sAid}");
         }
         catch (Exception e) { Plugin.L.LogWarning($"[TS] BioGen OnStart 异常: {e.Message.Split('\n')[0]}"); }
     }

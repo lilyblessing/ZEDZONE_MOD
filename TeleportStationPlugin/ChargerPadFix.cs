@@ -222,7 +222,7 @@ public static class ChargerPadFix
                 bool contains = false;
                 try { contains = prodList.Contains(inst); } catch { contains = false; }
                 if (contains) { present++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
-                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy})"); } catch { } } catch { } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
+                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } string ltt = "?"; try { ltt = inst.GetType().Name; } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy}) type={ltt}"); } catch { } } catch { } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
                 try { _skippedReg.Remove(inst); } catch { }
                 budget--;
             }
@@ -1134,7 +1134,7 @@ public static class ChargerPadFix
             var offComps = new List<TerrainObject_Production>(); // v0.9.109 A5a：表外PD候选组件（有PD对象但不在productionDataList，原补PD路径延续）
             var offPds = new List<ProductionData>();
             bool resScanned = false; // v0.9.109 A5a：Resources全量扫描本方法每局最多一次守卫（Once每局只跑一次；非tick路径）
-            List<TerrainObject_Production_StirlingGenerator> resCache = null; // 扫描结果缓存（后继孤儿PD复用，不重扫）
+            List<TerrainObject_Production> resCache = null; // 扫描结果缓存（后继孤儿PD复用，不重扫）
             int aoCount = 0;
             try { if (list != null) aoCount = list.Count; } catch { }
             if (list == null) { try { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects表空（PD层已评估，继续在场侧零实例）"); } catch { } }
@@ -1177,7 +1177,7 @@ public static class ChargerPadFix
             }
             // v0.9.109 A5a：动作循环改以PD层离线项为驱动——对pdBio中供电门为假的每个PD解析活体组件
             // （三级定位：①ActiveObjects按productionObjectId匹配；②_skippedReg待补集同id匹配；
-            // ③Resources.FindObjectsOfTypeAll扫StirlingGenerator形态同id匹配——resScanned守卫每局最多扫一次，结果缓存复用；本方法仅读档Once调用，非tick路径）。
+            // ③Resources.FindObjectsOfTypeAll扫Production基类全形态同id匹配——resScanned守卫每局最多扫一次，结果缓存复用；本方法仅读档Once调用，非tick路径）。
             // 有组件→强制起机+补表（原:1179-1196体，g→comp/ppd→q；门假已在循环头确立）；无组件→孤儿行+EnsurePdTables补PD，脏标由尾部分支统一打。
             try
             {
@@ -1245,23 +1245,23 @@ public static class ChargerPadFix
                             }
                             catch { }
                         }
-                        if (comp == null) // ③Resources扫StirlingGenerator形态（resScanned守卫每局一次，缓存复用；缓存内命中即停）
+                        if (comp == null) // ③Resources扫TerrainObject_Production基类全形态（resScanned守卫每局一次，缓存复用；缓存内命中即停）
                         {
                             try
                             {
                                 if (!resScanned)
                                 {
                                     resScanned = true;
-                                    resCache = new List<TerrainObject_Production_StirlingGenerator>();
+                                    resCache = new List<TerrainObject_Production>();
                                     try { EnsureTypeCacheForClones(); } catch { }
                                     try
                                     {
-                                        var resRaw = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppStirType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
+                                        var resRaw = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppProdType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
                                         if (resRaw != null)
                                         {
                                             for (int m = 0; m < resRaw.Length; m++)
                                             {
-                                                var hg2 = resRaw[m] as TerrainObject_Production_StirlingGenerator;
+                                                var hg2 = resRaw[m] as TerrainObject_Production;
                                                 if (hg2 == null) continue;
                                                 bool sceneOk = false;
                                                 try { var sc2 = hg2.gameObject.scene; sceneOk = sc2.IsValid(); } catch { sceneOk = false; }
@@ -1271,7 +1271,7 @@ public static class ChargerPadFix
                                         }
                                     }
                                     catch { }
-                                    try { Plugin.L.LogInfo($"[TS] 读档自愈孤儿解析: Resources扫描StirlingGenerator形态 scene有效={resCache.Count}（每局一次，已缓存）"); } catch { }
+                                    try { Plugin.L.LogInfo($"[TS] 读档自愈孤儿解析: Resources扫描Production基类全形态 scene有效={resCache.Count}（每局一次，已缓存）"); } catch { }
                                 }
                                 if (resCache != null)
                                 {
@@ -1287,7 +1287,7 @@ public static class ChargerPadFix
                                         if (!hit && qid != null) { try { string cid = cpd.productionObjectId; if (cid != null && cid == qid) hit = true; } catch { } }
                                         if (!hit) continue;
                                         comp = cand;
-                                        try { Plugin.L.LogInfo("[TS] 读档自愈孤儿解析: Resources缓存命中活体组件（扫到即停）"); } catch { }
+                                        try { int rhAid = -1; try { rhAid = GetClonedAttrId(cand); } catch { } string rhT = "?"; try { rhT = cand.GetType().Name; } catch { } string rhX = "?", rhY = "?"; try { var rhP = cand.transform.position; rhX = rhP.x.ToString("F1"); rhY = rhP.y.ToString("F1"); } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] ResHit attr={rhAid} type={rhT} pos=({rhX},{rhY})"); } catch { } } catch { } // v0.9.110-A6：基类全形态命中取证（纯日志，零行为改动；扫到即停、每局一次守卫保留）
                                         break;
                                     }
                                 }
