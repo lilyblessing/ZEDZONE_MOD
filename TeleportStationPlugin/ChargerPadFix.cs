@@ -1130,7 +1130,11 @@ public static class ChargerPadFix
                 Plugin.L.LogInfo($"[TS] 读档供电快照: BioGenPD数={pdBio} 起机数={pdPowered} sufficient={repStr}");
             }
             catch { }
-            int found = 0, healed = 0, healFail = 0, noPd = 0;
+            int found = 0, healed = 0, healFail = 0, noPd = 0, orphan = 0; // v0.9.109 A5a：孤儿PD计数（PD离线但三级定位无活体组件）
+            var offComps = new List<TerrainObject_Production>(); // v0.9.109 A5a：表外PD候选组件（有PD对象但不在productionDataList，原补PD路径延续）
+            var offPds = new List<ProductionData>();
+            bool resScanned = false; // v0.9.109 A5a：Resources全量扫描本方法每局最多一次守卫（Once每局只跑一次；非tick路径）
+            List<TerrainObject_Production_StirlingGenerator> resCache = null; // 扫描结果缓存（后继孤儿PD复用，不重扫）
             int aoCount = 0;
             try { if (list != null) aoCount = list.Count; } catch { }
             if (list == null) { try { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects表空（PD层已评估，继续在场侧零实例）"); } catch { } }
@@ -1164,49 +1168,211 @@ public static class ChargerPadFix
                     }
                 }
                 catch { }
-                int fixedTables = 0;
-                try { fixedTables = EnsurePdTables(ppd); } catch { }
-                // v0.9.108 A4a：双层健康（在表+六表齐+PD供电门真）才跳过；在场数不当门，只进诊断日志
-                float gateSuff = -1f;
-                bool gatePw = false;
-                try { gatePw = IsPdPowered(ppd, out gateSuff); } catch { }
-                if (inList && fixedTables == 0 && gatePw) { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 900103实例供电门已真（原因=已在线）"); } catch { } continue; }
-                // v0.9.105 A2 强制起机（幂等，once锁内）：趁窗期标志还在（摘除已移至本方法末尾），对判离线实例直调原生
-                // TerrainObject_Production_StirlingGenerator.OnGeneratorStart（dump.cs:86207，VA:0x180A38C40，public无参；
-                // Plugin.cs:118-123既有hook其postfix为BioGenFuel.OnGeneratorStartPostfix观察链）——等效手动挪燃料的
-                // 停机→启动跃迁，触发原生状态机重估；失败只记日志不抛，不阻断后续补PD+重扫。
-                // v0.9.108 A4c：成功/失败/跳过+原因各一行
-                try
-                {
-                    var sg = g as TerrainObject_Production_StirlingGenerator;
-                    if (sg != null)
-                    {
-                        try { sg.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机成功: 900103实例已触发OnGeneratorStart"); }
-                        catch (Exception es) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es.Message.Split('\n')[0]}"); } catch { } }
-                    }
-                    else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态（原因=非Stirling形态）"); } catch { } }
-                }
-                catch { }
-                try
-                {
-                    if (!inList) mgr.AddProductionData(ppd); // 原生入表（含类型字典注册；PD缺席走原补PD路径）
-                    healed++;
-                    Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList={inList}) 六表补{fixedTables}字段 → 重扫电网");
-                }
-                catch (Exception e) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e.Message.Split('\n')[0]}"); } catch { } }
+                // v0.9.109 A5b：在场侧只诊断+收集表外候选，不再起机（动作门移交其后PD层循环）；门真仅记已在线行
+                float dSuff = -1f;
+                bool dPw = false;
+                try { dPw = IsPdPowered(ppd, out dSuff); } catch { }
+                if (!inList) { try { offComps.Add(g); offPds.Add(ppd); } catch { } continue; } // 表外PD候选延后由表外循环门检+起机+入表（原补PD路径）
+                if (dPw) { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 900103实例供电门已真（原因=已在线）"); } catch { } }
             }
+            // v0.9.109 A5a：动作循环改以PD层离线项为驱动——对pdBio中供电门为假的每个PD解析活体组件
+            // （三级定位：①ActiveObjects按productionObjectId匹配；②_skippedReg待补集同id匹配；
+            // ③Resources.FindObjectsOfTypeAll扫StirlingGenerator形态同id匹配——resScanned守卫每局最多扫一次，结果缓存复用；本方法仅读档Once调用，非tick路径）。
+            // 有组件→强制起机+补表（原:1179-1196体，g→comp/ppd→q；门假已在循环头确立）；无组件→孤儿行+EnsurePdTables补PD，脏标由尾部分支统一打。
+            try
+            {
+                var allPd = mgr.productionDataList;
+                if (allPd != null)
+                {
+                    for (int k = 0; k < allPd.Count; k++)
+                    {
+                        ProductionData q = null;
+                        try { q = allPd[k]; } catch { continue; }
+                        if (q == null) continue;
+                        if (!IsBioGenPd(q)) continue;
+                        float qsf = -1f;
+                        bool qpw = false;
+                        try { qpw = IsPdPowered(q, out qsf); } catch { }
+                        if (qpw) continue; // 在线PD不动
+                        string qid = null;
+                        try { qid = q.productionObjectId; } catch { }
+                        TerrainObject_Production comp = null;
+                        if (list != null) // ①ActiveObjects中按productionObjectId匹配（引用相等或id串相等）
+                        {
+                            try
+                            {
+                                for (int m = 0; m < aoCount; m++)
+                                {
+                                    TerrainObject_Production cand = null;
+                                    try { cand = list[m]; } catch { continue; }
+                                    if (cand == null) continue;
+                                    ProductionData cpd = null;
+                                    try { var ctod = Reflect.Get(cand, "objectData"); if (ctod != null) cpd = Reflect.Get(ctod, "productionData") as ProductionData; } catch { }
+                                    if (cpd == null) continue;
+                                    bool hit = false;
+                                    try { hit = ReferenceEquals(cpd, q); } catch { }
+                                    if (!hit && qid != null) { try { string cid = cpd.productionObjectId; if (cid != null && cid == qid) hit = true; } catch { } }
+                                    if (!hit) continue;
+                                    comp = cand;
+                                    break;
+                                }
+                            }
+                            catch { }
+                        }
+                        if (comp == null) // ②_skippedReg待补集按同id匹配
+                        {
+                            try
+                            {
+                                List<TerrainObject_Production> skSnap = null;
+                                try { skSnap = new List<TerrainObject_Production>(_skippedReg); } catch { }
+                                if (skSnap != null)
+                                {
+                                    for (int m = 0; m < skSnap.Count; m++)
+                                    {
+                                        var cand = skSnap[m];
+                                        if (cand == null) continue;
+                                        ProductionData cpd = null;
+                                        try { var ctod = Reflect.Get(cand, "objectData"); if (ctod != null) cpd = Reflect.Get(ctod, "productionData") as ProductionData; } catch { }
+                                        if (cpd == null) continue;
+                                        bool hit = false;
+                                        try { hit = ReferenceEquals(cpd, q); } catch { }
+                                        if (!hit && qid != null) { try { string cid = cpd.productionObjectId; if (cid != null && cid == qid) hit = true; } catch { } }
+                                        if (!hit) continue;
+                                        comp = cand;
+                                        break;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        if (comp == null) // ③Resources扫StirlingGenerator形态（resScanned守卫每局一次，缓存复用；缓存内命中即停）
+                        {
+                            try
+                            {
+                                if (!resScanned)
+                                {
+                                    resScanned = true;
+                                    resCache = new List<TerrainObject_Production_StirlingGenerator>();
+                                    try { EnsureTypeCacheForClones(); } catch { }
+                                    try
+                                    {
+                                        var resRaw = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppStirType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production_StirlingGenerator).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production_StirlingGenerator, Assembly-CSharp"));
+                                        if (resRaw != null)
+                                        {
+                                            for (int m = 0; m < resRaw.Length; m++)
+                                            {
+                                                var hg2 = resRaw[m] as TerrainObject_Production_StirlingGenerator;
+                                                if (hg2 == null) continue;
+                                                bool sceneOk = false;
+                                                try { var sc2 = hg2.gameObject.scene; sceneOk = sc2.IsValid(); } catch { sceneOk = false; }
+                                                if (!sceneOk) continue;
+                                                try { resCache.Add(hg2); } catch { }
+                                            }
+                                        }
+                                    }
+                                    catch { }
+                                    try { Plugin.L.LogInfo($"[TS] 读档自愈孤儿解析: Resources扫描StirlingGenerator形态 scene有效={resCache.Count}（每局一次，已缓存）"); } catch { }
+                                }
+                                if (resCache != null)
+                                {
+                                    for (int m = 0; m < resCache.Count; m++)
+                                    {
+                                        var cand = resCache[m];
+                                        if (cand == null) continue;
+                                        ProductionData cpd = null;
+                                        try { var ctod = Reflect.Get(cand, "objectData"); if (ctod != null) cpd = Reflect.Get(ctod, "productionData") as ProductionData; } catch { }
+                                        if (cpd == null) continue;
+                                        bool hit = false;
+                                        try { hit = ReferenceEquals(cpd, q); } catch { }
+                                        if (!hit && qid != null) { try { string cid = cpd.productionObjectId; if (cid != null && cid == qid) hit = true; } catch { } }
+                                        if (!hit) continue;
+                                        comp = cand;
+                                        try { Plugin.L.LogInfo("[TS] 读档自愈孤儿解析: Resources缓存命中活体组件（扫到即停）"); } catch { }
+                                        break;
+                                    }
+                                }
+                            }
+                            catch { }
+                        }
+                        if (comp == null) // 孤儿PD：无活体组件→补PD+计数，脏标由尾部分支统一打
+                        {
+                            int fx0 = 0;
+                            try { fx0 = EnsurePdTables(q); } catch { }
+                            orphan++;
+                            try { Plugin.L.LogInfo($"[TS] 读档自愈强制起机跳过: PD孤儿无活体组件（原因=组件未加载） PD={qid ?? "?"} 六表补{fx0}字段"); } catch { }
+                            continue;
+                        }
+                        // v0.9.105 A2 强制起机（幂等，once锁内）：趁窗期标志还在，对判离线实例直调原生
+                        // TerrainObject_Production_StirlingGenerator.OnGeneratorStart（dump.cs:86207，VA:0x180A38C40，public无参；
+                        // Plugin.cs:118-123既有hook其postfix为BioGenFuel.OnGeneratorStartPostfix观察链）——等效手动挪燃料的
+                        // 停机→启动跃迁，触发原生状态机重估；失败只记日志不抛，不阻断后续补PD+重扫。
+                        int fixedTables = 0;
+                        try { fixedTables = EnsurePdTables(q); } catch { }
+                        try
+                        {
+                            var sg = comp as TerrainObject_Production_StirlingGenerator;
+                            if (sg != null)
+                            {
+                                try { sg.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机成功: 900103实例已触发OnGeneratorStart"); }
+                                catch (Exception es) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es.Message.Split('\n')[0]}"); } catch { } }
+                            }
+                            else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态（原因=非Stirling形态）"); } catch { } }
+                        }
+                        catch { }
+                        healed++; // q取自表内枚举恒在表，不调AddProductionData（防原生重复入表），只记补表+重扫
+                        try { Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList=True) 六表补{fixedTables}字段 → 重扫电网"); } catch { }
+                    }
+                }
+            }
+            catch { }
+            // v0.9.109 A5a：表外PD候选（在场组件有PD对象但不在productionDataList，原补PD路径）——门检+强制起机+入表
+            try
+            {
+                for (int oi = 0; oi < offComps.Count; oi++)
+                {
+                    TerrainObject_Production g2 = null;
+                    ProductionData p2 = null;
+                    try { g2 = offComps[oi]; p2 = offPds[oi]; } catch { continue; }
+                    if (g2 == null || p2 == null) continue;
+                    int fx2 = 0;
+                    try { fx2 = EnsurePdTables(p2); } catch { }
+                    float gs2 = -1f;
+                    bool gp2 = false;
+                    try { gp2 = IsPdPowered(p2, out gs2); } catch { }
+                    if (fx2 == 0 && gp2) { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 900103实例供电门已真（原因=已在线）"); } catch { } continue; }
+                    try
+                    {
+                        var sg2 = g2 as TerrainObject_Production_StirlingGenerator;
+                        if (sg2 != null)
+                        {
+                            try { sg2.OnGeneratorStart(); Plugin.L.LogInfo("[TS] 读档自愈强制起机成功: 900103实例已触发OnGeneratorStart"); }
+                            catch (Exception es2) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈强制起机失败: {es2.Message.Split('\n')[0]}"); } catch { } }
+                        }
+                        else { try { Plugin.L.LogInfo("[TS] 读档自愈强制起机跳过: 实例非StirlingGenerator形态（原因=非Stirling形态）"); } catch { } }
+                    }
+                    catch { }
+                    try
+                    {
+                        mgr.AddProductionData(p2); // 表外PD走原补PD路径（原生入表含类型字典注册）
+                        healed++;
+                        Plugin.L.LogInfo($"[TS] 读档自愈: 900103实例入表(inList=False) 六表补{fx2}字段 → 重扫电网");
+                    }
+                    catch (Exception e2) { healFail++; try { Plugin.L.LogWarning($"[TS] 读档自愈入表异常: {e2.Message.Split('\n')[0]}"); } catch { } }
+                }
+            }
+            catch { }
             // v0.9.108 A4a：免自愈仅双健康分支（PD层全门真+在场侧零离线零缺PD+零失败）；在场数只进诊断
             if (pdBio == 0 && found == 0) { Plugin.L.LogInfo($"[TS] 读档自检: PD层900103=0 ActiveObjects总数={aoCount}其中900103=0（无BioGen部署，跳过）"); try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } return; }
             if (healed > 0)
             {
                 try { ProductionManager.MarkElectricGridDirty(); } catch { }
-                Plugin.L.LogInfo($"[TS] 读档自愈完成: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 自愈={healed}");
+                Plugin.L.LogInfo($"[TS] 读档自愈完成: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 自愈={healed} 孤儿PD={orphan}");
             }
-            else if (healFail == 0 && noPd == 0 && pdBio > 0 && pdPowered == pdBio) Plugin.L.LogInfo($"[TS] 读档自检通过: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 均健康（无需自愈）");
+            else if (healFail == 0 && noPd == 0 && orphan == 0 && pdBio > 0 && pdPowered == pdBio) Plugin.L.LogInfo($"[TS] 读档自检通过: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 均健康（无需自愈）");
             else
             {
                 try { ProductionManager.MarkElectricGridDirty(); } catch { }
-                Plugin.L.LogWarning($"[TS] 读档自检: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 缺PD={noPd} 失败={healFail}（有离线但无可执行自愈，仅脏标重扫）");
+                Plugin.L.LogWarning($"[TS] 读档自检: PD层900103={pdBio}(供电门真={pdPowered}) 在场900103={found} 缺PD={noPd} 失败={healFail} 孤儿PD={orphan}（有离线但无可执行自愈，仅脏标重扫）");
             }
             try { BioGenFuel.RemoveBioFuelCombustible(); } catch { } // v0.9.105 A2：起完再摘（自愈体之后；趁标志还在先起机）
         }
