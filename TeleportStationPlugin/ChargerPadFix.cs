@@ -222,7 +222,7 @@ public static class ChargerPadFix
                 bool contains = false;
                 try { contains = prodList.Contains(inst); } catch { contains = false; }
                 if (contains) { present++; try { _skippedReg.Remove(inst); } catch { } budget--; continue; }
-                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } string ltt = "?"; try { ltt = inst.GetType().Name; } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy}) type={ltt}"); } catch { } } catch { } } catch { } // v0.9.106-diag：BioGen实例级归因（纯日志，零行为改动）
+                try { prodList.Add(inst); added++; try { int laid = -1; try { laid = GetClonedAttrId(inst); } catch { } string lpx = "?", lpy = "?"; try { var lpp = inst.transform.position; lpx = lpp.x.ToString("F1"); lpy = lpp.y.ToString("F1"); } catch { } string ltt = "?"; try { ltt = inst.GetType().Name; } catch { } string lpd = "?"; try { var lod = Reflect.Get(inst, "objectData"); var lpd2 = lod != null ? Reflect.Get(lod, "productionData") as ProductionData : null; string lfull = lpd2 != null ? lpd2.productionObjectId : null; if (!string.IsNullOrEmpty(lfull)) lpd = lfull.Length > 8 ? lfull.Substring(lfull.Length - 8) : lfull; } catch { } try { Plugin.L.LogInfo($"[TS][BioReg] RegFill add attr={laid} pos=({lpx},{lpy}) type={ltt} pdid={lpd}"); } catch { } } catch { } } catch { } // v0.9.111-A7D1：RegFill追加PD短id（纯日志，零行为改动）
                 try { _skippedReg.Remove(inst); } catch { }
                 budget--;
             }
@@ -1138,6 +1138,69 @@ public static class ChargerPadFix
             int aoCount = 0;
             try { if (list != null) aoCount = list.Count; } catch { }
             if (list == null) { try { Plugin.L.LogInfo("[TS] 读档自检: ActiveObjects表空（PD层已评估，继续在场侧零实例）"); } catch { } }
+            // v0.9.111-A7D2：每局全量900103点名（纯日志，零行为改动；ActiveObjects+Resources基类扫全形态，每局一次）
+            try
+            {
+                if (list != null)
+                {
+                    for (int ci = 0; ci < aoCount; ci++)
+                    {
+                        TerrainObject_Production cg = null;
+                        try { cg = list[ci]; } catch { continue; }
+                        if (cg == null) continue;
+                        int caid = -1;
+                        try { caid = GetClonedAttrId(cg); } catch { continue; }
+                        if (caid != 900103) continue;
+                        string ctt = "?"; try { ctt = cg.GetType().Name; } catch { }
+                        string ccx = "?", ccy = "?"; try { var cpp = cg.transform.position; ccx = cpp.x.ToString("F1"); ccy = cpp.y.ToString("F1"); } catch { }
+                        string cpd = "?"; try { var cod = Reflect.Get(cg, "objectData"); var cpd2 = cod != null ? Reflect.Get(cod, "productionData") as ProductionData : null; string cfull = cpd2 != null ? cpd2.productionObjectId : null; if (!string.IsNullOrEmpty(cfull)) cpd = cfull.Length > 8 ? cfull.Substring(cfull.Length - 8) : cfull; } catch { }
+                        try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={ctt} pos=({ccx},{ccy}) pdid={cpd} inAO=True"); } catch { }
+                    }
+                }
+                try
+                {
+                    try { EnsureTypeCacheForClones(); } catch { }
+                    var cresRaw = UnityEngine.Resources.FindObjectsOfTypeAll(_il2cppProdType ?? Il2CppSystem.Type.GetType(typeof(TerrainObject_Production).FullName) ?? Il2CppSystem.Type.GetType("TerrainObject_Production, Assembly-CSharp"));
+                    if (cresRaw != null)
+                    {
+                        for (int cm = 0; cm < cresRaw.Length; cm++)
+                        {
+                            TerrainObject_Production hg = null;
+                            try { hg = cresRaw[cm] as TerrainObject_Production; } catch { continue; }
+                            if (hg == null) continue;
+                            bool cscene = false;
+                            try { var csc = hg.gameObject.scene; cscene = csc.IsValid(); } catch { cscene = false; }
+                            if (!cscene) continue;
+                            bool cinAo = false;
+                            if (list != null)
+                            {
+                                try
+                                {
+                                    for (int ck = 0; ck < aoCount; ck++)
+                                    {
+                                        TerrainObject_Production ak = null;
+                                        try { ak = list[ck]; } catch { continue; }
+                                        bool eq = false;
+                                        try { eq = ReferenceEquals(ak, hg); } catch { }
+                                        if (eq) { cinAo = true; break; }
+                                    }
+                                }
+                                catch { }
+                            }
+                            if (cinAo) continue;
+                            int chid = -1;
+                            try { chid = GetClonedAttrId(hg); } catch { continue; }
+                            if (chid != 900103) continue;
+                            string chtt = "?"; try { chtt = hg.GetType().Name; } catch { }
+                            string chx = "?", chy = "?"; try { var chp = hg.transform.position; chx = chp.x.ToString("F1"); chy = chp.y.ToString("F1"); } catch { }
+                            string chpd = "?"; try { var chod = Reflect.Get(hg, "objectData"); var chpd2 = chod != null ? Reflect.Get(chod, "productionData") as ProductionData : null; string chfull = chpd2 != null ? chpd2.productionObjectId : null; if (!string.IsNullOrEmpty(chfull)) chpd = chfull.Length > 8 ? chfull.Substring(chfull.Length - 8) : chfull; } catch { }
+                            try { Plugin.L.LogInfo($"[TS][BioReg] Census attr=900103 type={chtt} pos=({chx},{chy}) pdid={chpd} inAO=False"); } catch { }
+                        }
+                    }
+                }
+                catch { }
+            }
+            catch { }
             for (int i = 0; i < aoCount; i++)
             {
                 TerrainObject_Production g = null;
